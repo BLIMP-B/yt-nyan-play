@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { Voicevox, ZUNDAMON_STYLES } from '../apps/desktop/core/voicevox.mjs';
 import { bouyomiSpeak } from '../apps/desktop/runtime/bouyomi.mjs';
-import { PcmMixer, decodeAudio, VoiceOutput } from '../apps/desktop/runtime/voice-output.mjs';
+import { PcmMixer, createDiscordAudioResource, decodeAudio, VoiceOutput } from '../apps/desktop/runtime/voice-output.mjs';
 import { createAudioPlayer, createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus } from '@discordjs/voice';
 import OpusScript from 'opusscript';
 const pcm = value => { const b = Buffer.alloc(3840); for (let i = 0; i < b.length; i += 2) b.writeInt16LE(value, i); return b; };
@@ -28,10 +28,10 @@ test('missing styles and failed or invalid engine responses are detected', async
   await assert.rejects(broken.synthesize('猫', normalizeConfig().speech), /WAV/);
 });
 test('mixer ducks media while speaking and restores volume, with clipping protection', async t => {
-  const mixer = new PcmMixer(); clearInterval(mixer.timer); t.after(() => mixer.destroy()); mixer.mediaVolume = 1; mixer.ducking = .25;
-  mixer.addMedia(Buffer.concat([pcm(10000), pcm(10000)])); const done = mixer.addSpeech(pcm(20000), .5); mixer.frame(); await done; assert.equal(mixer.read(3840).readInt16LE(), 12500);
-  mixer.frame(); assert.equal(mixer.read(3840).readInt16LE(), 10000);
-  mixer.addMedia(pcm(30000)); const clipped = mixer.addSpeech(pcm(30000), 1); mixer.ducking = 1; mixer.frame(); await clipped; assert.equal(mixer.read(3840).readInt16LE(), 32767);
+  const mixer = new PcmMixer(); t.after(() => mixer.destroy()); mixer.mediaVolume = 1; mixer.ducking = .25;
+  mixer.addMedia(Buffer.concat(Array.from({ length: 4 }, () => pcm(10000)))); const done = mixer.addSpeech(pcm(20000), .5); assert.equal(mixer.takeFrame().readInt16LE(), 12500); await done;
+  assert.equal(mixer.takeFrame().readInt16LE(), 10000);
+  mixer.clearMedia(); mixer.addMedia(Buffer.concat(Array.from({ length: 4 }, () => pcm(30000)))); const clipped = mixer.addSpeech(pcm(30000), 1); mixer.ducking = 1; assert.equal(mixer.takeFrame().readInt16LE(), 32767); await clipped;
 });
 test('FFmpeg decodes WAV to 48kHz stereo PCM and rejects invalid audio', async () => {
   assert.deepEqual(await decodeAudio(wav()), pcm(1000)); await assert.rejects(decodeAudio(Buffer.from('broken')), /FFmpeg/);
@@ -41,7 +41,7 @@ test('real Discord audio encoder advances successive speech jobs and sends non-s
   t.after(() => { player.stop(true); mixer.destroy(); });
   const decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO); t.after(() => decoder.delete());
   const packets = []; player._preparePacket = packet => packets.push(Buffer.from(packet));
-  player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+  player.play(createDiscordAudioResource(mixer));
   for (let i = 0; i < 3; i++) await mixer.addSpeech(Buffer.concat(Array.from({ length: 15 }, () => pcm(1000 + i * 1000))), 1, AbortSignal.timeout(3000));
   assert.equal(player.state.status, AudioPlayerStatus.Playing);
   assert.ok(packets.length >= 30);
@@ -50,10 +50,10 @@ test('real Discord audio encoder advances successive speech jobs and sends non-s
 test('an ended Discord stream rejects new speech immediately instead of freezing the queue', async t => {
   const mixer = new PcmMixer(), player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
   t.after(() => { player.stop(true); mixer.destroy(); });
-  player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+  const resource = createDiscordAudioResource(mixer); player.play(resource);
   await mixer.addSpeech(pcm(1000), 1);
   // An encoder underrun used to leave the VC marked ready with a destroyed mixer.
-  clearInterval(mixer.timer);
+  resource.playStream.push(null);
   await once(player, AudioPlayerStatus.Idle); await new Promise(resolve => setImmediate(resolve));
   assert.equal(mixer.destroyed, true);
   await assert.rejects(mixer.addSpeech(pcm(1000), 1), /終了/);

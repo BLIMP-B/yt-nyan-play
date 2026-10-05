@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits, ActivityType } from 'discord.js';
 import { parseBotCommand, parseMediaCommand } from '../core/protocol.mjs';
 import { shouldRead, shouldReceive, prepareSpeech, formatTemplate } from '../core/text.mjs';
+import { parseEducationCommand } from '../core/education.mjs';
 
 export class DiscordBot {
   constructor(store, handlers, clientFactory) {
@@ -67,6 +68,17 @@ export class DiscordBot {
     const media = parseMediaCommand(normalized.content, c);
     if (media) { if (c.media.enabled) { await this.handlers.media({ ...media, master: normalized.channelId === c.bot.masterTextChannelId, guildId: normalized.guildId, source: normalized.displayName }); this.store.remember(`message:${message.id}`); } return; }
     if (!c.speech.enabled || !shouldRead(normalized, c)) return;
+    if (c.speech.chatEducationEnabled) {
+      try {
+        const education = parseEducationCommand(normalized.content);
+        if (education) {
+          const result = await this.handlers.education(education);
+          this.store.remember(`message:${message.id}`);
+          if (result.text) await this.handlers.speech({ text: result.text, guildId: normalized.guildId, userId: normalized.userId, source: normalized.displayName, literal: true });
+          await this.reply(message, result.text || '教育辞書を更新しました'); return;
+        }
+      } catch (e) { this.store.log('error', e.message); this.store.remember(`message:${message.id}`); await this.reply(message, e.message); return; }
+    }
     const clip = c.speech.soundClips.find(s => s.trigger === normalized.content.trim());
     if (clip) { await this.handlers.speech({ clipPath: clip.path, text: clip.trigger, guildId: normalized.guildId, userId: normalized.userId }); this.store.remember(`message:${message.id}`); return; }
     const text = prepareSpeech(normalized, c);

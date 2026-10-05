@@ -1,4 +1,5 @@
 import { RE2 } from 're2-wasm';
+import { applyEducation } from './education.mjs';
 
 export function formatTemplate(template, values) {
   return template.replace(/\$([\w-]+)\$/g, (_, key) => String(values[key] ?? ''));
@@ -33,7 +34,7 @@ export function applyDictionary(text, entries, context) {
 }
 export function prepareSpeech(message, config) {
   const s = config.speech;
-  let text = message.content;
+  let text = s.chatEducationEnabled ? applyEducation(message.content, config.education) : message.content;
   if (s.bouyomiPreprocess || s.provider === 'bouyomi' && s.bouyomiNativeRules) {
     const values = { username: message.userName || '', nickname: message.displayName || message.userName || '', server: message.guildName || '', channel: message.channelName || '', text, userid: message.userId || '', time: new Date().toLocaleTimeString('ja-JP') };
     return s.readNames ? formatTemplate(s.messageTemplate, values) : text;

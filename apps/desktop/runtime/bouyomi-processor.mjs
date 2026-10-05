@@ -45,6 +45,6 @@ export class BouyomiProcessor {
       return JSON.parse(await run(executable, [this.directory], JSON.stringify(data), signal, this.directory));
     }); this.tail = task; return task;
   }
-  process(text, tagMode, signal) { return this.request({ operation: 'process', text, tagMode }, signal); }
+  process(text, tagMode, signal, educationEnabled = false) { return this.request({ operation: 'process', text, tagMode, educationEnabled }, signal); }
   learn(type, args, signal) { return this.request({ operation: 'learn', type, args }, signal); }
 }

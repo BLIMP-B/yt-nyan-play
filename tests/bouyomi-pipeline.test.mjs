@@ -42,3 +42,10 @@ test('cancelled native preprocessing cannot start synthesis or mutate the educat
   await assert.rejects(runNativeSpeech({ text: '原文', settings: normalizeConfig().speech, original: original(), pendingCharacters: 0, processor, output: async () => { spoken = true; }, log: (_level, text) => errors.push(text) }, controller.signal), { name: 'AbortError' });
   assert.equal(spoken, false); assert.equal(learned, false); assert.deepEqual(errors, []);
 });
+test('chat education remains applicable with native broadcaster tags switched off', async () => {
+  let mode, education; const spoken = [];
+  const processor = { process: async (_text, tagMode, _signal, enabled) => { mode = tagMode; education = enabled; return { text: 'ねこ', tags: [] }; } };
+  const settings = normalizeConfig({ speech: { bouyomiTagMode: 'off' } }).speech;
+  await runNativeSpeech({ text: '猫猫', settings, original: { ...original(), BroadcasterMode: 'false' }, pendingCharacters: 0, processor, output: async text => spoken.push(text) }, new AbortController().signal);
+  assert.equal(mode, 'off'); assert.equal(education, true); assert.deepEqual(spoken, ['ねこ']);
+});

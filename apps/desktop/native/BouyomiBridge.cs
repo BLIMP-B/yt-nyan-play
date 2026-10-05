@@ -57,15 +57,19 @@ public static class BouyomiBridge {
     }
     static object Learn(string type, string args, XmlDocument settings) {
         object rules = Field(processor, "ReplaceStudies"); string source, reading = "";
-        bool forget = type == "Forget";
-        if (forget) source = args.Trim();
+        if (type != "Study" && type != "Forget" && type != "Mute") throw new ArgumentException("教育の操作を確認してください");
+        bool forget = type == "Forget", mute = type == "Mute";
+        if (forget || mute) source = args.Trim();
         else {
-            string[] pair = args.Split(new char[] { '=' }, 2);
+            string[] pair = args.Split(new char[] { '=', '＝' }, 2);
             if (pair.Length != 2) throw new ArgumentException("教育の単語と読み方を確認してください");
             source = pair[0].Trim(); reading = pair[1].Trim();
-            if (source.Length < Int32.Parse(Setting(settings, "StudySrcMin", "2")) || reading.Length > Int32.Parse(Setting(settings, "StudyDstMax", "15"))) throw new ArgumentException("教育の文字数制限を確認してください");
-            forget = source == reading;
         }
+        source = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(source)).ToString();
+        reading = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(reading)).ToString();
+        if (source.Length == 0 || source.IndexOfAny(new char[] { '\t', '\r', '\n' }) >= 0 || reading.IndexOfAny(new char[] { '\t', '\r', '\n' }) >= 0) throw new ArgumentException("教育する単語を確認してください");
+        if (!forget && (source.Length < Int32.Parse(Setting(settings, "StudySrcMin", "2")) || reading.Length > Int32.Parse(Setting(settings, "StudyDstMax", "15")))) throw new ArgumentException("教育の文字数制限を確認してください");
+        if (!mute && source == reading) forget = true;
         string path = Path.Combine(directory, "ReplaceStudy.dic");
         if (File.Exists(path) && !File.Exists(path + ".before-damare")) File.Copy(path, path + ".before-damare", false);
         if (forget) Invoke(rules, "RemoveRule", source.Length, source);
@@ -76,7 +80,7 @@ public static class BouyomiBridge {
             Invoke(rules, "AddRule", source.Length, kind, source, reading);
         }
         Invoke(rules, "SaveRule", path);
-        string format = Setting(settings, forget ? "ForgetFormat" : "StudyFormat", forget ? "{0} を 忘れました" : "{0} わ {1} を 覚えました");
+        string format = mute ? "{0} を 無音にしました" : Setting(settings, forget ? "ForgetFormat" : "StudyFormat", forget ? "{0} を 忘れました" : "{0} わ {1} を 覚えました");
         return new Dictionary<string, object> { { "text", String.Format(format, source, reading) } };
     }
     public static int Main(string[] args) {
@@ -97,7 +101,8 @@ public static class BouyomiBridge {
                 string mode = (string)request["tagMode"];
                 bool broadcast = mode == "on" || mode == "original" && Setting(settings, "BroadcasterMode", "false") == "true";
                 bool enabled = broadcast && Setting(settings, "TagEnable", "true") == "true";
-                result = Process((string)request["text"], enabled, enabled && Setting(settings, "StudyTag", "true") == "true");
+                bool education = request.ContainsKey("educationEnabled") && request["educationEnabled"] is bool && (bool)request["educationEnabled"];
+                result = Process((string)request["text"], enabled, education || enabled && Setting(settings, "StudyTag", "true") == "true");
             }
             Console.Write(json.Serialize(result)); return 0;
         } catch (Exception error) {

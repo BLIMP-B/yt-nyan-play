@@ -8,10 +8,11 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { _electron } from 'playwright-core';
 import ffmpeg from 'ffmpeg-static';
-import { PcmMixer } from '../apps/desktop/runtime/voice-output.mjs';
-import { createAudioPlayer, createAudioResource, NoSubscriberBehavior, StreamType } from '@discordjs/voice';
+import { PcmMixer, createDiscordAudioResource } from '../apps/desktop/runtime/voice-output.mjs';
+import { createAudioPlayer, NoSubscriberBehavior } from '@discordjs/voice';
 import OpusScript from 'opusscript';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
+import { mediaScope } from '../apps/desktop/core/media-pool.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const directory = mkdtempSync(join(tmpdir(), 'damare-audio-'));
 const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/audio-verification')); mkdirSync(reports, { recursive: true });
@@ -113,7 +114,7 @@ try {
   const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
   const decoded = [], decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
   player._preparePacket = packet => decoded.push(Buffer.from(decoder.decode(packet)));
-  player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+  player.play(createDiscordAudioResource(mixer));
   try {
     await new Promise(resolve => { let position = 0; const timer = setInterval(() => { mixer.addMedia(pcm.subarray(position, position + 3840)); position += 3840; if (position >= pcm.length) { clearInterval(timer); resolve(); } }, 20); });
     await new Promise(r => setTimeout(r, 500));
@@ -154,12 +155,13 @@ try {
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
         const adPlaying = await application.evaluate(async () => {
           const target = globalThis.nyanAudioProbe.target; if (target.isDestroyed()) return false;
-          return target.webContents.executeJavaScript(`(() => Boolean(document.querySelector('.ad-showing,.ad-interrupting')) || (location.hostname.endsWith('nicovideo.jp') && [...document.querySelectorAll('video')].some(v => !v.paused && !v.ended && v.duration > 0 && v.duration <= 30)))()`, true);
+          return target.webContents.executeJavaScript(`(() => Boolean(document.querySelector('.ad-showing,.ad-interrupting')) || (location.hostname.endsWith('nicovideo.jp') && ([...document.querySelectorAll('video')].some(v => !v.paused && !v.ended && v.duration > 0 && v.duration <= 30) || /[0-9]+\\s*秒後にスキップできます|(?:^|\\n)(?:スキップ|Skip ad)(?:\\n|$)/.test(document.body?.innerText || ''))))()`, true);
         });
         if (adPlaying) adSamples = metrics?.nonSilentSamples || 0;
-        if (!adPlaying && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
         const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
         if (current.status === 'failed') throw new Error(current.error);
+        const playback = state.media.find(m => m.scope === mediaScope(job.payload));
+        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.time > 2 && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       outcome.playback = (await call(page, 'state')).media;

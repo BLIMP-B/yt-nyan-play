@@ -1,6 +1,7 @@
 import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
+import OpusScript from 'opusscript';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
   createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus,
@@ -8,16 +9,15 @@ import {
 
 export class PcmMixer extends Readable {
   constructor() {
-    super({ highWaterMark: 3840 * 5 }); this.media = Buffer.alloc(0); this.speech = [];
+    super({ highWaterMark: 3840 }); this.media = Buffer.alloc(0); this.speech = []; this.mediaPrimed = false;
     this.ducking = 0.35; this.mediaVolume = 0.7;
-    this.timer = setInterval(() => this.frame(), 20);
     this.watchdog = setInterval(() => {
       if (this.speech.some(track => Date.now() - track.progressAt > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
     }, 1000);
   }
-  _read() {}
+  _read() { this.frame(); }
   addMedia(chunk) { if (!this.destroyed) this.media = Buffer.concat([this.media, chunk]).subarray(-192000); }
-  clearMedia() { this.media = Buffer.alloc(0); }
+  clearMedia() { this.media = Buffer.alloc(0); this.mediaPrimed = false; }
   addSpeech(buffer, volume, signal) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
@@ -28,29 +28,47 @@ export class PcmMixer extends Readable {
       track.signal = signal; signal?.addEventListener('abort', track.abort, { once: true }); this.speech.push(track);
     });
   }
-  frame() {
-    if (this.destroyed) return;
-    if (this.readableLength > this.readableHighWaterMark) return;
+  takeFrame() {
+    if (this.destroyed) throw new Error('音声ストリームが終了しました');
+    if (!this.mediaPrimed && this.media.length >= 3840 * 4) this.mediaPrimed = true;
+    if (this.mediaPrimed && this.media.length < 3840) this.mediaPrimed = false;
+    const mediaReady = this.mediaPrimed;
     const out = Buffer.alloc(3840); const duck = this.speech.length ? this.ducking : 1;
     for (let i = 0; i < 3840; i += 2) {
-      let sample = i + 1 < this.media.length ? this.media.readInt16LE(i) * this.mediaVolume * duck : 0;
+      let sample = mediaReady ? this.media.readInt16LE(i) * this.mediaVolume * duck : 0;
       for (const track of this.speech) if (track.position + i + 1 < track.buffer.length) sample += track.buffer.readInt16LE(track.position + i) * track.volume;
       out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample))), i);
     }
-    this.media = this.media.subarray(Math.min(3840, this.media.length));
+    if (mediaReady) this.media = this.media.subarray(3840);
     for (const track of [...this.speech]) {
       track.position += 3840; track.progressAt = Date.now();
       if (track.position >= track.buffer.length) {
         this.speech = this.speech.filter(t => t !== track); track.signal?.removeEventListener('abort', track.abort); track.resolve();
       }
     }
-    this.push(out);
+    return out;
   }
+  frame() { if (!this.destroyed && this.readableLength < this.readableHighWaterMark) this.push(this.takeFrame()); }
   _destroy(error, callback) {
-    clearInterval(this.timer); clearInterval(this.watchdog);
+    clearInterval(this.watchdog);
     for (const track of this.speech) { track.signal?.removeEventListener('abort', track.abort); track.reject(error || new Error('音声接続が終了しました')); }
     this.speech = []; callback(error);
   }
+}
+
+// Generate one packet when Discord requests it. A second 20-ms producer timer drifted
+// behind Discord's clock and forced the player to insert gaps under UI/IPC load.
+export function createDiscordAudioResource(mixer) {
+  const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+  encoder.encoderCTL(4002, 128000); // OPUS_SET_BITRATE
+  encoder.encoderCTL(4016, 0); // OPUS_SET_DTX: transmit quiet audio and silence continuously.
+  const source = new Readable({ objectMode: true, highWaterMark: 1,
+    read() { try { this.push(Buffer.from(encoder.encode(mixer.takeFrame(), 960))); } catch (e) { this.destroy(e); } },
+    destroy(error, callback) { mixer.removeListener('error', failed); mixer.removeListener('close', closed); mixer.destroy(); encoder.delete(); callback(error); },
+  });
+  const failed = error => source.destroy(error), closed = () => source.destroy();
+  mixer.on('error', failed); mixer.once('close', closed);
+  return createAudioResource(source, { inputType: StreamType.Opus });
 }
 
 export function decodeAudio(buffer, signal, executable = ffmpegPath) {
@@ -104,7 +122,7 @@ export class VoiceOutput {
     });
     try { await entersState(connection, VoiceConnectionStatus.Ready, 20000); }
     catch { this.disconnect(guildId); throw new Error('Discord音声接続を確立できません。接続・発言権限と回線を確認してください'); }
-    try { connection.subscribe(player); player.play(createAudioResource(mixer, { inputType: StreamType.Raw })); }
+    try { connection.subscribe(player); player.play(createDiscordAudioResource(mixer)); }
     catch (error) { this.disconnect(guildId); throw error; }
     return entry;
   }

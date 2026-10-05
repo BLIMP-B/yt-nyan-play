@@ -22,7 +22,7 @@ export const DEFAULT_CONFIG = {
     ignoredUserIds: [], allowedUserIds: [], ignoredRoleIds: [], blockedWords: [],
     profiles: [], emojiReadings: [], soundClips: [], forwarding: [],
     bouyomiNativeRules: true, bouyomiUseDefaults: true, bouyomiHost: '127.0.0.1', bouyomiPort: 50001, bouyomiHttpPort: 50080, bouyomiCommunication: 'tcp', bouyomiVoice: 0, bouyomiTone: -1,
-    bouyomiPreprocess: false, bouyomiTagMode: 'original', bouyomiVoiceMap: [],
+    bouyomiPreprocess: false, bouyomiTagMode: 'original', bouyomiVoiceMap: [], chatEducationEnabled: true,
   },
   media: {
     enabled: true, volume: 0.7, ducking: 0.35, showWindow: true,
@@ -31,7 +31,7 @@ export const DEFAULT_CONFIG = {
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
       'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
   },
-  dictionary: [],
+  dictionary: [], education: [],
 };
 
 function mergeKnown(base, patch) {
@@ -107,6 +107,11 @@ export function normalizeConfig(patch) {
   if (!Array.isArray(c.speech.forwarding) || c.speech.forwarding.length > 100) fail('読み上げ転送');
   c.speech.forwarding = c.speech.forwarding.map(f => { if (!/^\d{5,22}$/.test(f.fromGuildId) || !/^\d{5,22}$/.test(f.toGuildId) || f.fromGuildId === f.toGuildId || !['one-way', 'two-way', 'none'].includes(f.mode)) fail('読み上げ転送先・方向'); return { fromGuildId: f.fromGuildId, toGuildId: f.toGuildId, mode: f.mode }; });
   if (!Array.isArray(c.dictionary) || c.dictionary.length > 10000) fail('辞書');
+  if (!Array.isArray(c.education) || c.education.length > 10000) fail('教育辞書');
+  c.education = c.education.map(e => {
+    if (!e || typeof e.source !== 'string' || !e.source || e.source.length > 2000 || typeof e.reading !== 'string' || e.reading.length > 500 || /[\t\r\n]/u.test(e.source + e.reading)) fail('教育辞書の単語・読み方');
+    return { source: e.source, reading: e.reading };
+  });
   c.dictionary = c.dictionary.map(d => {
     if (!d || typeof d.source !== 'string' || !d.source || d.source.length > 200 || typeof d.replacement !== 'string' || d.replacement.length > 500) fail('辞書の単語・読み方');
     if (!['global', 'guild', 'user'].includes(d.scope) || (d.scope !== 'global' && !/^\d{5,22}$/.test(d.scopeId))) fail('辞書の対象');

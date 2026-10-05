@@ -23,6 +23,18 @@ try {
   report.emulator = (await android.run(android.paths().emulator, ['-version'])).slice(0, 500);
   try { report.acceleration = await android.run(android.paths().emulator, ['-accel-check']); }
   catch (e) { report.acceleration = e.message; }
+  if (/is installed and usable/i.test(report.acceleration)) {
+    await android.start(); report.bootVerified = true;
+    report.playInstalled = (await android.adb(['shell', 'pm', 'list', 'packages', 'com.android.vending'])).includes('com.android.vending');
+    assert.equal(report.playInstalled, true, 'Google Play was not installed in the AVD');
+    await android.openPlay();
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    report.playProcess = (await android.adb(['shell', 'pidof', 'com.android.vending'])).trim();
+    assert.ok(report.playProcess, 'Google Play did not start');
+    const png = await android.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 });
+    assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
+    writeFileSync(join(reports, 'android-play.png'), png);
+  }
   console.log('ANDROID_INSTALL_VERIFIED ' + JSON.stringify(report));
 } catch (e) { report.error = e.message; console.error(e); process.exitCode = 1; }
-finally { clearTimeout(timeout); android.close(); writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2)); rmSync(directory, { recursive: true, force: true }); }
+finally { clearTimeout(timeout); await android.stop().catch(() => {}); android.close(); writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2)); rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }

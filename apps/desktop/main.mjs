@@ -13,6 +13,7 @@ import { APP_ICON, APP_ID } from './runtime/app-icon.mjs';
 import { VoiceOutput } from './runtime/voice-output.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
 import { MediaAccounts } from './runtime/media-accounts.mjs';
+import { ChatEducation } from './runtime/chat-education.mjs';
 import { MEDIA_ACCOUNTS } from './core/media-accounts.mjs';
 import { Vault } from './runtime/vault.mjs';
 import { EngineProcess } from './runtime/engine-process.mjs';
@@ -164,9 +165,15 @@ else {
     bouyomiProcessor = new BouyomiProcessor(store.directory);
     android = new AndroidRuntime(store.directory, getConfig, (l, t) => store.log(l, t), (url, options) => net.fetch(url, options));
     accounts = new MediaAccounts(getConfig, (l, t) => store.log(l, t));
+    const education = new ChatEducation(store, () => {
+      if (!getConfig().speech.bouyomiPreprocess || getConfig().speech.provider !== 'voicevox') return null;
+      if (bouyomi.child) throw new Error('教育辞書を更新するには元の棒読みちゃんを終了してください');
+      return bouyomiProcessor;
+    });
     android.on('change', emitState); android.on('frame', bytes => { if (window && !window.isDestroyed()) window.webContents.send('nyan:android-frame', bytes); });
     bot = new DiscordBot(store, {
       speech: payload => { store.enqueue('speech', payload); void speechRunner.drain(); },
+      education: command => education.apply(command),
       media: payload => media.enqueue(payload), stopRequested,
       join: guildId => voice.connect(guildId), leave: guildId => voice.disconnect(guildId), disconnect: () => voice.close(), control,
       speakers: () => new Voicevox(getConfig().speech.engineUrl).speakers(),
@@ -203,7 +210,7 @@ else {
     speechRunner = new SpeechPool(store, async (job, signal) => {
       const c = getConfig(); const profile = c.speech.profiles.find(p => p.userId === job.payload.userId);
       let settings = { ...c.speech, ...(!job.payload.system ? profile : {}), ...(job.payload.styleId !== undefined ? { styleId: job.payload.styleId } : {}), ...(job.payload.system ? { provider: 'voicevox', output: job.payload.output || c.speech.output } : {}) };
-      if (job.payload.system && settings.bouyomiPreprocess && settings.bouyomiUseDefaults) {
+      if ((job.payload.system || job.payload.literal) && settings.bouyomiPreprocess && settings.bouyomiUseDefaults) {
         const pending = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
         settings = nativeSpeechDefaults(settings, inspectBouyomi(bouyomi.directory).settings, pending);
       }
@@ -223,7 +230,7 @@ else {
         await Promise.all(outputs);
       } catch (e) { outputController.abort(); await Promise.allSettled(outputs); throw e; } finally { for (const target of targets.length ? targets : ['']) media.setDucked(false, target); }
       };
-      if (settings.bouyomiPreprocess && !job.payload.system && !job.payload.clipPath) {
+      if (settings.bouyomiPreprocess && !job.payload.system && !job.payload.literal && !job.payload.clipPath) {
         if (bouyomi.child) throw new Error('辞書への同時書き込みを防ぐため元アプリを終了してください');
         const { settings: original } = inspectBouyomi(bouyomi.directory);
         const pendingCharacters = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
