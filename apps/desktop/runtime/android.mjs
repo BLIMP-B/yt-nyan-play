@@ -96,16 +96,19 @@ export class AndroidRuntime extends EventEmitter {
     const p = this.paths(), c = this.getConfig().android;
     const devices = await this.run(p.adb, ['devices']); if (devices.includes(`emulator-${c.port}`)) throw new Error('指定したEmulatorポートは使用中です');
     this.status = 'booting'; this.change('Androidを起動しています');
-    const child = spawn(p.emulator, ['-avd', avdName(c), '-port', String(c.port), '-no-window', '-no-boot-anim', '-memory', String(c.ramMb), '-gpu', c.gpu, '-camera-back', 'none', '-camera-front', 'none'], { env: this.environment(), windowsHide: true, shell: false, stdio: 'ignore' }); this.child = child;
-    child.once('error', e => { if (this.child === child) this.child = null; this.status = 'error'; this.change(`Androidを起動できません: ${e.code}`); });
-    child.once('exit', code => { if (this.child === child) { this.child = null; this.status = 'stopped'; clearInterval(this.frameTimer); this.change(`Androidが終了しました (${code})`); } });
+    this.emulatorLog = ''; const boot = new AbortController();
+    const child = spawn(p.emulator, ['-avd', avdName(c), '-port', String(c.port), '-no-window', '-no-boot-anim', '-memory', String(c.ramMb), '-gpu', c.gpu, '-camera-back', 'none', '-camera-front', 'none'], { env: this.environment(), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); this.child = child;
+    const diagnostic = bytes => { this.emulatorLog = (this.emulatorLog + bytes.toString()).slice(-16384); };
+    child.stdout.on('data', diagnostic); child.stderr.on('data', diagnostic);
+    child.once('error', e => { if (this.child === child) this.child = null; this.status = 'error'; this.change(`Androidを起動できません: ${e.code}`); boot.abort(new Error(this.progress)); });
+    child.once('exit', code => { if (this.child === child) { this.child = null; this.status = 'stopped'; clearInterval(this.frameTimer); this.change(`Androidが終了しました (${code})`); boot.abort(new Error(this.progress)); } });
     try {
-      await this.adb(['wait-for-device'], { timeout: 180000 });
+      await this.adb(['wait-for-device'], { timeout: 180000, signal: boot.signal });
       const deadline = Date.now() + 180000;
-      while (Date.now() < deadline) { if (this.child !== child) throw new Error('Androidが終了しました。仮想化・WHPX設定を確認してください'); if ((await this.adb(['shell', 'getprop', 'sys.boot_completed'])).trim() === '1') break; await new Promise(r => setTimeout(r, 1000)); }
-      if ((await this.adb(['shell', 'getprop', 'sys.boot_completed'])).trim() !== '1') throw new Error('Androidの起動がタイムアウトしました');
+      while (Date.now() < deadline) { boot.signal.throwIfAborted(); if ((await this.adb(['shell', 'getprop', 'sys.boot_completed'], { signal: boot.signal })).trim() === '1') break; await new Promise(r => setTimeout(r, 1000)); }
+      if ((await this.adb(['shell', 'getprop', 'sys.boot_completed'], { signal: boot.signal })).trim() !== '1') throw new Error('Androidの起動がタイムアウトしました');
       this.status = 'running'; this.change('Androidを起動しました'); this.frameTimer = setInterval(() => this.frame(), 350); void this.frame(); return this.snapshot();
-    } catch (e) { await this.stop(); this.status = 'error'; this.change(e.message); throw e; }
+    } catch (e) { const error = boot.signal.aborted ? boot.signal.reason : e; if (this.emulatorLog) this.log('error', `Android起動診断: ${this.emulatorLog.trim().slice(-2000)}`); await this.stop(); this.status = 'error'; this.change(error.message); throw error; }
   }
   async frame() { if (this.frameBusy || this.status !== 'running') return; this.frameBusy = true; try { const png = await this.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 10000 }); if (png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) this.emit('frame', png); } catch (e) { this.progress = e.message; } finally { this.frameBusy = false; } }
   async input(data) {

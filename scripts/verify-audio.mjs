@@ -161,7 +161,7 @@ try {
         const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
         if (current.status === 'failed') throw new Error(current.error);
         const playback = state.media.find(m => m.scope === mediaScope(job.payload));
-        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.time > 2 && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
+        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       outcome.playback = (await call(page, 'state')).media;

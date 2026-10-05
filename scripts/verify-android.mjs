@@ -24,6 +24,8 @@ try {
   try { report.acceleration = await android.run(android.paths().emulator, ['-accel-check']); }
   catch (e) { report.acceleration = e.message; }
   if (/is installed and usable/i.test(report.acceleration)) {
+    // Hosted Windows has no physical display adapter. Exercise the supported software renderer.
+    config.android.gpu = 'software'; report.gpu = config.android.gpu;
     await android.start(); report.bootVerified = true;
     report.playInstalled = (await android.adb(['shell', 'pm', 'list', 'packages', 'com.android.vending'])).includes('com.android.vending');
     assert.equal(report.playInstalled, true, 'Google Play was not installed in the AVD');
@@ -37,4 +39,11 @@ try {
   }
   console.log('ANDROID_INSTALL_VERIFIED ' + JSON.stringify(report));
 } catch (e) { report.error = e.message; console.error(e); process.exitCode = 1; }
-finally { clearTimeout(timeout); await android.stop().catch(() => {}); android.close(); writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2)); rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }
+finally {
+  clearTimeout(timeout); await android.stop().catch(() => {}); android.close(); report.emulatorOutput = android.emulatorLog;
+  writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2));
+  // This isolated CI machine owns the ADB server; stop it before removing its locked executable.
+  await android.run(android.paths().adb, ['kill-server']).catch(() => {});
+  try { rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }
+  catch (e) { console.warn('Temporary SDK cleanup: ' + e.message); }
+}
