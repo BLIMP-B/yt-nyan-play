@@ -86,6 +86,8 @@ import { ServerSettings } from './server-settings.js';
       select.dataset.populated = 'true'; select.replaceChildren(node('option', '送信先サーバーを選択')); select.firstChild.value = '';
       for (const b of state.config.bot.bindings) { const option = node('option', b.label || b.guildId); option.value = b.guildId; select.append(option); } select.value = value;
     });
+    const services = $('media-account-service');
+    if (!services.options.length) for (const service of state.mediaAccounts || []) { const option = node('option', service.name); option.value = service.id; services.append(option); }
     serverSettings.render(state);
     renderJobs(); renderCollections(); const logs = $('log-list'); logs.replaceChildren(); for (const entry of state.logs) logs.append(row(entry.text, `${new Date(entry.time).toLocaleTimeString('ja-JP')} · ${entry.level}`)); if (!state.logs.length) empty(logs, 'イベントはまだありません。');
     if (state.bouyomi) {
@@ -104,6 +106,7 @@ import { ServerSettings } from './server-settings.js';
   document.querySelectorAll('[data-view],[data-go]').forEach(e => e.addEventListener('click', () => navigate(e.dataset.view || e.dataset.go)));
   document.querySelectorAll('.save-config').forEach(e => e.addEventListener('click', task(() => save())));
   const actions = { 'bot-start': 'bot:start', 'bot-stop': 'bot:stop', 'show-media': 'media:show', 'open-docs': 'open:docs', 'open-voicevox': 'open:voicevox', 'stop-engine': 'engine:stop', 'export-config': 'config:export' };
+  $('media-account-open').addEventListener('click', task(() => invoke('media:login', $('media-account-service').value)));
   for (const [id, action] of Object.entries(actions)) $(id).addEventListener('click', task(async () => { const value = await invoke(action); if (value?.config) render(value); }));
   $('pause-toggle').addEventListener('click', task(async () => render(await invoke('control', state.paused.media || state.paused.speech ? 'resume' : 'pause'))));
   $('skip-media').addEventListener('click', task(async () => render(await invoke('control', 'skip')))); $('stop-all').addEventListener('click', task(async () => render(await invoke('control', 'stop'))));

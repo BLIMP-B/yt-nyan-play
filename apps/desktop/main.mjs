@@ -12,6 +12,8 @@ import { DiscordBot } from './runtime/bot.mjs';
 import { APP_ICON, APP_ID } from './runtime/app-icon.mjs';
 import { VoiceOutput } from './runtime/voice-output.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
+import { MediaAccounts } from './runtime/media-accounts.mjs';
+import { MEDIA_ACCOUNTS } from './core/media-accounts.mjs';
 import { Vault } from './runtime/vault.mjs';
 import { EngineProcess } from './runtime/engine-process.mjs';
 import { BouyomiImport, inspectBouyomi } from './runtime/bouyomi-import.mjs';
@@ -36,7 +38,7 @@ if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  let window, tray, store, vault, bot, voice, media, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor;
+  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor;
   let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const audioBridge = new AudioBridge(() => window); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
   const emitState = () => {
@@ -46,7 +48,7 @@ else {
   };
   const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
-    voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs,
+    voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })),
     paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot() });
   const audioCommand = (...args) => audioBridge.command(...args);
   const control = (name, guildId) => {
@@ -110,6 +112,7 @@ else {
     }
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
     if (name === 'media:show') { media.show(); return null; }
+    if (name === 'media:login') { await accounts.open(data); return null; }
     if (name === 'job:action') {
       const job = store.jobs.find(j => j.id === data?.id); if (!job) throw new Error('項目が見つかりません');
       const runner = job.kind === 'speech' ? speechRunner : media.forJob(job);
@@ -160,6 +163,7 @@ else {
     bouyomi = new BouyomiImport(store.directory); bouyomi.on('change', emitState);
     bouyomiProcessor = new BouyomiProcessor(store.directory);
     android = new AndroidRuntime(store.directory, getConfig, (l, t) => store.log(l, t), (url, options) => net.fetch(url, options));
+    accounts = new MediaAccounts(getConfig, (l, t) => store.log(l, t));
     android.on('change', emitState); android.on('frame', bytes => { if (window && !window.isDestroyed()) window.webContents.send('nyan:android-frame', bytes); });
     bot = new DiscordBot(store, {
       speech: payload => { store.enqueue('speech', payload); void speechRunner.drain(); },
@@ -191,7 +195,7 @@ else {
           }); return captureChain;
         },
         stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
-      }, (l, t) => store.log(l, t)); return browser;
+      }, (l, t) => store.log(l, t), accounts); return browser;
     }, async (job, signal) => {
       if (job.payload.mode === 'direct') return;
       await speechRunner.speak({ text: mediaAnnouncement(job.payload.url), guildId: job.payload.guildId, master: job.payload.master, system: true, priority: 50, output: getConfig().media.output }, { signal });
@@ -365,6 +369,6 @@ else {
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });
-  app.on('before-quit', () => { quitting = true; if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); audioBridge.close(); tray?.destroy(); });
+  app.on('before-quit', () => { quitting = true; if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
   app.on('window-all-closed', () => { if (quitting) app.quit(); });
 }

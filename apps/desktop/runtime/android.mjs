@@ -66,13 +66,27 @@ export class AndroidRuntime extends EventEmitter {
   run(executable, args, { input = '', timeout = 20000, signal, progress = false, binary = false } = {}) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted(); const child = spawn(executable, args, { env: this.environment(), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
-      const chunks = []; let length = 0, errors = '', done = false; const timer = setTimeout(() => finish(new Error('Androidの処理がタイムアウトしました')), timeout);
+      const chunks = []; let length = 0, errors = '', tail = '', done = false, lastProgress = 0; const timer = setTimeout(() => finish(new Error('Androidの処理がタイムアウトしました')), timeout);
       const abort = () => finish(new DOMException('Cancelled', 'AbortError'));
       const finish = (error, output) => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); if (error) { child.kill(); reject(error); } else resolve(output); };
       signal?.addEventListener('abort', abort, { once: true }); child.on('error', e => finish(new Error(`Androidツールを実行できません: ${e.code}`))); child.stdin.on('error', () => {});
-      child.stdout.on('data', b => { length += b.length; if (length > (binary ? 20 : 5) * 1048576) return finish(new Error('Androidの応答が大きすぎます')); chunks.push(b); if (progress) this.change(b.toString().replace(/\x1b\[[0-9;]*m/g, '').trim().slice(-500)); });
-      child.stderr.on('data', b => { errors = (errors + b.toString()).slice(-2000); });
-      child.once('close', code => { const output = Buffer.concat(chunks); if (code !== 0) finish(new Error(`Androidツールの終了コード ${code}: ${errors.slice(-500)}`)); else finish(null, binary ? output : output.toString()); }); child.stdin.end(input);
+      const report = b => {
+        tail = (tail + b.toString().replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')).slice(-16384);
+        if (Date.now() - lastProgress >= 250) { lastProgress = Date.now(); this.change(tail.trim().slice(-500)); }
+      };
+      child.stdout.on('data', b => {
+        if (done) return;
+        // Installers redraw progress for multi-GB archives. Retain a tail, not the entire transcript.
+        if (progress && !binary) { report(b); return; }
+        length += b.length; if (length > (binary ? 20 : 5) * 1048576) return finish(new Error('Androidの応答が大きすぎます'));
+        chunks.push(b);
+      });
+      child.stderr.on('data', b => { if (done) return; errors = (errors + b.toString()).slice(-2000); if (progress && !binary) report(b); });
+      child.once('close', code => {
+        if (done) return;
+        if (code !== 0) finish(new Error(`Androidツールの終了コード ${code}: ${(errors || tail).slice(-500)}`));
+        else finish(null, progress && !binary ? tail : binary ? Buffer.concat(chunks) : Buffer.concat(chunks).toString());
+      }); child.stdin.end(input);
     });
   }
   adb(args, options) { return this.run(this.paths().adb, ['-s', `emulator-${this.getConfig().android.port}`, ...args], options); }

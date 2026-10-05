@@ -42,8 +42,20 @@ function player(mode, startSeconds = 80) {
     play() { this.paused = false; return Promise.resolve(); }, pause() { this.paused = true; }, addEventListener(type, cb) { events.set(type, cb); } };
   const context = { document: { querySelectorAll: () => [video], querySelector: () => null }, window: {}, setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id) };
   const read = (paused = false) => runInNewContext(mediaScript({ mode, startSeconds, paused }), context);
-  return { video, read, fire: name => events.get(name)?.(), timers };
+  return { video, read, context, fire: name => events.get(name)?.(), timers };
 }
+test('YouTube prerolls and midrolls do not seek to content offsets, finish a job, or consume preview time', () => {
+  const p = player('preview'); let ad = true;
+  p.context.window.ytInitialPlayerResponse = { playabilityStatus: { status: 'LOGIN_REQUIRED', reason: 'stale' } };
+  p.context.document.querySelector = selector => selector === '#movie_player' ? { getPlayerResponse: () => ({ playabilityStatus: { status: 'OK' } }) } : selector === '#movie_player video' ? p.video : ad ? {} : null;
+  p.video.currentTime = 60; p.video.ended = true;
+  let state = p.read(); assert.equal(state.advertisement, true); assert.equal(state.ended, false); assert.equal(state.loginRequired, false); assert.equal(p.video.currentTime, 60); assert.equal(p.timers.size, 0);
+  ad = false; p.video.ended = false; p.read(); assert.equal(p.video.currentTime, 80);
+  p.video.currentTime = 100; p.fire('playing'); assert.equal(p.timers.size, 1);
+  ad = true; p.video.currentTime = 999; p.fire('timeupdate'); assert.equal(p.timers.size, 0); assert.equal(p.read().previewFinished, false);
+  ad = false; p.video.currentTime = 100; p.fire('timeupdate'); assert.equal(p.read().previewFinished, false); assert.equal(p.video.currentTime, 100);
+  p.video.currentTime = 125; p.fire('timeupdate'); assert.equal(p.read().previewFinished, true);
+});
 test('45-second playback begins at URL offset, excludes buffering and pause, and cannot restart after its limit', () => {
   const p = player('preview'); p.read(); assert.equal(p.video.currentTime, 80); assert.equal(p.video.loop, false);
   p.fire('playing'); assert.equal(p.timers.size, 1);

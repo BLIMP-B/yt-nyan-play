@@ -19,6 +19,7 @@ jobs:
       - run: npm run check:desktop
       - run: npm test
       - run: xvfb-run --auto-servernum npm run smoke:desktop
+      - run: xvfb-run --auto-servernum npm run verify:accounts
       - name: Check real speech, video audio and PC output
         run: |
           sudo apt-get update
@@ -45,6 +46,7 @@ jobs:
       - run: ./scripts/check-bouyomi-helper.ps1
       - run: npm test
       - run: npm run smoke:desktop
+      - run: npm run verify:accounts
       - run: npm run verify:audio
       - uses: actions/upload-artifact@v4
         if: always()
@@ -62,6 +64,24 @@ jobs:
             dist/desktop/*.exe
             dist/desktop/*.zip
           if-no-files-found: error
+  android-install:
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Install official SDK and Google Play image and create AVD
+        run: npm run verify:android
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-verification-windows
+          path: dist/android-verification
   live-media:
     needs: tests
     runs-on: windows-latest

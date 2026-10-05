@@ -1,33 +1,22 @@
-import { BrowserWindow, session } from 'electron';
+import { BrowserWindow } from 'electron';
 import { validateMediaUrl } from '../core/config.mjs';
 import { mediaServiceName } from '../core/protocol.mjs';
 
 import { mediaScript } from '../core/media-script.mjs';
 import { APP_ICON } from './app-icon.mjs';
-import { browserUserAgent } from '../core/browser-user-agent.mjs';
-import { validateMediaNavigation } from '../core/media-navigation.mjs';
+import { playbackSession, guardMediaWindow } from './media-session.mjs';
+import { mediaAuthHosts } from '../core/media-accounts.mjs';
 
 export class MediaBrowser {
-  constructor(getConfig, bridge, log) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.window = null; this.paused = false; this.ducked = false; this.status = null; }
+  constructor(getConfig, bridge, log, accounts) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.window = null; this.paused = false; this.ducked = false; this.status = null; }
   async play(job, signal) {
     signal.throwIfAborted(); const c = this.getConfig(); const payload = job.payload;
     const url = validateMediaUrl(payload.url, c.media.allowedHosts);
-    const ses = session.fromPartition('persist:nyan-playback');
-    ses.setUserAgent(browserUserAgent(ses.getUserAgent()));
-    ses.setPermissionRequestHandler((_web, _permission, callback) => callback(false));
-    ses.setPermissionCheckHandler(() => false);
+    const ses = playbackSession();
     const window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
       icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     this.window = window; let captureStarted = false;
-    const checkNavigation = (event, destination) => { try { validateMediaNavigation(destination, this.getConfig().media.allowedHosts, url); } catch { event.preventDefault(); } };
-    window.webContents.on('will-navigate', checkNavigation); window.webContents.on('will-redirect', checkNavigation);
-    window.webContents.setWindowOpenHandler(({ url: destination }) => {
-      try { validateMediaNavigation(destination, this.getConfig().media.allowedHosts, url); } catch { return { action: 'deny' }; }
-      if (!['accounts.google.com', 'consent.google.com', 'consent.youtube.com'].includes(new URL(destination).hostname)) return { action: 'deny' };
-      return { action: 'allow', outlivesOpener: true, overrideBrowserWindowOptions: { title: 'YouTubeにログイン', icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } } };
-    });
-    window.webContents.on('did-create-window', child => { child.webContents.on('will-navigate', checkNavigation); child.webContents.on('will-redirect', checkNavigation); child.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); });
-    window.webContents.on('will-prevent-unload', event => event.preventDefault());
+    guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child));
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
     try {
@@ -49,7 +38,7 @@ export class MediaBrowser {
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
         }
-        if (state.found && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); }
+        if (state.found && !state.advertisement && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
         this.status = { ...state, title, service: mediaServiceName(url), startedAt: playbackStartedAt, paused: this.paused }; this.bridge.changed();
         if (state.blockedReason && state.blockedReason !== reportedBlock) {
@@ -58,8 +47,8 @@ export class MediaBrowser {
         }
         if (state.error) throw new Error(`メディアを再生できません: ${state.error}`);
         if (state.previewFinished || state.ended) return;
-        const authenticating = state.loginRequired || ['accounts.google.com', 'consent.google.com', 'consent.youtube.com'].includes(new URL(window.webContents.getURL()).hostname);
-        if (!seen && Date.now() - startedAt > (authenticating ? 300000 : 90000)) throw new Error(state.blockedReason || '再生できる動画・音声を見つけられません。ログインやサイトの再生条件を確認してください');
+        const authenticating = state.loginRequired || mediaAuthHosts(url).includes(new URL(window.webContents.getURL()).hostname);
+        if (!seen && Date.now() - startedAt > (authenticating || state.advertisement ? 300000 : 90000)) throw new Error(state.blockedReason || '再生できる動画・音声を見つけられません。ログインやサイトの再生条件を確認してください');
         await new Promise(resolve => { const t = setTimeout(resolve, 500); const stop = () => { clearTimeout(t); resolve(); }; signal.addEventListener('abort', stop, { once: true }); setTimeout(() => signal.removeEventListener('abort', stop), 550).unref(); });
       }
       signal.throwIfAborted(); throw new Error('再生ウィンドウが閉じられました');

@@ -3,7 +3,20 @@ import assert from 'node:assert/strict';
 import { resolveDestination } from '../apps/desktop/core/destination.mjs';
 import { browserUserAgent } from '../apps/desktop/core/browser-user-agent.mjs';
 import { validateMediaNavigation } from '../apps/desktop/core/media-navigation.mjs';
+import { mediaAccount, MEDIA_ACCOUNTS } from '../apps/desktop/core/media-accounts.mjs';
 const bindings = [{ guildId: '11111' }, { guildId: '22222' }];
+test('service sign-in routes are explicit and auth navigation remains service-scoped', () => {
+  for (const service of MEDIA_ACCOUNTS) {
+    assert.equal(mediaAccount(service.id), service);
+    assert.doesNotThrow(() => validateMediaNavigation(service.url, service.hosts, service.url));
+    for (const host of service.authHosts) {
+      assert.doesNotThrow(() => validateMediaNavigation(`https://${host}/login`, service.hosts, service.url));
+      assert.throws(() => validateMediaNavigation(`https://${host}.evil.test/login`, service.hosts, service.url));
+    }
+  }
+  assert.throws(() => mediaAccount('https://evil.test'));
+  assert.throws(() => validateMediaNavigation('https://accounts.google.com:444/login', ['youtube.com'], mediaAccount('youtube').url));
+});
 test('YouTube playback permits official sign-in and consent while blocking unrelated and local destinations', () => {
   const hosts = ['youtube.com', 'youtu.be'];
   assert.equal(validateMediaNavigation('https://accounts.google.com/ServiceLogin', hosts, 'https://youtu.be/a'), 'https://accounts.google.com/ServiceLogin');
