@@ -9,7 +9,7 @@
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><img src="../../../extension/furoneko70furoneko70.png" alt=""><div><strong>にゃんぷれい</strong><span>DESKTOP</span></div></div>
+    <div class="brand"><img src="../../../extension/furoneko70furoneko70.png" alt=""><div><strong>にゃんぷれい</strong></div></div>
     <nav aria-label="メインナビゲーション">
       <button data-view="overview" class="active"><span>◈</span>ダッシュボード</button>
       <button data-view="queue"><span>☷</span>再生キュー</button>
@@ -23,12 +23,10 @@
     <div class="sidebar-bottom"><div class="online-indicator"><i id="sidebar-dot"></i><span id="sidebar-status">Bot停止中</span></div><small id="version">v0.2.0</small><button id="open-docs" class="text-button">使い方・プロジェクト ↗</button></div>
   </aside>
   <main>
-    <header><div><div class="eyebrow">YOUR VOICE, YOUR PLAYLIST</div><h1 id="page-title">ダッシュボード</h1></div><div class="header-actions"><span id="status-badge" class="badge">停止中</span><button id="bot-stop" class="secondary">停止</button><button id="bot-start" class="primary">Botを開始</button></div></header>
+    <header><div><h1 id="page-title">ダッシュボード</h1></div><div class="header-actions"><span id="status-badge" class="badge">停止中</span><button id="bot-stop" class="secondary">停止</button><button id="bot-start" class="primary">Botを開始</button></div></header>
     <div id="toast" role="status" aria-live="polite" hidden></div>
     <section data-panel="overview">
-      <div class="welcome"><div><span class="tag">ALL IN ONE</span><h2>会話も、動画も。<br>ここから、つながる。</h2><p>Discordのメッセージとにゃんぷれいのリクエストを、<br>声と再生につなぐ、あなたのPCの拠点。</p></div><div class="welcome-art" aria-hidden="true"><div class="sound-bar"></div><div class="sound-bar"></div><div class="sound-bar"></div><div class="sound-bar"></div><div class="sound-bar"></div><div class="play-orb">▶</div></div></div>
-      <div class="stats"><article><span>Botの接続</span><strong id="connection-count">0</strong><small>音声チャンネル</small></article><article><span>再生待ち</span><strong id="waiting-count">0</strong><small>リクエスト</small></article><article><span>今日の完了</span><strong id="completed-count">0</strong><small>読み上げ・再生</small></article><article><span>音声エンジン</span><strong id="engine-name" class="small-value">VOICEVOX</strong><small id="style-summary">ずんだもん・ノーマル</small></article></div>
-      <div class="two-columns"><article class="card"><div class="card-heading"><h2>いま再生しているもの</h2><span class="badge mint">LIVE</span></div><div id="now-playing" class="empty-state"><span>♫</span><p>リクエストを待っています</p><small>Chrome拡張から送信するか、下のURLを追加してください。</small></div><div class="play-controls"><button id="pause-toggle" class="secondary">一時停止</button><button id="skip-media" class="secondary">次へ</button><button id="show-media" class="secondary">再生画面</button><button id="stop-all" class="danger-text">すべて停止</button></div></article><article class="card"><div class="card-heading"><h2>はじめの設定</h2></div><ol class="setup-list"><li><span>01</span><div><strong>Discord Botを接続</strong><p>トークンと読み取るチャンネルを設定します。</p></div><button data-go="connections">設定 →</button></li><li><span>02</span><div><strong>読み上げの声を選ぶ</strong><p>音声エンジンを接続して声種を読み込みます。</p></div><button data-go="voices">設定 →</button></li><li><span>03</span><div><strong>再生を試す</strong><p>テキストや動画URLを送って動作を確認します。</p></div></li></ol></article></div>
+      <div><article class="card"><div class="card-heading"><h2>いま再生しているもの</h2></div><div id="now-playing" class="empty-state"><span>♫</span><p>リクエストを待っています</p><small>Chrome拡張から送信するか、下のURLを追加してください。</small></div><div class="play-controls"><button id="pause-toggle" class="secondary">一時停止</button><button id="skip-media" class="secondary">次へ</button><button id="show-media" class="secondary">再生画面</button><button id="stop-all" class="danger-text">すべて停止</button></div></article></div>
       <article class="card"><div class="card-heading"><h2>再生リクエストを追加</h2><span class="subtle">YouTube / ニコニコ / SNS / 許可したメディア</span></div><form id="media-form" class="inline-form"><label class="grow">動画・音声のURL<input id="media-url" type="url" placeholder="https://www.youtube.com/watch?v=…" required></label><label>開始位置（秒）<input id="media-time" type="number" min="0" max="86400" value="0"></label><label class="checkbox"><input id="media-loop" type="checkbox">無限に再生</label><label>送信先サーバー<select id="media-guild" class="guild-picker"><option value="">ローカルのみ</option></select></label><button class="primary" type="submit">キューに追加</button></form></article>
     </section>
     <section data-panel="queue" hidden><article class="card"><div class="card-heading"><h2>リクエスト・履歴</h2><select id="queue-filter"><option value="all">すべて</option><option value="waiting">待機中</option><option value="running">処理中</option><option value="failed">失敗・中断</option><option value="completed">完了</option></select></div><div id="job-list" class="list"></div></article></section>
@@ -50,7 +48,7 @@
       <article class="card"><div class="card-footer"><button class="primary save-config">すべての設定を保存</button><button id="export-config" class="secondary">設定をエクスポート</button><button id="import-config" class="secondary">設定をインポート</button></div><p class="help">設定バックアップにBotトークンは含まれません。</p></article>
     </section>
     <section data-panel="logs" hidden><article class="card"><div class="card-heading"><h2>接続・処理のログ</h2><span class="subtle">最新500件</span></div><div id="log-list" class="list"></div></article></section>
-    <footer>にゃんぷれい — Chromeから送って、PCで声にする。<span>音声生成: VOICEVOX</span></footer>
+
   </main>
   <script src="audio.js"></script>
   <script src="app.js"></script>

@@ -5,9 +5,11 @@ import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const directory = mkdtempSync(join(tmpdir(), 'nyan-smoke-'));
+const environment = { ...process.env, NYAN_DATA_DIR: directory };
+delete environment.ELECTRON_RUN_AS_NODE;
 // This test loads only local fixtures. Hosted Linux runners cannot use Electron's SUID helper.
 const child = spawn(require('electron'), [resolve(import.meta.dirname, '..'), '--smoke', ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], {
-  env: { ...process.env, ELECTRON_RUN_AS_NODE: '', NYAN_DATA_DIR: directory }, stdio: ['ignore', 'pipe', 'pipe'],
+  env: environment, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = ''; let errors = '';
 child.stdout.on('data', data => { output += data; process.stdout.write(data); });
