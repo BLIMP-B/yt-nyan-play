@@ -80,6 +80,7 @@ export class VoiceOutput {
     this.disconnect(guildId);
     const client = this.getClient(); if (!client?.isReady()) throw new Error('Discord Botに接続してください');
     const channel = await client.channels.fetch(channelId);
+    if (this.getClient() !== client || !client.isReady()) throw new Error('Discord接続が終了しました');
     if (!channel?.isVoiceBased() || channel.guildId !== guildId) throw new Error('指定した音声チャンネルを利用できません');
     const connection = joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: true });
     const mixer = new PcmMixer(); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });

@@ -81,3 +81,8 @@ test('diagnostic logs redact credentials', t => {
   const store = new Store(temporary(t)); const token = 'a'.repeat(25) + '.' + 'b'.repeat(7) + '.' + 'c'.repeat(25);
   store.log('error', token + ' https://discord.com/api/webhooks/12345/private'); assert.ok(!store.logs[0].text.includes(token)); assert.ok(!store.logs[0].text.includes('private'));
 });
+test('server management pauses and clears only that server queue', async t => {
+  const store = new Store(temporary(t)); const a = store.enqueue('speech', { guildId: '11111' }); const b = store.enqueue('speech', { guildId: '99999' });
+  const runner = new JobRunner(store, 'speech', async () => {}); runner.pauseGuild('11111', true); await runner.drain();
+  assert.equal(a.status, 'waiting'); assert.equal(b.status, 'completed'); runner.clear('99999'); assert.equal(a.status, 'waiting'); runner.clear('11111'); assert.equal(a.status, 'cancelled');
+});

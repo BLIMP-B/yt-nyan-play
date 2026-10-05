@@ -41,10 +41,10 @@ else {
     if (type === 'capture:start') window.webContents.executeJavaScript(`window.nyanCapture(${JSON.stringify({ type, id })})`, true).catch(finish);
     else window.webContents.send('nyan:audio', { ...data, type, id });
   });
-  const control = name => {
-    if (name === 'pause' || name === 'resume') { const paused = name === 'pause'; speechRunner.pause(paused); mediaRunner.pause(paused); media.setPaused(paused); }
-    if (name === 'skip') mediaRunner.skip();
-    if (name === 'stop') { speechRunner.clear(); mediaRunner.clear(); }
+  const control = (name, guildId) => {
+    if (name === 'pause' || name === 'resume') { const paused = name === 'pause'; if (guildId) { speechRunner.pauseGuild(guildId, paused); mediaRunner.pauseGuild(guildId, paused); } else { speechRunner.pause(paused); mediaRunner.pause(paused); } if (!guildId || mediaRunner.active?.job.payload.guildId === guildId) media.setPaused(paused); }
+    if (name === 'skip') mediaRunner.skip(guildId);
+    if (name === 'stop') { speechRunner.clear(guildId); mediaRunner.clear(guildId); }
   };
   async function startBot() {
     if (bot.status !== 'offline') return;

@@ -5,7 +5,8 @@ import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const directory = mkdtempSync(join(tmpdir(), 'nyan-smoke-'));
-const child = spawn(require('electron'), [resolve(import.meta.dirname, '..'), '--smoke', ...(process.platform === 'linux' && !process.env.DISPLAY ? ['--ozone-platform=headless', '--disable-gpu', '--no-sandbox'] : []), ...(process.platform === 'linux' && process.env.DISPLAY && process.getuid?.() === 0 ? ['--no-sandbox'] : [])], {
+// This test loads only local fixtures. Hosted Linux runners cannot use Electron's SUID helper.
+const child = spawn(require('electron'), [resolve(import.meta.dirname, '..'), '--smoke', ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], {
   env: { ...process.env, ELECTRON_RUN_AS_NODE: '', NYAN_DATA_DIR: directory }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = ''; let errors = '';

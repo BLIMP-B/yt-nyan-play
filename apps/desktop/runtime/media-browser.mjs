@@ -70,5 +70,5 @@ export class MediaBrowser {
   setPaused(value) { this.paused = value; }
   setDucked(value) { this.ducked = value; }
   show() { if (!this.window?.isDestroyed()) this.window?.show(); }
-  close() { this.window?.destroy(); this.window = null; }
+  close() { if (this.window && !this.window.isDestroyed()) this.window.destroy(); this.window = null; }
 }

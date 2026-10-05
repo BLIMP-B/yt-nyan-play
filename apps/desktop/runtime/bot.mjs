@@ -81,8 +81,8 @@ export class DiscordBot {
     if (!admin) return this.reply(message, 'この操作にはサーバー管理権限または設定済みの操作ユーザー権限が必要です');
     if (cmd.name === 'join') { await this.handlers.join(info.guildId); return this.reply(message, '設定された音声チャンネルに接続しました'); }
     if (cmd.name === 'leave') { this.handlers.leave(info.guildId); return this.reply(message, '音声チャンネルから退出しました'); }
-    if (['pause', 'resume', 'skip', 'stop'].includes(cmd.name)) { this.handlers.control(cmd.name); return this.reply(message, `再生操作: ${cmd.name}`); }
-    if (['play', 'loop'].includes(cmd.name)) { const media = parseMediaCommand(`${arg.join(' ')}${cmd.name === 'loop' ? '無限' : '再生'}`, c); if (!media) throw new Error('URLを指定してください'); this.handlers.media({ ...media, guildId: info.guildId, source: info.displayName }); return this.reply(message, '再生キューに追加しました'); }
+    if (['pause', 'resume', 'skip', 'stop'].includes(cmd.name)) { this.handlers.control(cmd.name, info.guildId); return this.reply(message, `このサーバーの再生操作: ${cmd.name}`); }
+    if (['play', 'loop'].includes(cmd.name)) { if (!c.media.enabled) throw new Error('メディアの受信を無効にしています'); const media = parseMediaCommand(`${arg.join(' ')}${cmd.name === 'loop' ? '無限' : '再生'}`, c); if (!media) throw new Error('URLを指定してください'); this.handlers.media({ ...media, guildId: info.guildId, source: info.displayName }); return this.reply(message, '再生キューに追加しました'); }
     if (cmd.name === 'dict-list') return this.reply(message, c.dictionary.filter(d => d.scope === 'global' || d.scopeId === info.guildId).map(d => `${d.source} → ${d.replacement}`).join('\n') || '辞書は空です');
     if (cmd.name === 'dict' || cmd.name === 'dict-remove') {
       if (!arg[0] || cmd.name === 'dict' && !arg[1]) throw new Error('単語と読み方を指定してください');
