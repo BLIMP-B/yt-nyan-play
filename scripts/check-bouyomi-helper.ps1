@@ -4,7 +4,8 @@ $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ('damare-native-' + [gu
 New-Item -ItemType Directory -Path $temporary | Out-Null
 try {
     $target = Join-Path $temporary 'BouyomiBridge.exe'
-    & $compiler /nologo /target:exe /platform:x86 /reference:System.Web.Extensions.dll "/out:$target" "$PSScriptRoot/../apps/desktop/native/BouyomiBridge.cs"
+    $source = (Resolve-Path (Join-Path $PSScriptRoot '..\apps\desktop\native\BouyomiBridge.cs')).Path
+    & $compiler /nologo /target:exe /platform:x86 /reference:System.Web.Extensions.dll "/out:$target" $source
     if ($LASTEXITCODE -ne 0) { throw 'Native bridge compilation failed' }
     $request = '{"operation":"process","text":"test","tagMode":"original"}'
     $output = $request | & $target $temporary
