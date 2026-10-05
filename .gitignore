@@ -1,0 +1,9 @@
+dist/
+node_modules/
+__pycache__/
+.DS_Store
+*.crx
+*.pem
+.env
+.env.*
+_metadata/

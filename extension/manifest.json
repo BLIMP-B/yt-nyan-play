@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "YTにゃんぷれい",
+  "version": "0.1.2",
+  "description": "YouTubeの高評価ボタン左に「再生」ボタンを追加し、選択したDiscord宛先にURL+再生+タイトルを送信します。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://discord.com/api/webhooks/*",
+    "https://discordapp.com/api/webhooks/*"
+  ],
+  "icons": {
+    "16": "furoneko70furoneko70.png",
+    "32": "furoneko70furoneko70.png",
+    "48": "furoneko70furoneko70.png",
+    "128": "furoneko70furoneko70.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "furoneko70furoneko70.png",
+      "32": "furoneko70furoneko70.png",
+      "48": "furoneko70furoneko70.png",
+      "128": "furoneko70furoneko70.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "furoneko70furoneko70.png"
+      ],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ]
+    }
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*"
+      ],
+      "js": [
+        "content-script.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}

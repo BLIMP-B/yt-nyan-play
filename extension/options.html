@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+
+  <link rel="stylesheet" href="options.css" />
+
+  <title>再生 設定</title>
+</head>
+
+<body>
+  <div class="container">
+
+    <h1 class="title">
+      <img class="titleIcon" src="furoneko70furoneko70.png" alt="再生" />
+      <span>YTにゃんぷれい - 設定</span>
+    </h1>
+
+    <div class="form">
+      <!-- 表示名 -->
+      <input id="label" class="input" placeholder="表示名">
+
+      <div class="urlRow">
+        <input id="webhookUrl" class="input" type="password" placeholder="Webhook URL">
+        <button id="toggleWebhook" type="button" class="toggleBtn">表示</button>
+      </div>
+
+      <button id="add">追加</button>
+      <button id="update" style="display:none;">更新</button>
+    </div>
+
+    <h2>送信先</h2>
+    <div id="list" class="list"></div>
+
+    <h2 style="margin-top:30px;">送信履歴</h2>
+    <div id="historyList" class="list"></div>
+
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

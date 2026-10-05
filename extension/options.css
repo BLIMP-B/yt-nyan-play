@@ -1,0 +1,162 @@
+body {
+  background: #313338;
+  color: #fff;
+  font-family: sans-serif;
+  margin: 0;
+}
+
+.container {
+  max-width: 700px;
+  margin: 20px auto;
+  padding: 0 12px;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 18px 0 16px;
+}
+
+.titleIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.input {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid #444;
+  background: #1e1f22;
+  color: #fff;
+  font-size: 14px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.urlRow {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+button,
+.toggleBtn,
+#add,
+#update {
+  height: 40px;
+  min-width: 90px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #444;
+  background: #5865f2;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  transition: 0.2s;
+}
+
+button:hover,
+.toggleBtn:hover,
+#add:hover,
+#update:hover {
+  background: #4752c4;
+}
+
+.toggleBtn {
+  min-width: 70px;
+}
+
+.toggleBtn.off {
+  background: #444;
+  border-color: #444;
+}
+
+.toggleBtn.on {
+  background: #4da3ff;
+  border-color: #4da3ff;
+}
+
+#add,
+#update {
+  background: #4da3ff;
+  border-color: #4da3ff;
+}
+
+.btnRow {
+  display: flex;
+  gap: 8px;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.item {
+  background: #2b2d31;
+  padding: 12px;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+}
+
+.url {
+  font-size: 12px;
+  color: #aaa;
+  max-width: 400px;
+  word-break: break-all;
+}
+
+.actions {
+  display: flex;
+  gap: 6px;
+}
+
+.delete {
+  background: #ed4245;
+}
+
+.delete:hover {
+  background: #c03537;
+}
+
+.edit {
+  background: #faa81a;
+}
+
+.edit:hover {
+  background: #d48e15;
+}
+
+.badge-lock{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:28px;
+  padding:0 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:700;
+  background: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: rgba(255,255,255,0.92);
+}

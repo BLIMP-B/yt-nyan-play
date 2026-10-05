@@ -1,0 +1,13 @@
+{
+  "name": "yt-nyan-play",
+  "version": "0.1.2",
+  "private": true,
+  "description": "YTにゃんぷれい Chrome拡張機能のソース管理・検査",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "package": "python3 scripts/package.py"
+  }
+}
