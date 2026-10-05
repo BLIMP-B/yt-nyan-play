@@ -30,15 +30,9 @@ try {
     await android.start(); report.bootVerified = true;
     report.playInstalled = (await android.adb(['shell', 'pm', 'list', 'packages', 'com.android.vending'])).includes('com.android.vending');
     assert.equal(report.playInstalled, true, 'Google Play was not installed in the AVD');
-    await android.openPlay();
-    const until = Date.now() + 60000;
-    while (Date.now() < until) {
-      const activity = await android.adb(['shell', 'dumpsys', 'activity', 'activities']);
-      report.playForeground = /(?:topResumedActivity|mResumedActivity|ResumedActivity)[^\r\n]*com\.android\.vending/.test(activity);
-      if (report.playForeground) break;
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    assert.equal(report.playForeground, true, 'Google Play did not become the foreground activity');
+    report.playWindow = await android.openPlay();
+    report.playForeground = /com\.android\.vending\//.test(report.playWindow.focus);
+    assert.equal(report.playForeground, true, 'Google Play did not become the focused, unobstructed window');
     await new Promise(resolve => setTimeout(resolve, 3000));
     report.playProcess = (await android.adb(['shell', 'pidof', 'com.android.vending'])).trim();
     assert.ok(report.playProcess, 'Google Play did not start');

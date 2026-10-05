@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootProperties, waitForAndroidBoot, emulatorArguments } from '../apps/desktop/core/android-boot.mjs';
+import { bootProperties, waitForAndroidBoot, waitForPlayWindow, emulatorArguments } from '../apps/desktop/core/android-boot.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 
 test('first boot can progress beyond the old three-minute limit and waits for Google Play package readiness', async () => {
@@ -37,4 +37,18 @@ test('recovery preserves user data, disables Vulkan and snapshot loading, and on
   assert.ok(emulatorArguments({ ...config, audioEnabled: false }).includes('-no-audio'));
   assert.equal(bootProperties('[sys.boot_completed]: [1]\r\n')['sys.boot_completed'], '1');
   assert.equal(normalizeConfig({ android: { ramMb: 2048 } }).android.ramMb, 2048);
+});
+test('Play readiness recovers a first-boot launcher ANR and requires the actual focused window to remain stable', async () => {
+  let clock = 0, recovered = false, launches = 0; const stopped = [];
+  const state = await waitForPlayWindow(async args => {
+    if (args.includes('force-stop')) { stopped.push(args.at(-1)); recovered = true; return ''; }
+    return recovered ? 'mCurrentFocus=Window{123 u0 com.android.vending/com.google.android.finsky.activities.MainActivity}' : 'mCurrentFocus=Window{123 u0 Application Not Responding: com.google.android.apps.nexuslauncher}';
+  }, async () => { launches++; }, { now: () => clock, delay: async ms => { clock += ms; } });
+  assert.deepEqual(stopped, ['com.google.android.apps.nexuslauncher']); assert.equal(launches, 1); assert.equal(state.launcherRecovered, true); assert.ok(state.elapsedMs >= 3000);
+});
+test('Play readiness never dismisses another app error and remains cancellable', async () => {
+  let clock = 0;
+  await assert.rejects(waitForPlayWindow(async args => { assert.ok(!args.includes('force-stop')); return 'mCurrentFocus=Window{1 u0 Application Not Responding: com.other.app}'; }, async () => {}, { now: () => clock, maxMs: 3000, delay: async ms => { clock += ms; } }), /Google Play/);
+  const controller = new AbortController();
+  await assert.rejects(waitForPlayWindow(async () => '', async () => {}, { signal: controller.signal, delay: async () => controller.abort(new DOMException('stop', 'AbortError')) }), { name: 'AbortError' });
 });

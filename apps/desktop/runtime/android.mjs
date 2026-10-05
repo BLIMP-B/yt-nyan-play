@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { availableParallelism } from 'node:os';
-import { waitForAndroidBoot, emulatorArguments } from '../core/android-boot.mjs';
+import { waitForAndroidBoot, waitForPlayWindow, emulatorArguments } from '../core/android-boot.mjs';
 import { parseRepository, playImages, windowsTools, verifyChecksum, extractZip, avdName, shellQuote, SDK_REPOSITORY, PLAY_REPOSITORY } from '../core/android-packages.mjs';
 
 export class AndroidRuntime extends EventEmitter {
@@ -122,7 +122,7 @@ export class AndroidRuntime extends EventEmitter {
           });
           await this.adb(['shell', 'input', 'keyevent', '82'], { signal }).catch(() => {});
           controller.signal.throwIfAborted(); this.status = 'running'; this.change('Androidを起動しました');
-          this.frameTimer = setInterval(() => this.frame(), 350); void this.frame(); return this.snapshot();
+          this.frameTimer = setInterval(() => this.frame(), 700); void this.frame(); return this.snapshot();
         } catch (e) {
           entry.error = signal.aborted ? signal.reason.message : e.message; entry.state = e.state || entry.state;
           await this.stopProcess(); controller.signal.throwIfAborted();
@@ -147,7 +147,22 @@ export class AndroidRuntime extends EventEmitter {
     if (data.type === 'text' && typeof data.text === 'string' && /^[\x20-\x7e]{1,500}$/.test(data.text)) return this.adb(['shell', 'input', 'text', shellQuote(data.text.replace(/ /g, '%s'))]);
     throw new Error('Android操作を確認してください。日本語はAndroid画面のキーボードから入力できます');
   }
-  async openPlay(packageId = '') { if (this.status !== 'running') throw new Error('Androidを起動してください'); if (packageId && !/^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(packageId)) throw new Error('アプリのパッケージIDを確認してください'); return packageId ? this.adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(`market://details?id=${packageId}`)]) : this.adb(['shell', 'monkey', '-p', 'com.android.vending', '-c', 'android.intent.category.LAUNCHER', '1']); }
+  async openPlay(packageId = '') {
+    if (this.status !== 'running') throw new Error('Androidを起動してください');
+    if (this.playController) throw new Error('Google Playを準備中です');
+    if (packageId && !/^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(packageId)) throw new Error('アプリのパッケージIDを確認してください');
+    const controller = this.playController = new AbortController(), signal = controller.signal;
+    const launch = () => packageId ? this.adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(`market://details?id=${packageId}`)], { signal }) : this.adb(['shell', 'monkey', '-p', 'com.android.vending', '-c', 'android.intent.category.LAUNCHER', '1'], { signal });
+    clearInterval(this.frameTimer); this.change('Google Playの画面を準備しています');
+    try {
+      await launch();
+      const state = await waitForPlayWindow((args, options) => this.adb(args, options), launch, { signal, changed: text => this.change(text) });
+      this.change('Google Playを開きました'); return state;
+    } finally {
+      if (this.playController === controller) this.playController = null;
+      if (this.status === 'running' && !signal.aborted) { this.frameTimer = setInterval(() => this.frame(), 700); void this.frame(); }
+    }
+  }
   cancelSetup() { this.installController?.abort(); }
   async stopProcess() {
     clearInterval(this.frameTimer); const child = this.child; this.child = null;
@@ -157,6 +172,6 @@ export class AndroidRuntime extends EventEmitter {
     if (child.exitCode === null && child.signalCode === null) child.kill();
     let timer; await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, 5000); })]); clearTimeout(timer);
   }
-  async stop() { this.bootController?.abort(new DOMException('起動を中止しました', 'AbortError')); await this.stopProcess(); this.activeConfig = null; this.status = 'stopped'; this.change(); }
-  close() { this.cancelSetup(); this.bootController?.abort(new DOMException('終了しました', 'AbortError')); clearInterval(this.frameTimer); this.child?.kill(); this.child = null; }
+  async stop() { this.playController?.abort(new DOMException('中止しました', 'AbortError')); this.bootController?.abort(new DOMException('起動を中止しました', 'AbortError')); await this.stopProcess(); this.activeConfig = null; this.status = 'stopped'; this.change(); }
+  close() { this.cancelSetup(); this.playController?.abort(new DOMException('終了しました', 'AbortError')); this.bootController?.abort(new DOMException('終了しました', 'AbortError')); clearInterval(this.frameTimer); this.child?.kill(); this.child = null; }
 }

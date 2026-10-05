@@ -38,6 +38,31 @@ export async function waitForAndroidBoot(adb, {
   throw new AndroidBootError('Androidの起動待ち上限に達しました', state);
 }
 
+export async function waitForPlayWindow(adb, launch, {
+  signal, maxMs = 120000, now = Date.now,
+  delay = ms => wait(ms, undefined, { signal }), changed = () => {},
+} = {}) {
+  const began = now(); let stable = 0, recovered = false, focus = '';
+  while (now() - began < maxMs) {
+    signal?.throwIfAborted();
+    try {
+      const windows = await adb(['shell', 'dumpsys', 'window', 'windows'], { signal, timeout: 10000 });
+      focus = windows.match(/mCurrentFocus[^\r\n]*/)?.[0] || '';
+      // First-boot launcher ANRs can cover an already-resumed Play activity.
+      // Recover only this launcher, never dismiss errors from arbitrary user apps.
+      if (!recovered && /Application (?:Not Responding|Error).*com\.google\.android\.apps\.nexuslauncher/.test(focus)) {
+        changed('初回起動のホーム画面を復旧しています');
+        await adb(['shell', 'am', 'force-stop', 'com.google.android.apps.nexuslauncher'], { signal, timeout: 10000 });
+        recovered = true; await launch(); stable = 0;
+      } else if (/com\.android\.vending\//.test(focus) && !/Application (?:Not Responding|Error)/.test(focus)) {
+        if (++stable >= 3) return { focus, launcherRecovered: recovered, elapsedMs: now() - began };
+      } else stable = 0;
+    } catch (error) { signal?.throwIfAborted(); stable = 0; }
+    await delay(1000);
+  }
+  throw new AndroidBootError('Google Playの画面を準備できませんでした。Android画面とネットワーク接続を確認してください', { focus });
+}
+
 export function emulatorArguments(config, { recovery = false, cores = 2 } = {}) {
   const args = ['-avd', config.avd, '-port', String(config.port), '-no-window', '-no-boot-anim',
     '-memory', String(config.ramMb), '-cores', String(Math.max(1, Math.min(4, cores))), '-skin', '720x1280', '-dpi-device', '320', '-show-kernel',
