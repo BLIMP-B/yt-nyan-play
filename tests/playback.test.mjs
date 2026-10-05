@@ -19,6 +19,7 @@ test('all playback modes preserve timestamps and legacy 無限 never repeats', (
     assert.equal(command.mode, mode); assert.equal(command.startSeconds, 80); assert.notEqual(command.loop, true);
   }
   assert.equal(parseMediaCommand('https://www.nicovideo.jp/watch/sm1?from=35直接', normalizeConfig()).startSeconds, 35);
+  assert.equal(parseMediaCommand('https://nico.ms/sm1再生', normalizeConfig()).mode, 'preview');
   assert.equal(parseMediaCommand('https://youtu.be/abc#t=15無限', normalizeConfig()).startSeconds, 15);
   const legacy = parseMediaCommand('NYANPLAY/1 ' + JSON.stringify({ version: 1, type: 'play', loop: true, mediaUrl: 'https://youtu.be/abc?t=15' }), normalizeConfig());
   assert.equal(legacy.mode, 'full'); assert.equal(legacy.startSeconds, 15);
@@ -27,6 +28,7 @@ test('announcements use URL service names including subdomains and shared links'
   const expected = new Map([
     ['https://m.youtube.com/watch?v=a', 'ゆーちゅーぶ'], ['https://youtu.be/a', 'ゆーちゅーぶ'],
     ['https://www.nicovideo.jp/watch/sm1', 'にこにこどうが'], ['https://x.com/user/status/1', 'えっくす'],
+    ['https://nico.ms/sm1', 'にこにこどうが'],
     ['https://twitter.com/user/status/1', 'ついったー'], ['https://www.instagram.com/reel/a', 'いんすたぐらむ'],
     ['https://vm.tiktok.com/a', 'てぃっくとっく'], ['https://fb.watch/a', 'ふぇいすぶっく'],
     ['https://www.threads.com/a', 'すれっず'], ['https://bsky.app/a', 'ぶるーすかい'],

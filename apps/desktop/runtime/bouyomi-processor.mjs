@@ -9,6 +9,7 @@ function run(executable, args, input, signal, cwd) {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const child = spawn(executable, args, { cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     let output = '', error = '', settled = false;
     const finish = (failure, result) => { if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); child.kill(); failure ? reject(failure) : resolve(result); };
     const abort = () => finish(new DOMException('Cancelled', 'AbortError'));

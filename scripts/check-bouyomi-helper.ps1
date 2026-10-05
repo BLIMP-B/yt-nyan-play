@@ -12,3 +12,4 @@ try {
     if ($LASTEXITCODE -ne 1 -or $output -notmatch '"error"') { throw 'Native bridge must report missing user-supplied assembly as JSON' }
     Write-Host 'Native x86 bridge compilation and JSON error protocol passed.'
 } finally { Remove-Item -Path $temporary -Recurse -Force }
+exit 0

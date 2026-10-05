@@ -27,7 +27,7 @@ export const DEFAULT_CONFIG = {
   media: {
     enabled: true, volume: 0.7, ducking: 0.35, showWindow: true,
     output: 'discord', maxMinutes: 120,
-    allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'x.com',
+    allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'nico.ms', 'x.com',
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
       'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
   },

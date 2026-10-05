@@ -2,7 +2,7 @@ import { validateMediaUrl } from './config.mjs';
 
 const SERVICES = [
   [['youtube.com', 'youtu.be'], 'ゆーちゅーぶ', 'YouTube'],
-  [['nicovideo.jp', 'niconico.com'], 'にこにこどうが', 'ニコニコ動画'],
+  [['nicovideo.jp', 'niconico.com', 'nico.ms'], 'にこにこどうが', 'ニコニコ動画'],
   [['x.com'], 'えっくす', 'X'], [['twitter.com'], 'ついったー', 'Twitter'],
   [['instagram.com'], 'いんすたぐらむ', 'Instagram'], [['tiktok.com'], 'てぃっくとっく', 'TikTok'],
   [['facebook.com', 'fb.watch'], 'ふぇいすぶっく', 'Facebook'],
