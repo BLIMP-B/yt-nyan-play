@@ -60,7 +60,7 @@ export class AndroidRuntime extends EventEmitter {
     finally { this.busy = false; this.installController = null; this.change(); }
     return this.snapshot();
   }
-  javaTool(tool, args, options) { const p = this.paths(); if (!p.java) throw new Error('Java実行環境を設定してください'); const main = tool === 'sdkmanager' ? 'com.android.sdklib.tool.sdkmanager.SdkManagerCli' : 'com.android.sdklib.tool.AvdManagerCli'; return this.run(p.java, ['-classpath', join(p.sdk, `cmdline-tools/latest/lib/${tool}-classpath.jar`), main, ...args], options); }
+  javaTool(tool, args, options) { const p = this.paths(); if (!p.java) throw new Error('Java実行環境を設定してください'); const main = tool === 'sdkmanager' ? 'com.android.sdklib.tool.sdkmanager.SdkManagerCli' : 'com.android.sdklib.tool.AvdManagerCli'; return this.run(p.java, ['-Dcom.android.sdkmanager.toolsdir=' + join(p.sdk, 'cmdline-tools/latest'), '-classpath', join(p.sdk, `cmdline-tools/latest/lib/${tool}-classpath.jar`), main, ...args], options); }
   installPackages(packages, options) { const p = this.paths(), cli = join(p.sdk, 'cmdline-tools/latest/bin/android.exe'); return existsSync(cli) ? this.run(cli, ['--sdk=' + p.sdk, 'sdk', 'install', ...packages.map(id => id.replace(/;/g, '/'))], options) : this.javaTool('sdkmanager', ['--sdk_root=' + p.sdk, ...packages], options); }
   environment() { return { ...process.env, ANDROID_HOME: this.paths().sdk, ANDROID_AVD_HOME: this.paths().avds, ANDROID_USER_HOME: join(this.directory, 'user') }; }
   run(executable, args, { input = '', timeout = 20000, signal, progress = false, binary = false } = {}) {
