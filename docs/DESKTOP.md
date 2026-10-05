@@ -4,7 +4,7 @@
 
 ## 導入と初回設定
 
-1. GitHub Actionsの **Desktop tests and Windows package** で成功した実行を開き、`nyan-talk-damare-windows-x64` 成果物を展開します。`NyanTalk-Damare-Setup-0.4.2-x64.exe` がインストーラー、ZIPが展開して利用する版です。Windows 10/11 x64を対象にしています。現在の配布物はコード署名を行っていません。
+1. [GitHub Releases](https://github.com/BLIMP-B/yt-nyan-play/releases) から配布ファイルを取得します。`NyanTalk-Damare-Setup-0.4.4-x64.exe` がインストーラー、`NyanTalk-Damare-0.4.4-x64.zip` が展開して利用する版です。同じReleaseの `yt-nyan-play-0.1.2.zip` はChrome拡張です。Windows 10/11 x64を対象にしています。現在の配布物はコード署名を行っていません。
 2. VOICEVOXを導入して起動するか、VOICEVOX Engineの `run.exe` を「声と読み上げ」で選択します。既定のAPIは `http://127.0.0.1:50021`。実行ファイルを選んだ場合はアプリがエンジンを起動・終了します。エンジンとモデルの同梱はこの版では未実施です。
 3. Discord Developer PortalでBotを作成し、**MESSAGE CONTENT INTENT** を有効にします。Botをサーバーへ招待し、対象チャンネルで「チャンネルを見る」「メッセージ履歴を読む」「メッセージを送信」「接続」「発言」を許可します。管理者権限を与える必要はありません。
 4. 「Discord接続」でBotトークンを保存して「Botを開始」。トークンはWindowsのDPAPIで暗号化して保存し、画面・設定のエクスポートには戻しません。
@@ -157,6 +157,8 @@ YouTube Premium等の広告非表示契約は、そのアカウントでのサ�
 `npm run verify:accounts` は実アプリのログイン操作、公式認証への遷移・ポップアップ、同じウィンドウの再利用、再起動後のCookie保持、再生ウィンドウでの共有、アプリAPIとNodeの分離をローカルの認証用試験素材で確認します。実アカウントの認証とPremiumの契約状態はこの試験で確認できません。Google等が組み込みブラウザでのログインを拒否した場合は、そのサイトの表示に従います。
 
 `npm run verify:android` はWindows CIで公式SDK、Emulator、Google Play API35イメージの導入とAVD作成を試験し、`android-verification-windows` に結果を保存します。利用可能な仮想化が検出された場合は実起動、Google Playパッケージと起動操作、端末画面の取得も試します。実アカウントでのGoogle Playログインとアプリ導入は別の受け入れ確認です。
+
+v0.4.4のWindows CIではSDK・Playイメージ導入とAVD作成は成功しましたが、自動・ソフトウェア描画の両方で起動完了待ちがタイムアウトしました。WHPXは利用可能と検出されていますが、起動成功は未確認です。起動失敗は末尾16K文字のEmulator診断を保持し、イベントログにも末尾を表示します。導入成功を端末起動やPlay認証の成功とは扱いません。
 
 ## v0.4.4のチャット教育とDiscord音声
 

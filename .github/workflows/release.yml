@@ -1,0 +1,129 @@
+name: Publish both applications to GitHub Release
+
+on:
+  push:
+    paths:
+      - releases/current.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publish-nyan-applications
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Read the explicit release selection
+        id: selection
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import assert from 'node:assert/strict';
+          const selection = JSON.parse(readFileSync('releases/current.json', 'utf8'));
+          assert.match(selection.tag, /^v\d+\.\d+\.\d+$/);
+          assert.match(selection.sourceSha, /^[a-f0-9]{40}$/);
+          assert.ok(Number.isSafeInteger(selection.windowsRunId) && selection.windowsRunId > 0);
+          assert.ok(typeof selection.title === 'string' && selection.title.length < 200 && !/[\r\n]/.test(selection.title));
+          assert.match(selection.notes, /^releases\/notes-v\d+\.\d+\.\d+\.md$/);
+          const notes = join(process.env.RUNNER_TEMP, 'nyan-release-notes.md');
+          writeFileSync(notes, readFileSync(selection.notes));
+          for (const [name, value] of Object.entries({ tag: selection.tag, sha: selection.sourceSha, run: selection.windowsRunId, title: selection.title, notes })) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+          JS
+      - name: Verify the selected Windows build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ steps.selection.outputs.run }}
+          RELEASE_SOURCE_SHA: ${{ steps.selection.outputs.sha }}
+        run: |
+          gh api "repos/$RELEASE_REPOSITORY/actions/runs/$RELEASE_RUN_ID" > "$RUNNER_TEMP/nyan-release-run.json"
+          gh api "repos/$RELEASE_REPOSITORY/actions/runs/$RELEASE_RUN_ID/jobs" > "$RUNNER_TEMP/nyan-release-jobs.json"
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import assert from 'node:assert/strict';
+          const run = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-run.json')));
+          assert.equal(run.head_sha, process.env.RELEASE_SOURCE_SHA);
+          assert.equal(run.status, 'completed');
+          assert.equal(run.event, 'push');
+          const { jobs } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-jobs.json')));
+          for (const name of ['tests', 'windows']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
+          // Android boot on hosted Windows remains a documented prerelease limitation.
+          assert.ok(jobs.filter(job => job.conclusion === 'failure').every(job => job.name === 'android-install'));
+          JS
+      - uses: actions/download-artifact@v4
+        with:
+          name: nyan-talk-damare-windows-x64
+          path: release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.selection.outputs.sha }}
+          path: release-source
+      - name: Package the Chrome extension from the same source
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          cd release-source
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          assert.equal('v' + JSON.parse(readFileSync('package.json')).version, process.env.RELEASE_TAG);
+          JS
+          npm run package
+          cp dist/yt-nyan-play-*.zip ../release-assets/
+      - name: Check release assets and save checksums
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, readdirSync, statSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          const version = process.env.RELEASE_TAG.slice(1);
+          const extension = JSON.parse(readFileSync('release-source/extension/manifest.json')).version;
+          const expected = [`NyanTalk-Damare-Setup-${version}-x64.exe`, `NyanTalk-Damare-${version}-x64.zip`, `yt-nyan-play-${extension}.zip`].sort();
+          assert.deepEqual(readdirSync('release-assets').sort(), expected);
+          for (const name of expected) assert.ok(statSync('release-assets/' + name).size > 0);
+          JS
+          cd release-assets
+          sha256sum *.exe *.zip > SHA256SUMS.txt
+      - name: Publish the combined prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+          RELEASE_SOURCE_SHA: ${{ steps.selection.outputs.sha }}
+          RELEASE_TITLE: ${{ steps.selection.outputs.title }}
+          RELEASE_NOTES: ${{ steps.selection.outputs.notes }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json tagName > /dev/null 2>&1; then
+            if EXISTING_RELEASE_SHA=$(gh api "repos/$RELEASE_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null); then
+              test "$EXISTING_RELEASE_SHA" = "$RELEASE_SOURCE_SHA"
+            else
+              test "$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+              test "$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json targetCommitish --jq '.targetCommitish')" = "$RELEASE_SOURCE_SHA"
+            fi
+            gh release upload "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft=false --latest=false
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --target "$RELEASE_SOURCE_SHA" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --draft=false --latest=false
+          fi
+          gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json url,assets
