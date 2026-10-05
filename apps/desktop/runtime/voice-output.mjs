@@ -2,6 +2,7 @@ import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 import OpusScript from 'opusscript';
+import { GainEnvelope } from '../core/hourly-audio.mjs';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
   createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus,
@@ -11,36 +12,46 @@ export class PcmMixer extends Readable {
   constructor() {
     super({ highWaterMark: 3840 }); this.media = Buffer.alloc(0); this.speech = []; this.mediaPrimed = false;
     this.ducking = 0.35; this.mediaVolume = 0.7;
+    this.mediaGain = new GainEnvelope(); this.background = Buffer.alloc(0); this.backgroundPrimed = false; this.backgroundVolume = 0.18; this.backgroundGain = new GainEnvelope();
     this.watchdog = setInterval(() => {
-      if (this.speech.some(track => Date.now() - track.progressAt > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
+      if (this.speech.some(track => Date.now() >= (track.startAt || 0) && Date.now() - Math.max(track.progressAt, track.startAt || 0) > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
     }, 1000);
   }
   _read() { this.frame(); }
   addMedia(chunk) { if (!this.destroyed) this.media = Buffer.concat([this.media, chunk]).subarray(-192000); }
   clearMedia() { this.media = Buffer.alloc(0); this.mediaPrimed = false; }
-  addSpeech(buffer, volume, signal) {
+  addBackground(chunk) { if (!this.destroyed) this.background = Buffer.concat([this.background, chunk]).subarray(-192000); }
+  clearBackground() { this.background = Buffer.alloc(0); this.backgroundPrimed = false; }
+  addSpeech(buffer, volume, signal, startAt = 0) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
       if (this.destroyed || this.readableEnded) throw new Error('Discord音声ストリームが終了しました。次の読み上げで再接続します');
       if (!buffer.length) throw new Error('再生する音声が空です');
-      const track = { buffer, position: 0, volume, resolve, reject, progressAt: Date.now() };
+      const track = { buffer, position: 0, volume, resolve, reject, progressAt: Date.now(), startAt };
       track.abort = () => { this.speech = this.speech.filter(t => t !== track); reject(new DOMException('Cancelled', 'AbortError')); };
       track.signal = signal; signal?.addEventListener('abort', track.abort, { once: true }); this.speech.push(track);
     });
   }
-  takeFrame() {
+  takeFrame(now = Date.now()) {
     if (this.destroyed) throw new Error('音声ストリームが終了しました');
     if (!this.mediaPrimed && this.media.length >= 3840 * 4) this.mediaPrimed = true;
     if (this.mediaPrimed && this.media.length < 3840) this.mediaPrimed = false;
     const mediaReady = this.mediaPrimed;
-    const out = Buffer.alloc(3840); const duck = this.speech.length ? this.ducking : 1;
+    if (!this.backgroundPrimed && this.background.length >= 3840 * 4) this.backgroundPrimed = true;
+    if (this.backgroundPrimed && this.background.length < 3840) this.backgroundPrimed = false;
+    const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
+    for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
+    const out = Buffer.alloc(3840); const duck = tracks.length ? this.ducking : 1;
+    const mediaGain = this.mediaVolume * duck * this.mediaGain.value(now), backgroundGain = this.backgroundVolume * this.backgroundGain.value(now);
     for (let i = 0; i < 3840; i += 2) {
-      let sample = mediaReady ? this.media.readInt16LE(i) * this.mediaVolume * duck : 0;
-      for (const track of this.speech) if (track.position + i + 1 < track.buffer.length) sample += track.buffer.readInt16LE(track.position + i) * track.volume;
+      let sample = mediaReady ? this.media.readInt16LE(i) * mediaGain : 0;
+      if (this.backgroundPrimed) sample += this.background.readInt16LE(i) * backgroundGain;
+      for (const track of tracks) if (track.position + i + 1 < track.buffer.length) sample += track.buffer.readInt16LE(track.position + i) * track.volume;
       out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample))), i);
     }
     if (mediaReady) this.media = this.media.subarray(3840);
-    for (const track of [...this.speech]) {
+    if (this.backgroundPrimed) this.background = this.background.subarray(3840);
+    for (const track of tracks) {
       track.position += 3840; track.progressAt = Date.now();
       if (track.position >= track.buffer.length) {
         this.speech = this.speech.filter(t => t !== track); track.signal?.removeEventListener('abort', track.abort); track.resolve();
@@ -144,6 +155,7 @@ export class VoiceOutput {
     finally { controllers.delete(controller); if (!controllers.size) this.speechControllers.delete(guildId); }
   }
   interruptSpeech(guildId) { for (const controller of this.speechControllers.get(guildId) || []) controller.abort(); }
+  async pcm(guildId, pcm, volume, signal, startAt = 0) { const entry = await this.connect(guildId); signal?.throwIfAborted(); await entry.mixer.addSpeech(pcm, volume, signal, startAt); }
   holdSpeech(guildId, value) {
     if (value) { const hold = this.heldSpeech.get(guildId) || { count: 0, waiters: new Set() }; hold.count++; this.heldSpeech.set(guildId, hold); }
     else { const hold = this.heldSpeech.get(guildId); if (hold && --hold.count === 0) { this.heldSpeech.delete(guildId); for (const resume of hold.waiters) resume(); } }
@@ -151,6 +163,11 @@ export class VoiceOutput {
   async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; return entry; }
   media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; entry.mixer.addMedia(chunk); }
   endMedia(guildId) { this.connections.get(guildId)?.mixer.clearMedia(); }
+  fadeMedia(guildId, gain, ms) { this.connections.get(guildId)?.mixer.mediaGain.fade(gain, ms); }
+  async beginBackground(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.backgroundVolume = c.hourly.output === 'both' ? 1 : c.hourly.bgmVolume; entry.mixer.backgroundGain.fade(1); entry.mixer.clearBackground(); }
+  background(guildId, bytes) { this.connections.get(guildId)?.mixer.addBackground(bytes); }
+  fadeBackground(guildId, gain, ms) { this.connections.get(guildId)?.mixer.backgroundGain.fade(gain, ms); }
+  endBackground(guildId) { this.connections.get(guildId)?.mixer.clearBackground(); }
   disconnect(guildId) { const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); }
   close() { for (const id of [...this.connections.keys()]) this.disconnect(id); }
   snapshot() { return [...this.connections].map(([guildId, e]) => ({ guildId, channelId: e.channelId, status: e.connection.state.status })); }

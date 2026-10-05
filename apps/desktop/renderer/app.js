@@ -1,5 +1,6 @@
 import { decorateButton } from './icons.js';
 import { ServerSettings } from './server-settings.js';
+import { HourlySettings } from './hourly-settings.js';
 
 (() => {
   const api = window.nyan;
@@ -69,6 +70,12 @@ import { ServerSettings } from './server-settings.js';
     },
     error: error => toast(error.message, true),
   });
+  const hourlySettings = new HourlySettings($('hourly-servers'), {
+    update: (id, change) => { const pending = bindingUpdates.catch(() => {}).then(async () => { const c = draft(); let s = c.hourly.servers.find(s => s.guildId === id); if (!s) { s = { guildId: id, enabled: true, bgm: true, channelIds: [] }; c.hourly.servers.push(s); } change(s); await save(c); }); bindingUpdates = pending; return pending; },
+    remove: async id => { const c = draft(); c.hourly.servers = c.hourly.servers.filter(s => s.guildId !== id); await save(c); },
+    generate: async guildId => { await save(); const result = await invoke('hourly:generate', { guildId }); toast(`${result.text}（${(result.elapsedMs / 1000).toFixed(2)}秒）`); },
+    test: async guildId => { await save(); await invoke('hourly:test', { guildId }); }, error: error => toast(error.message, true),
+  });
   function render(next) {
     state = next;
     document.body.dataset.theme = state.config.desktop.theme; document.body.classList.toggle('vs-dark', state.config.desktop.theme === 'dark'); document.body.classList.toggle('vs', state.config.desktop.theme === 'light'); decorateButton($('theme-toggle'), state.config.desktop.theme === 'light' ? 'moon' : 'sun', state.config.desktop.theme === 'light' ? 'ダークモードに切り替え' : 'ライトモードに切り替え');
@@ -89,6 +96,14 @@ import { ServerSettings } from './server-settings.js';
     const services = $('media-account-service');
     if (!services.options.length) for (const service of state.mediaAccounts || []) { const option = node('option', service.name); option.value = service.id; services.append(option); }
     serverSettings.render(state);
+    hourlySettings.render(state);
+    if (state.hourly) {
+      const h = state.hourly; $('hourly-phase').textContent = h.phase; $('hourly-next').textContent = h.error || (h.nextAt ? `次の時報: ${new Date(h.nextAt).toLocaleString('ja-JP')}` : 'PCの時計に合わせて正時を待ちます。');
+      $('hourly-model-state').textContent = h.model.progress || (h.model.installed ? '実行環境は導入済み' : '未導入。PC内の既存SLMも利用できます。'); $('hourly-model-setup').disabled = h.model.busy; $('hourly-model-cancel').disabled = !h.model.busy;
+      $('hourly-history-state').textContent = `${h.history.messages}件 · ${h.history.progress || '未取得'}${h.history.errors.length ? ' · ' + h.history.errors.join(' / ') : ''}`; $('hourly-sync').disabled = h.history.syncing || state.bot.status !== 'online'; $('hourly-sync-cancel').disabled = !h.history.syncing; $('hourly-history-clear').disabled = h.history.syncing;
+      $('hourly-test').disabled = h.busy; $('hourly-cancel').disabled = !h.busy;
+      if (h.active) { if (!current.length) now.replaceChildren(); now.append(node('strong', h.active.text), node('small', `${h.phase} · 3点目: ${new Date(h.active.thirdAt).toLocaleTimeString('ja-JP')}`)); for (const s of h.active.servers) now.append(node('strong', s.text), node('small', `サーバー ${s.guildId} · ${s.phase}`)); }
+    }
     renderJobs(); renderCollections(); const logs = $('log-list'); logs.replaceChildren(); for (const entry of state.logs) logs.append(row(entry.text, `${new Date(entry.time).toLocaleTimeString('ja-JP')} · ${entry.level}`)); if (!state.logs.length) empty(logs, 'イベントはまだありません。');
     if (state.bouyomi) {
       const legacy = state.bouyomi; $('bouyomi-state').textContent = legacy.imported ? `${legacy.version} / ${legacy.running ? '起動中' : '停止中'} / 配信者向け機能 ${legacy.broadcasterMode ? 'ON' : 'OFF'}${legacy.error ? ' / ' + legacy.error : ''}` : '未取り込み';
@@ -144,6 +159,8 @@ import { ServerSettings } from './server-settings.js';
   $('forward-form').addEventListener('submit', task(async () => { const c = draft(), f = { fromGuildId: $('forward-from').value, toGuildId: $('forward-to').value, mode: $('forward-mode').value }; c.speech.forwarding = c.speech.forwarding.filter(x => x.fromGuildId !== f.fromGuildId || x.toGuildId !== f.toGuildId); c.speech.forwarding.push(f); await save(c); }));
   for (const [id, action] of Object.entries({ 'twitter-start': 'twitter:start', 'twitter-stop': 'twitter:stop', 'twitter-login': 'twitter:login', 'twitter-logout': 'twitter:logout', 'twitter-token-clear': 'twitter:app-token-clear' })) $(id).addEventListener('click', task(async () => { if (['twitter:start', 'twitter:login'].includes(action)) await save(); await invoke(action); render(await invoke('state')); }));
   $('twitter-token-form').addEventListener('submit', task(async () => { await invoke('twitter:app-token', $('twitter-app-token').value); $('twitter-app-token').value = ''; toast('X認証情報を暗号化して保存しました'); }));
+  for (const [id, action] of Object.entries({ 'hourly-test': 'hourly:test', 'hourly-cancel': 'hourly:cancel', 'hourly-model-setup': 'hourly:model-setup', 'hourly-model-cancel': 'hourly:model-cancel', 'hourly-sync': 'hourly:sync', 'hourly-sync-cancel': 'hourly:sync-cancel', 'hourly-history-clear': 'hourly:history-clear' })) $(id).addEventListener('click', task(async () => { if (['hourly:test', 'hourly:model-setup', 'hourly:sync'].includes(action)) await save(); await invoke(action); render(await invoke('state')); }));
+  $('hourly-server-form').addEventListener('submit', task(async () => { const id = $('hourly-server-id').value; await hourlySettings.actions.update(id, s => { s.enabled = true; s.channelIds = $('hourly-channel-ids').value.split(/[,\n、]/).map(s => s.trim()).filter(Boolean); }); $('hourly-server-form').reset(); }));
   document.querySelectorAll('button[data-icon]').forEach(e => decorateButton(e, e.dataset.icon));
   document.querySelector('nav .active').setAttribute('aria-current', 'page');
   api.subscribe(render);

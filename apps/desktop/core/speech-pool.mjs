@@ -2,10 +2,10 @@ import { JobRunner } from './queue.mjs';
 
 export const speechScope = payload => payload.master ? 'master' : payload.guildId || 'local';
 export class SpeechPool {
-  constructor(store, execute) { this.store = store; this.execute = execute; this.lanes = new Map(); this.paused = false; this.pausedScopes = new Set(); this.halted = false; }
+  constructor(store, execute) { this.store = store; this.execute = execute; this.lanes = new Map(); this.paused = false; this.pausedScopes = new Set(); this.halted = false; this.reservations = new Map(); }
   lane(scope) {
     if (!this.lanes.has(scope)) {
-      const runner = new JobRunner(this.store, 'speech', this.execute, j => speechScope(j.payload) === scope);
+      const runner = new JobRunner(this.store, 'speech', this.execute, j => speechScope(j.payload) === scope && ![...this.reservations.values()].some(scopes => !scopes || scopes.has(scope)));
       runner.paused = this.paused || this.pausedScopes.has(scope); runner.halted = this.halted; this.lanes.set(scope, runner);
     }
     return this.lanes.get(scope);
@@ -43,6 +43,11 @@ export class SpeechPool {
     if (value) { for (const job of this.store.jobs) if (job.kind === 'speech' && job.status === 'waiting' && job.payload.priority > 0) job.status = 'cancelled'; this.store.saveState(); }
   }
   skip(scope) { if (scope) this.lanes.get(scope)?.skip(); else for (const lane of this.lanes.values()) lane.skip(); }
+  reserve(scopes = null) {
+    const token = Symbol('hourly'); const selected = scopes ? new Set(scopes) : null; this.reservations.set(token, selected);
+    for (const [scope, lane] of this.lanes) if (!selected || selected.has(scope)) lane.skip();
+    let released = false; return () => { if (released) return; released = true; this.reservations.delete(token); this.drain(); };
+  }
   clear(scope) { for (const job of this.store.jobs) if (job.kind === 'speech' && job.status === 'waiting' && (!scope || speechScope(job.payload) === scope)) job.status = 'cancelled'; this.skip(scope); this.store.saveState(); }
   forJob(job) { return this.lane(speechScope(job.payload)); }
   retry(id) { const job = this.store.jobs.find(j => j.id === id && j.kind === 'speech'); if (!job) throw new Error('項目が見つかりません'); return this.forJob(job).retry(id); }

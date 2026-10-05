@@ -8,3 +8,5 @@ Lucide 0.468.0 の `lucide-static` npmパッケージから、使用するSVGだ
 - 参照ファイル: `src/main.tsx` / `src/style.css`（2026-10-05確認）
 
 CSV nyaan Viewerと同じLucideの月・太陽、16pxの線画、コンパクトなアイコン操作とアイコン＋操作名を参考にしています。ボタンのCSSは本アプリ用に実装し、配色には同梱のVS Code Modernテーマを使用します。
+
+時報の`clock`は同じ固定タグの[公式SVG](https://github.com/lucide-icons/lucide/blob/0.468.0/icons/clock.svg)から取り込みました。

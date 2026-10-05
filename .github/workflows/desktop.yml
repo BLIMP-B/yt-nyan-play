@@ -82,6 +82,24 @@ jobs:
         with:
           name: android-verification-windows
           path: dist/android-verification
+  hourly-model:
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify managed local SLM and real Japanese generation
+        run: npm run verify:hourly-model
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hourly-model-verification-windows
+          path: dist/hourly-model-verification
   live-media:
     needs: tests
     runs-on: windows-latest

@@ -4,6 +4,8 @@ export const DEFAULT_CONFIG = {
   schemaVersion: 1,
   desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light' },
   android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720 },
+  hourly: { enabled: false, output: 'discord', volume: 0.8, mediaGain: 0.15, fadeMs: 1000, bgmVolume: 0.18,
+    slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60, servers: [] },
   twitter: { accounts: [], clientId: '', callbackPort: 11488, pollSeconds: 60, readRetweets: true, readReplies: true, readExisting: false, guildId: '' },
   bot: {
     autoConnect: false, prefix: '!nyan', includeBots: false, includeWebhooks: true,
@@ -56,7 +58,7 @@ const strings = (value, label, ids = false) => {
 export function normalizeConfig(patch) {
   const c = mergeKnown(DEFAULT_CONFIG, patch);
   c.schemaVersion = 1;
-  for (const group of ['desktop', 'bot', 'speech', 'media', 'android', 'twitter']) {
+  for (const group of ['desktop', 'bot', 'speech', 'media', 'android', 'twitter', 'hourly']) {
     for (const [key, value] of Object.entries(DEFAULT_CONFIG[group])) {
       if (typeof value === 'boolean' && typeof c[group][key] !== 'boolean') fail(`${group}.${key}`);
       if (typeof value === 'string' && (typeof c[group][key] !== 'string' || c[group][key].length > 2000)) fail(`${group}.${key}`);
@@ -67,6 +69,19 @@ export function normalizeConfig(patch) {
   number(c.android.port, 5554, 5682, 'Emulatorポート', true); if (c.android.port % 2) fail('Emulatorポートは偶数');
   number(c.android.ramMb, 1024, 8192, 'Androidメモリ', true); if (!['auto', 'software'].includes(c.android.gpu)) fail('Android描画');
   number(c.android.bootTimeoutSeconds, 300, 1800, 'Android起動待ち上限', true);
+  for (const key of ['volume', 'mediaGain', 'bgmVolume']) number(c.hourly[key], 0, 1, '時報音量');
+  number(c.hourly.fadeMs, 100, 5000, '時報フェード時間', true); number(c.hourly.generationTimeoutSeconds, 5, 300, 'SLM生成上限', true);
+  if (!['local', 'discord', 'both'].includes(c.hourly.output) || !['auto', 'live', 'daily'].includes(c.hourly.generationMode)) fail('時報出力・生成方法');
+  const slm = new URL(c.hourly.slmUrl);
+  if (slm.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(slm.hostname) || slm.username || slm.password || slm.search || slm.hash || slm.pathname !== '/') fail('PC内のSLM URL');
+  if (!/^[a-zA-Z0-9_./:-]{1,150}$/.test(c.hourly.slmModel)) fail('SLMモデル名');
+  if (!Array.isArray(c.hourly.servers) || c.hourly.servers.length > 100) fail('時報サーバー');
+  c.hourly.servers = c.hourly.servers.map(s => {
+    if (!/^\d{5,22}$/.test(s.guildId) || typeof s.enabled !== 'boolean' || typeof s.bgm !== 'boolean') fail('時報サーバー設定');
+    strings(s.channelIds, '時報の資料チャンネル', true);
+    return { guildId: s.guildId, enabled: s.enabled, bgm: s.bgm, channelIds: [...new Set(s.channelIds)] };
+  });
+  if (new Set(c.hourly.servers.map(s => s.guildId)).size !== c.hourly.servers.length) fail('時報サーバーの重複');
   strings(c.twitter.accounts, 'X対象アカウント'); c.twitter.accounts = [...new Set(c.twitter.accounts.map(a => a.replace(/^@/, '').toLowerCase()))];
   if (c.twitter.accounts.some(a => !/^[a-zA-Z0-9_]{1,15}$/.test(a))) fail('Xアカウント名');
   number(c.twitter.callbackPort, 1024, 65535, 'Xログイン待受けポート', true); number(c.twitter.pollSeconds, 30, 3600, 'X取得間隔', true);

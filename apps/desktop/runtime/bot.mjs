@@ -21,8 +21,13 @@ export class DiscordBot {
       this.status = 'online'; this.startedAt = new Date().toISOString(); this.store.log('info', 'Discord Botに接続しました');
       this.presenceKey = null; this.updateMediaActivity(this.mediaActivity);
       if (this.store.config.bot.autoJoin) for (const b of this.store.config.bot.bindings) await this.handlers.join(b.guildId);
+      await this.handlers.ready?.();
     }));
     client.on(Events.MessageCreate, safe(message => this.message(message)));
+    client.on(Events.MessageCreate, safe(message => this.handlers.history?.(message)));
+    client.on(Events.MessageUpdate, safe(async (_, message) => { if (message.partial) message = await message.fetch(); await this.handlers.history?.(message); }));
+    client.on(Events.MessageDelete, safe(message => this.handlers.historyDelete?.(message.id)));
+    client.on(Events.MessageBulkDelete, safe(messages => { for (const id of messages.keys()) this.handlers.historyDelete?.(id); }));
     client.on(Events.VoiceStateUpdate, safe((previous, next) => this.voiceState(previous, next)));
     for (const event of [Events.GuildCreate, Events.GuildDelete, Events.GuildUpdate, Events.ChannelCreate, Events.ChannelDelete, Events.ChannelUpdate, Events.ThreadCreate, Events.ThreadDelete, Events.ThreadUpdate, Events.GuildRoleUpdate, Events.GuildRoleDelete, Events.GuildMemberUpdate]) client.on(event, () => this.store.emit('change'));
     client.on(Events.ShardReconnecting, () => { this.status = 'reconnecting'; this.store.emit('change'); });
@@ -135,7 +140,7 @@ export class DiscordBot {
         return { id: ch.id, name: ch.name, voice: ch.isVoiceBased(), text: ch.isTextBased(),
           parentId: ch.parentId || '', parentName: ch.parent?.name || '', position: ch.rawPosition ?? ch.position ?? 0,
           parentPosition: ch.parent?.rawPosition ?? ch.parent?.position ?? 0,
-          canRead: visible && ch.isTextBased(), canConnect: visible && ch.isVoiceBased() && Boolean(permission?.has(PermissionFlagsBits.Connect | PermissionFlagsBits.Speak)) };
+          canRead: visible && ch.isTextBased(), canHistory: visible && ch.isTextBased() && Boolean(permission?.has(PermissionFlagsBits.ReadMessageHistory)), canConnect: visible && ch.isVoiceBased() && Boolean(permission?.has(PermissionFlagsBits.Connect | PermissionFlagsBits.Speak)) };
       }).sort((a, b) => a.parentPosition - b.parentPosition || a.position - b.position || a.name.localeCompare(b.name, 'ja')) }));
   }
   updateMediaActivity(items) {

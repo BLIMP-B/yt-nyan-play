@@ -102,7 +102,8 @@ export class AndroidRuntime extends EventEmitter {
       for (let attempt = 0; attempt < 2; attempt++) {
         controller.signal.throwIfAborted(); this.status = 'booting';
         this.change(attempt ? 'Androidをソフトウェア描画・コールドブートで復旧しています' : 'Androidを起動しています');
-        const entry = { recovery: Boolean(attempt), args: emulatorArguments({ ...c, avd: avdName(c) }, { recovery: Boolean(attempt), cores: availableParallelism() }), log: '', state: null };
+        const audioUnavailable = attempt && /Could not init ['"]dsound|failed to initialize.*audio/i.test(this.bootAttempts[0]?.log || '');
+        const entry = { recovery: Boolean(attempt), audioUnavailable: Boolean(audioUnavailable), args: emulatorArguments({ ...c, audioEnabled: c.audioEnabled && !audioUnavailable, avd: avdName(c) }, { recovery: Boolean(attempt), cores: availableParallelism() }), log: '', state: null };
         this.bootAttempts.push(entry); this.emulatorLog = '';
         const exited = new AbortController();
         const signal = AbortSignal.any([controller.signal, exited.signal]);

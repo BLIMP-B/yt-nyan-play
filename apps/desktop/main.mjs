@@ -10,7 +10,12 @@ import { Voicevox } from './core/voicevox.mjs';
 import { parseMediaCommand, mediaAnnouncement } from './core/protocol.mjs';
 import { DiscordBot } from './runtime/bot.mjs';
 import { APP_ICON, APP_ID } from './runtime/app-icon.mjs';
-import { VoiceOutput } from './runtime/voice-output.mjs';
+import { VoiceOutput, decodeAudio } from './runtime/voice-output.mjs';
+import { HourlyRuntime } from './runtime/hourly.mjs';
+import { HourlyHistory } from './runtime/hourly-history.mjs';
+import { HourlyModel } from './runtime/hourly-model.mjs';
+import { searchHourlyBgm } from './runtime/hourly-bgm.mjs';
+import { pcmWav } from './core/hourly-audio.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
 import { MediaAccounts } from './runtime/media-accounts.mjs';
 import { ChatEducation } from './runtime/chat-education.mjs';
@@ -39,7 +44,8 @@ if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor;
+  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor, hourly, hourlyHistory, hourlyModel;
+  let historyController, historyTimer;
   let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const audioBridge = new AudioBridge(() => window); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
   const emitState = () => {
@@ -50,7 +56,8 @@ else {
   const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
     voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })),
-    paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot() });
+    paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot(),
+    hourly: hourly ? { ...hourly.snapshot(), history: hourlyHistory.snapshot(), model: hourlyModel.snapshot() } : null });
   const audioCommand = (...args) => audioBridge.command(...args);
   const control = (name, guildId) => {
     if (name === 'pause' || name === 'resume') { const paused = name === 'pause'; if (guildId) speechRunner.pauseGuild(guildId, paused); else speechRunner.pause(paused); media.pause(paused, guildId); }
@@ -70,15 +77,27 @@ else {
     if (getConfig().speech.engineExecutable && !engine.child) engine.start(getConfig().speech.engineExecutable, getConfig().speech.engineUrl);
     await bot.start(vault.read());
     speechRunner.halt(false); speechRunner.pause(false); media.pause(false); media.drain();
+    syncHourlyHistory();
   }
-  function stopBot() { speechRunner?.pause(true); speechRunner?.halt(true); media?.pause(true); media?.skip(); bot?.stop(); }
+  function syncHourlyHistory() {
+    if (!getConfig().hourly.servers.some(s => s.enabled) || !bot.client?.isReady()) return;
+    historyController ||= new AbortController();
+    if (hourlyHistory.syncing) { const signal = historyController.signal; void hourlyHistory.syncing.catch(() => {}).finally(() => { if (!signal.aborted) syncHourlyHistory(); }); return; }
+    void hourlyHistory.sync(historyController.signal).catch(error => { if (error.name !== 'AbortError') store.log('warn', `時報履歴: ${error.message}`); });
+  }
+  function stopBot() { hourly?.cancel(); historyController?.abort(); historyController = null; speechRunner?.pause(true); speechRunner?.halt(true); media?.pause(true); media?.skip(); bot?.stop(); }
   async function action(name, data) {
     if (name === 'state') return snapshot();
     if (name === 'config:save') {
       const c = normalizeConfig(data);
       if ((android.child || android.busy) && JSON.stringify(c.android) !== JSON.stringify(store.config.android)) throw new Error('Androidの停止後に仮想環境の設定を変更してください');
+      if (hourlyModel.busy && JSON.stringify(c.hourly) !== JSON.stringify(store.config.hourly)) throw new Error('SLMの導入が終わるか中止してから時報設定を変更してください');
+      const hourlyChanged = JSON.stringify(c.hourly) !== JSON.stringify(store.config.hourly);
+      if (hourlyChanged) { hourly.cancel(); historyController?.abort(); historyController = null; }
+      if (c.hourly.slmUrl !== store.config.hourly.slmUrl) await hourlyModel.stop();
       for (const d of c.dictionary) if (d.regex) new RE2(d.source, d.caseSensitive ? 'gu' : 'giu');
       store.updateConfig(c); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
+      if (hourlyChanged) { hourly.update(); syncHourlyHistory(); }
       return snapshot();
     }
     if (name === 'token:save') { vault.save(data); return { saved: true }; }
@@ -114,6 +133,17 @@ else {
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
     if (name === 'media:show') { media.show(); return null; }
     if (name === 'media:login') { await accounts.open(data); return null; }
+    if (name === 'hourly:test') { await hourly.test(String(data?.guildId || '')); return snapshot(); }
+    if (name === 'hourly:cancel') { hourly.cancel(); return snapshot(); }
+    if (name === 'hourly:sync') { historyController ||= new AbortController(); await hourlyHistory.sync(historyController.signal); return snapshot(); }
+    if (name === 'hourly:sync-cancel') { historyController?.abort(); historyController = null; return snapshot(); }
+    if (name === 'hourly:history-clear') { hourlyHistory.clear(); return snapshot(); }
+    if (name === 'hourly:model-setup') { await hourlyModel.setup(); return snapshot(); }
+    if (name === 'hourly:model-cancel') { hourlyModel.cancel(); return snapshot(); }
+    if (name === 'hourly:generate') {
+      const server = getConfig().hourly.servers.find(s => s.guildId === data?.guildId && s.enabled); if (!server) throw new Error('生成文を有効にしたサーバーを選択してください');
+      return hourly.generate(server, Date.now(), AbortSignal.timeout(getConfig().hourly.generationTimeoutSeconds * 1000 + 30000));
+    }
     if (name === 'job:action') {
       const job = store.jobs.find(j => j.id === data?.id); if (!job) throw new Error('項目が見つかりません');
       const runner = job.kind === 'speech' ? speechRunner : media.forJob(job);
@@ -177,11 +207,14 @@ else {
       media: payload => media.enqueue(payload), stopRequested,
       join: guildId => voice.connect(guildId), leave: guildId => voice.disconnect(guildId), disconnect: () => voice.close(), control,
       speakers: () => new Voicevox(getConfig().speech.engineUrl).speakers(),
+      ready: () => syncHourlyHistory(),
+      history: message => hourlyHistory?.record(message), historyDelete: id => hourlyHistory?.deleted(id),
     });
     voice = new VoiceOutput(() => bot.client, getConfig, (l, t) => store.log(l, t));
-    media = new MediaPool(store, scope => {
+    const createBrowser = (scope, bed = false) => {
       let browser;
-      browser = new MediaBrowser(getConfig, {
+      const browserConfig = bed ? () => ({ ...getConfig(), media: { ...getConfig().media, output: getConfig().hourly.output, volume: getConfig().hourly.bgmVolume, showWindow: false } }) : getConfig;
+      browser = new MediaBrowser(browserConfig, {
         changed: emitState,
         captureError: id => {
           const capture = captures.get(id); if (!capture) return;
@@ -193,17 +226,19 @@ else {
           const master = scope === 'master';
           captureChain = captureChain.catch(() => {}).then(async () => {
             signal.throwIfAborted();
-            if (master) { for (const key of [...voice.connections.keys()]) { voice.endMedia(key); await voice.beginMedia(key); } } else await voice.beginMedia(guildId);
+            if (bed) await voice.beginBackground(guildId);
+            else if (master) { for (const key of [...voice.connections.keys()]) { voice.endMedia(key); await voice.beginMedia(key); } } else await voice.beginMedia(guildId);
             signal.throwIfAborted();
-            captures.set(id, { guildId, master, window: browser.window }); captureRequest = id;
+            captures.set(id, { guildId, master, bed, output: browserConfig().media.output, window: browser.window }); captureRequest = id;
             try { await audioCommand('capture:start', { id }, signal, 20000); }
-            catch (e) { captures.delete(id); window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (master) for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); throw e; }
+            catch (e) { captures.delete(id); window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (bed) voice.endBackground(guildId); else if (master) for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); throw e; }
             finally { captureRequest = null; }
           }); return captureChain;
         },
-        stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
+        stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (bed) voice.endBackground(guildId); else if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
       }, (l, t) => store.log(l, t), accounts); return browser;
-    }, async (job, signal) => {
+    };
+    media = new MediaPool(store, scope => createBrowser(scope), async (job, signal) => {
       if (job.payload.mode === 'direct') return;
       await speechRunner.speak({ text: mediaAnnouncement(job.payload.url), guildId: job.payload.guildId, master: job.payload.master, system: true, priority: 50, output: getConfig().media.output }, { signal });
     });
@@ -247,6 +282,33 @@ else {
         }, pipelineSignal); } catch (error) { pipelineController.abort(); throw error; }
       } else await output(job.payload.system ? job.payload.text : [...job.payload.text].slice(0, settings.maxChars).join(''), settings, signal, job.payload.clipPath);
     });
+    hourlyHistory = new HourlyHistory(store.directory, () => bot.client, getConfig, emitState);
+    hourlyModel = new HourlyModel(store.directory, getConfig, (url, options) => net.fetch(url, options)); hourlyModel.on('change', emitState);
+    hourly = new HourlyRuntime(store.directory, getConfig, {
+      history: hourlyHistory, model: hourlyModel, fetcher: (url, options) => net.fetch(url, options),
+      log: (level, text) => store.log(level, text), targets: () => [...voice.connections.keys()], reserve: scopes => speechRunner.reserve(scopes),
+      hold: (id, value) => { voice.holdSpeech(id, value); if (value) voice.interruptSpeech(id); },
+      synthesize: async (text, signal) => decodeAudio(await new Voicevox(getConfig().speech.engineUrl).synthesize(text, getConfig().speech, signal), signal),
+      fadeMedia: (gain, ms, scope) => { media.fadeOverlay(gain, ms, scope); for (const id of voice.connections.keys()) voice.fadeMedia(id, Math.min(media.overlayGains.get('*') ?? 1, media.overlayGains.get(id) ?? 1), ms); },
+      play: async (pcm, targets, signal, startAt = 0) => {
+        const c = getConfig(); const outputs = []; const controller = new AbortController(), outputSignal = AbortSignal.any([signal, controller.signal]);
+        if (c.hourly.output !== 'discord') outputs.push(audioCommand('play:timed', { bytes: pcmWav(pcm), volume: c.hourly.volume, device: c.speech.outputDevice, startAt: startAt || Date.now() }, outputSignal));
+        if (c.hourly.output !== 'local') for (const id of targets) outputs.push(voice.pcm(id, pcm, c.hourly.volume, outputSignal, startAt));
+        try { await Promise.all(outputs); } catch (error) { controller.abort(); await Promise.allSettled(outputs); throw error; }
+      },
+      background: async (nouns, guildId, signal) => {
+        const found = await searchHourlyBgm(nouns, getConfig, signal); const browser = createBrowser(guildId, true), controller = new AbortController();
+        const bgmSignal = AbortSignal.any([signal, controller.signal]); let error, done = false;
+        const task = browser.play({ id: crypto.randomUUID(), payload: { ...found, mode: 'direct', guildId, background: true } }, bgmSignal).catch(e => { if (!bgmSignal.aborted) error = e; }).finally(() => { done = true; });
+        const stop = async () => { controller.abort(); await task; browser.close(); };
+        try {
+          const until = Date.now() + 15000;
+          while (Date.now() < until) { signal.throwIfAborted(); if (error) throw error; if (browser.status?.loginRequired) throw new Error(browser.status.blockedReason || 'YouTubeへのログインが必要です'); if (browser.status?.startedAt && browser.status.currentTime > 0) break; if (done) throw new Error('BGMが開始前に終了しました'); await new Promise(resolve => setTimeout(resolve, 100)); }
+          if (!browser.status?.startedAt) throw new Error('BGMの再生開始を確認できません');
+          return { stop, fade: async (ms, fadeSignal) => { browser.setOverlayGain(0, ms); voice.fadeBackground(guildId, 0, ms); await new Promise((resolve, reject) => { const timer = setTimeout(finished, ms); const abort = () => { clearTimeout(timer); fadeSignal?.removeEventListener('abort', abort); reject(fadeSignal.reason); }; function finished() { fadeSignal?.removeEventListener('abort', abort); resolve(); } fadeSignal?.addEventListener('abort', abort, { once: true }); }); } };
+        } catch (e) { await stop(); throw e; }
+      },
+    }); hourly.on('change', emitState);
     twitterAppVault = new Vault(store.directory, 'twitter-app-token.bin');
     twitter = new TwitterSource(store.directory, getConfig, new Vault(store.directory, 'twitter-login.bin'), twitterAppVault, {
       speech: payload => { if (!store.seen.includes(`twitter:${payload.twitterId}`)) { store.enqueue('speech', payload); store.remember(`twitter:${payload.twitterId}`); void speechRunner.drain(); } },
@@ -263,7 +325,7 @@ else {
       const capture = captures.get(captureRequest);
       if (request.frame !== window.webContents.mainFrame || !capture || !capture.window || capture.window.isDestroyed()) return callback({});
       const frame = capture.window.webContents.mainFrame;
-      callback({ video: frame, audio: frame, enableLocalEcho: getConfig().media.output === 'both' });
+      callback({ video: frame, audio: frame, enableLocalEcho: capture.output === 'both' });
     });
     ipcMain.handle('nyan:action', async (event, name, data) => { if (!trusted(event)) throw new Error('操作元を確認できません'); try { return { ok: true, value: await action(name, data) }; } catch (e) { store.log('error', e.message); return { ok: false, error: e.message }; } });
     ipcMain.on('nyan:audio-result', (event, data) => {
@@ -271,20 +333,21 @@ else {
       if (data?.type === 'capture:error' && captures.has(data.id)) captures.get(data.id).error = String(data.error || 'メディア音声の転送が停止しました').slice(0, 300);
       else audioBridge.result(data);
     });
-    ipcMain.on('nyan:pcm', (event, id, bytes) => { const capture = captures.get(id); if (!trusted(event) || !capture || !(bytes instanceof Uint8Array) || bytes.length > 32768 || bytes.length % 4) return; if (capture.master) { for (const key of [...voice.connections.keys()]) voice.media(key, Buffer.from(bytes)); } else if (!media.masterActive) voice.media(capture.guildId, Buffer.from(bytes)); });
+    ipcMain.on('nyan:pcm', (event, id, bytes) => { const capture = captures.get(id); if (!trusted(event) || !capture || !(bytes instanceof Uint8Array) || bytes.length > 32768 || bytes.length % 4) return; if (capture.bed) voice.background(capture.guildId, Buffer.from(bytes)); else if (capture.master) { for (const key of [...voice.connections.keys()]) voice.media(key, Buffer.from(bytes)); } else if (!media.masterActive) voice.media(capture.guildId, Buffer.from(bytes)); });
     window.on('close', event => { if (!quitting && store.config.desktop.closeToTray) { event.preventDefault(); window.hide(); } });
     window.on('closed', () => { if (!quitting) app.quit(); });
     window.webContents.on('render-process-gone', () => audioBridge.close());
     store.on('change', emitState);
     store.on('change', () => { const entry = store.logs[0]; if (entry?.level === 'error' && entry !== notifiedEntry && getConfig().desktop.notifications && Date.now() - notificationAt > 15000 && Notification.isSupported()) { notificationAt = Date.now(); notifiedEntry = entry; new Notification({ title: 'にゃんとーく〜Damare〜', body: entry.text }).show(); } });
     await window.loadFile(join(directory, 'renderer/index.html'));
+    if (!smoke) { hourly.start(); historyTimer = setInterval(syncHourlyHistory, 5 * 60000); historyTimer.unref(); }
     if (!smoke) await twitter.restore();
     tray = new Tray(APP_ICON); tray.setToolTip('にゃんとーく〜Damare〜');
     tray.setContextMenu(Menu.buildFromTemplate([{ label: 'にゃんとーく〜Damare〜を開く', click: () => window.show() }, { label: 'Botを開始', click: () => startBot().catch(e => store.log('error', e.message)) }, { label: 'Botを停止', click: stopBot }, { type: 'separator' }, { label: '終了', click: () => app.quit() }]));
     tray.on('double-click', () => window.show());
     if (!getConfig().desktop.startMinimized && !process.argv.includes('--minimized')) window.show();
     if (getConfig().bot.autoConnect && vault.hasToken() && !smoke) await startBot().catch(e => store.log('error', e.message));
-    powerMonitor.on('resume', () => { store.log('info', 'Windowsの復帰を検出しました'); if (getConfig().bot.autoConnect && bot.status === 'offline') void startBot().catch(e => store.log('error', e.message)); });
+    powerMonitor.on('resume', () => { hourly.cancel(); hourly.update(); store.log('info', 'Windowsの復帰を検出しました'); if (getConfig().bot.autoConnect && bot.status === 'offline') void startBot().catch(e => store.log('error', e.message)); });
     if (smoke) {
       await new Promise(resolve => setTimeout(resolve, 500));
       const verified = await window.webContents.executeJavaScript(`(async () => {
@@ -376,6 +439,6 @@ else {
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });
-  app.on('before-quit', () => { quitting = true; if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
+  app.on('before-quit', () => { quitting = true; hourly?.close(); clearInterval(historyTimer); hourlyModel?.close(); if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
   app.on('window-all-closed', () => { if (quitting) app.quit(); });
 }

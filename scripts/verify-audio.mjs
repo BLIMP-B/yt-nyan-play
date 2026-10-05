@@ -80,6 +80,12 @@ try {
       const label = probe.active, buffer = Buffer.from(bytes);
       const metrics = probe.metrics[label] ||= { frames: 0, nonSilentSamples: 0, peak: 0 };
       metrics.frames++;
+      if (label === 'hourly' && !metrics.thirdToneAt) {
+        let crossings = 0, previous = 0, peak = 0;
+        for (let i = 0; i + 3 < buffer.length; i += 4) { const sample = buffer.readInt16LE(i); peak = Math.max(peak, Math.abs(sample)); if (i && (sample >= 0) !== (previous >= 0)) crossings++; previous = sample; }
+        const frequency = crossings * 48000 / (2 * (buffer.length / 4));
+        if (peak > 500 && frequency >= 800 && frequency <= 950) metrics.thirdToneAt = Date.now();
+      }
       for (let i = 0; i + 1 < buffer.length; i += 2) { const v = Math.abs(buffer.readInt16LE(i)); metrics.peak = Math.max(metrics.peak, v); if (v > 100) metrics.nonSilentSamples++; }
       if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
     });
@@ -142,6 +148,27 @@ try {
   writeFileSync(join(reports, 'video-after-discord-encoder.wav'), Buffer.concat([header, bytes]));
   report.discordEncoder = { packets: decoded.length, peak, bytes: bytes.length };
   assert.ok(report.discordEncoder.peak > 100);
+  // Exercise the actual timed AudioContext playback and capture its long 880-Hz third beep.
+  const hourlyConfig = (await call(page, 'state')).config; hourlyConfig.hourly.output = 'local'; hourlyConfig.hourly.enabled = false;
+  await call(page, 'config:save', hourlyConfig);
+  await application.evaluate(async () => {
+    const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'hourly';
+    await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+  });
+  const clockTask = call(page, 'hourly:test', {}); clockTask.catch(() => {}); let targetAt;
+  const clockUntil = Date.now() + 20000;
+  while (Date.now() < clockUntil) {
+    const active = (await call(page, 'state')).hourly.active; if (active) { targetAt = active.thirdAt; break; }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  await clockTask;
+  const clockMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.hourly);
+  assert.ok(targetAt && clockMetrics?.thirdToneAt && clockMetrics.nonSilentSamples > 4800, 'The real timed chime did not produce the third tone');
+  report.hourly = { ...clockMetrics, targetAt, measuredCaptureDelayMs: clockMetrics.thirdToneAt - targetAt };
+  assert.ok(Math.abs(report.hourly.measuredCaptureDelayMs) < 750, 'The third tone was not aligned with the scheduled PC hour');
+  const clockPcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks.hourly.slice(-250))]));
+  report.hourly.discordEncoder = await encodedAudio(clockPcm); assert.ok(report.hourly.discordEncoder.nonSilentSamples > 4800);
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   if (monitor) {
     monitor.kill(); await once(monitor, 'close'); monitor = null;
     const output = Buffer.concat(monitorChunks); let outputPeak = 0;

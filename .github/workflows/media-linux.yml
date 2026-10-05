@@ -1,11 +1,5 @@
 name: Verify public YouTube audio in additional environments
 on:
-  push:
-    paths:
-      - .github/workflows/media-linux.yml
-      - apps/desktop/runtime/media-browser.mjs
-      - apps/desktop/core/media-script.mjs
-      - scripts/verify-audio.mjs
   workflow_dispatch:
 permissions:
   contents: read

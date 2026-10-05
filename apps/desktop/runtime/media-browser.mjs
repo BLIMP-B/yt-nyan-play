@@ -8,7 +8,7 @@ import { playbackSession, guardMediaWindow } from './media-session.mjs';
 import { mediaAuthHosts } from '../core/media-accounts.mjs';
 
 export class MediaBrowser {
-  constructor(getConfig, bridge, log, accounts) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.window = null; this.paused = false; this.ducked = false; this.status = null; }
+  constructor(getConfig, bridge, log, accounts) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.window = null; this.paused = false; this.ducked = false; this.status = null; this.overlayGain = 1; this.volumeRampMs = 0; }
   async play(job, signal) {
     signal.throwIfAborted(); const c = this.getConfig(); const payload = job.payload;
     const url = validateMediaUrl(payload.url, c.media.allowedHosts);
@@ -34,9 +34,9 @@ export class MediaBrowser {
       while (!signal.aborted && !window.isDestroyed()) {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
-        const volume = c.media.output === 'discord' ? 1 : this.getConfig().media.volume * (this.ducked ? this.getConfig().media.ducking : 1);
+        const volume = c.media.output === 'discord' ? 1 : this.getConfig().media.volume * (this.ducked ? this.getConfig().media.ducking : 1) * this.overlayGain;
         const mode = payload.mode || (payload.loop ? 'full' : 'preview');
-        const options = { startSeconds: payload.startSeconds, mode, volume, paused: this.paused };
+        const options = this.playOptions = { startSeconds: payload.startSeconds, mode, volume, paused: this.paused, volumeRampMs: c.media.output === 'discord' ? 0 : this.volumeRampMs };
         let state = await window.webContents.executeJavaScript(mediaScript(options), true);
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
@@ -46,7 +46,7 @@ export class MediaBrowser {
         this.status = { ...state, title, service: mediaServiceName(url), startedAt: playbackStartedAt, paused: this.paused }; this.bridge.changed();
         if (state.blockedReason && state.blockedReason !== reportedBlock) {
           reportedBlock = state.blockedReason; this.log('warn', `${mediaServiceName(url)}の再生条件: ${state.blockedReason}${state.loginRequired ? '。再生画面からログインしてください（Chromeとは別のCookie領域です）' : ''}`);
-          if (state.loginRequired && !window.isVisible()) window.show();
+          if (state.loginRequired && !payload.background && !window.isVisible()) window.show();
         }
         if (state.error) throw new Error(`メディアを再生できません: ${state.error}`);
         if (state.previewFinished || state.ended) return;
@@ -63,6 +63,12 @@ export class MediaBrowser {
   }
   setPaused(value) { this.paused = value; }
   setDucked(value) { this.ducked = value; }
+  setOverlayGain(value, ms = 0) {
+    this.overlayGain = value; this.volumeRampMs = ms;
+    const c = this.getConfig(); if (c.media.output === 'discord' || !this.playOptions || this.window?.isDestroyed()) return;
+    const volume = c.media.volume * (this.ducked ? c.media.ducking : 1) * value;
+    void this.window?.webContents.executeJavaScript(mediaScript({ ...this.playOptions, volume, volumeRampMs: ms }), true).catch(() => {});
+  }
   show() { if (!this.window?.isDestroyed()) this.window?.show(); }
   close() { if (this.window && !this.window.isDestroyed()) this.window.destroy(); this.window = null; }
 }

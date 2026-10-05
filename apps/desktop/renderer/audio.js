@@ -7,9 +7,25 @@
     await capture.context?.close();
   };
   const handleAudio = async message => {
-    if (message.type === 'cancel') { const audio = playing.get(message.id); audio?.pause(); audio?.dispatchEvent(new Event('ended')); return; }
+    if (message.type === 'cancel') { const audio = playing.get(message.id); if (audio?.cancel) audio.cancel(); else { audio?.pause(); audio?.dispatchEvent(new Event('ended')); } return; }
     if (message.type === 'capture:stop') { await stopCapture(message.id); return; }
     try {
+      if (message.type === 'play:timed') {
+        const context = new AudioContext({ sampleRate: 48000 }); const source = context.createBufferSource(), gain = context.createGain();
+        let finish;
+        playing.set(message.id, { cancel: () => { try { source.stop(); } catch {} finish?.(); } });
+        try {
+          if (message.device && context.setSinkId) await context.setSinkId(message.device);
+          source.buffer = await context.decodeAudioData(new Uint8Array(message.bytes).buffer); gain.gain.value = message.volume; source.connect(gain).connect(context.destination);
+          await context.resume();
+          await new Promise((resolve, reject) => {
+            finish = resolve; source.onended = resolve;
+            const remaining = (message.startAt - Date.now()) / 1000, offset = Math.max(0, -remaining);
+            if (offset >= source.buffer.duration) return reject(new Error('時報の予約時刻を過ぎています'));
+            source.start(context.currentTime + Math.max(0, remaining), offset);
+          });
+        } finally { playing.delete(message.id); try { source.stop(); } catch {} await context.close(); }
+      }
       if (message.type === 'play') {
         const bytes = new Uint8Array(message.bytes);
         const url = URL.createObjectURL(new Blob([bytes], { type: bytes[0] === 82 && bytes[1] === 73 ? 'audio/wav' : '' }));

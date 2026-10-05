@@ -1,6 +1,6 @@
-export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, paused = false }) {
+export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, paused = false, volumeRampMs = 0 }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, volume, paused })};
+    const options = ${JSON.stringify({ startSeconds, mode, volume, paused, volumeRampMs })};
     let playability;
     try { playability = document.querySelector('#movie_player')?.getPlayerResponse?.()?.playabilityStatus; } catch {}
     playability ||= window.ytInitialPlayerResponse?.playabilityStatus;
@@ -13,7 +13,17 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
     if (!chosen) return { found: false, blockedReason, loginRequired };
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
-    chosen.muted = false; chosen.volume = options.volume; chosen.loop = false; chosen.playbackRate = 1;
+    chosen.muted = false; chosen.loop = false; chosen.playbackRate = 1;
+    if (!options.volumeRampMs) { clearInterval(chosen.__nyanVolumeTimer); chosen.volume = options.volume; chosen.__nyanVolumeTarget = options.volume; }
+    else if (chosen.__nyanVolumeTarget !== options.volume) {
+      clearInterval(chosen.__nyanVolumeTimer); chosen.__nyanVolumeTarget = options.volume;
+      const from = chosen.volume, began = Date.now();
+      chosen.__nyanVolumeTimer = setInterval(() => {
+        const progress = Math.min(1, (Date.now() - began) / options.volumeRampMs);
+        chosen.volume = Math.max(0, Math.min(1, from + (options.volume - from) * progress));
+        if (progress === 1 || chosen.ended) clearInterval(chosen.__nyanVolumeTimer);
+      }, 20);
+    }
     if (!advertisement && !window.__nyanStarted && chosen.readyState >= 1) {
       try { chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
