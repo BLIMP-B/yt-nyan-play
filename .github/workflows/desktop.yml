@@ -96,8 +96,8 @@ jobs:
         continue-on-error: true
         run: npm run verify:audio
         env:
-          NYAN_LIVE_MEDIA_URLS: '["https://youtu.be/ro_v7LqdI58","https://www.nicovideo.jp/watch/sm9"]'
-          NYAN_REQUIRE_LIVE_AUDIO: '1'
+          NYAN_LIVE_MEDIA_URLS: '["https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1","https://www.nicovideo.jp/watch/sm9"]'
+          NYAN_REQUIRE_LIVE_SERVICES: 'youtube,niconico'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

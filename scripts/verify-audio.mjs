@@ -45,6 +45,23 @@ const waitForJob = async (page, id, timeout = 15000) => {
   }
   throw new Error(`Job ${id} did not complete within ${timeout}ms`);
 };
+async function encodedAudio(pcm) {
+  const mixer = new PcmMixer(); mixer.mediaVolume = 1;
+  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
+  const decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+  let packets = 0, peak = 0, nonSilentSamples = 0;
+  player._preparePacket = packet => {
+    packets++; const bytes = decoder.decode(packet);
+    for (let i = 0; i + 1 < bytes.length; i += 2) { const sample = Math.abs(bytes.readInt16LE(i)); peak = Math.max(peak, sample); if (sample > 1) nonSilentSamples++; }
+  };
+  try {
+    player.play(createDiscordAudioResource(mixer));
+    for (let position = 0; position < pcm.length; position += 3840) { mixer.addMedia(pcm.subarray(position, position + 3840)); await new Promise(resolve => setTimeout(resolve, 20)); }
+    await new Promise(resolve => setTimeout(resolve, 200));
+    return { packets, peak, nonSilentSamples };
+  } finally { player.stop(true); mixer.destroy(); decoder.delete(); }
+}
+const liveService = url => /(^|\.)(youtube\.com|youtu\.be)$/.test(new URL(url).hostname) ? 'youtube' : /(^|\.)nicovideo\.jp$/.test(new URL(url).hostname) ? 'niconico' : new URL(url).hostname;
 try {
   const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
   application = await _electron.launch({ executablePath: require('electron'), args: [root, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
@@ -135,8 +152,11 @@ try {
   report.passed = true;
   report.liveMedia = [];
   // Public sites can require login, consent or block hosted CI. Record failures explicitly.
+  const verifiedServices = new Set();
   for (const url of JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]')) {
-    const outcome = { url, verifiedAudio: false };
+    const service = liveService(url);
+    if (process.env.NYAN_REQUIRE_LIVE_SERVICES && verifiedServices.has(service)) continue;
+    const outcome = { url, service, verifiedAudio: false };
     let job;
     try {
       job = await call(page, 'media:add', { url, mode: 'direct' });
@@ -150,7 +170,7 @@ try {
         }
         throw new Error('Playback window did not open');
       }, url);
-      const until = Date.now() + 55000; let adSamples = 0;
+      const began = Date.now(), until = began + 55000; let adSamples = 0;
       while (Date.now() < until) {
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
         const adPlaying = await application.evaluate(async () => {
@@ -161,6 +181,7 @@ try {
         const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
         if (current.status === 'failed') throw new Error(current.error);
         const playback = state.media.find(m => m.scope === mediaScope(job.payload));
+        if (playback?.loginRequired && playback.ready === 0 && Date.now() - began > 5000) throw new Error(playback.blockedReason || 'Site requires login before playback');
         if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
         await new Promise(resolve => setTimeout(resolve, 500));
       }
@@ -176,8 +197,14 @@ try {
         }))()`, true);
         return { url: target.webContents.getURL(), title: target.webContents.getTitle(), diagnostics };
       });
+      if (outcome.verifiedAudio) {
+        const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat((globalThis.nyanAudioProbe.chunks[globalThis.nyanAudioProbe.active] || []).slice(-50))]));
+        outcome.discordEncoder = await encodedAudio(pcm);
+        assert.ok(outcome.discordEncoder.nonSilentSamples > 4800, 'Captured main-content audio did not pass through the Discord Opus encoder');
+        verifiedServices.add(service);
+      }
       if (!outcome.verifiedAudio) outcome.error = 'No audible media samples within 55 seconds; site playback remains unverified';
-    } catch (error) { outcome.error = error.message; }
+    } catch (error) { outcome.verifiedAudio = false; outcome.error = error.message; }
     finally {
       if (job) await call(page, 'job:action', { id: job.id, action: 'cancel' }).catch(() => {});
       await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
@@ -185,6 +212,8 @@ try {
     }
   }
   if (process.env.NYAN_REQUIRE_LIVE_AUDIO && report.liveMedia.some(m => !m.verifiedAudio)) process.exitCode = 1;
+  report.requiredLiveServices = (process.env.NYAN_REQUIRE_LIVE_SERVICES || '').split(',').filter(Boolean);
+  if (report.requiredLiveServices.some(service => !verifiedServices.has(service))) process.exitCode = 1;
 } catch (error) { report.passed = false; report.error = error.stack; process.exitCode = 1; }
 finally {
   writeFileSync(join(reports, 'audio-report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));

@@ -21,7 +21,10 @@ export class MediaBrowser {
     signal.addEventListener('abort', abort, { once: true });
     try {
       let loadingTimer;
-      try { await Promise.race([window.loadURL(url), new Promise((_, reject) => { loadingTimer = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); })]); }
+      const destination = new URL(url);
+      // Official embedded YouTube players require an HTTPS application identity as HTTP Referer.
+      const loadOptions = /(^|\.)youtube\.com$/.test(destination.hostname) && destination.pathname.startsWith('/embed/') ? { httpReferrer: 'https://github.com/BLIMP-B/yt-nyan-play' } : {};
+      try { await Promise.race([window.loadURL(url, loadOptions), new Promise((_, reject) => { loadingTimer = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); })]); }
       finally { clearTimeout(loadingTimer); }
       if (c.media.output !== 'local') {
         if (!payload.guildId && !payload.master) throw new Error('Discord送信にはサーバーと音声チャンネルを指定してください');

@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
   desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light' },
-  android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 2048, gpu: 'auto' },
+  android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720 },
   twitter: { accounts: [], clientId: '', callbackPort: 11488, pollSeconds: 60, readRetweets: true, readReplies: true, readExisting: false, guildId: '' },
   bot: {
     autoConnect: false, prefix: '!nyan', includeBots: false, includeWebhooks: true,
@@ -66,6 +66,7 @@ export function normalizeConfig(patch) {
   if (!/^system-images;android-\d{2,3};google_apis_playstore;x86_64$/.test(c.android.image) || !/^[a-zA-Z0-9_-]{1,40}$/.test(c.android.avdName)) fail('Android端末・イメージ');
   number(c.android.port, 5554, 5682, 'Emulatorポート', true); if (c.android.port % 2) fail('Emulatorポートは偶数');
   number(c.android.ramMb, 1024, 8192, 'Androidメモリ', true); if (!['auto', 'software'].includes(c.android.gpu)) fail('Android描画');
+  number(c.android.bootTimeoutSeconds, 300, 1800, 'Android起動待ち上限', true);
   strings(c.twitter.accounts, 'X対象アカウント'); c.twitter.accounts = [...new Set(c.twitter.accounts.map(a => a.replace(/^@/, '').toLowerCase()))];
   if (c.twitter.accounts.some(a => !/^[a-zA-Z0-9_]{1,15}$/.test(a))) fail('Xアカウント名');
   number(c.twitter.callbackPort, 1024, 65535, 'Xログイン待受けポート', true); number(c.twitter.pollSeconds, 30, 3600, 'X取得間隔', true);

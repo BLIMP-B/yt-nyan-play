@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { availableParallelism } from 'node:os';
+import { waitForAndroidBoot, emulatorArguments } from '../core/android-boot.mjs';
 import { parseRepository, playImages, windowsTools, verifyChecksum, extractZip, avdName, shellQuote, SDK_REPOSITORY, PLAY_REPOSITORY } from '../core/android-packages.mjs';
 
 export class AndroidRuntime extends EventEmitter {
@@ -10,7 +12,7 @@ export class AndroidRuntime extends EventEmitter {
     super(); this.directory = join(directory, 'android'); mkdirSync(this.directory, { recursive: true });
     this.getConfig = getConfig; this.log = log; this.fetcher = fetcher; this.child = null; this.status = 'stopped'; this.progress = ''; this.catalog = []; this.licenses = []; this.manifests = null; this.busy = false; this.frameTimer = null; this.frameBusy = false; this.installController = null;
   }
-  paths() { const c = this.getConfig().android; const sdk = c.sdkPath || join(this.directory, 'sdk'); const jre = join(this.directory, 'jre'); const java = c.javaPath || (existsSync(jre) ? readdirSync(jre).map(n => join(jre, n, 'bin/java.exe')).find(existsSync) : '') || ''; return { sdk, java, adb: join(sdk, 'platform-tools/adb.exe'), emulator: join(sdk, 'emulator/emulator.exe'), avds: join(this.directory, 'avd') }; }
+  paths() { const c = this.activeConfig || this.getConfig().android; const sdk = c.sdkPath || join(this.directory, 'sdk'); const jre = join(this.directory, 'jre'); const java = c.javaPath || (existsSync(jre) ? readdirSync(jre).map(n => join(jre, n, 'bin/java.exe')).find(existsSync) : '') || ''; return { sdk, java, adb: join(sdk, 'platform-tools/adb.exe'), emulator: join(sdk, 'emulator/emulator.exe'), avds: join(this.directory, 'avd') }; }
   snapshot() { const p = this.paths(); return { status: this.status, busy: this.busy, progress: this.progress, catalog: this.catalog, licenses: this.licenses, licenseImage: this.licenseImage, sdkPath: p.sdk, avd: avdName(this.getConfig().android), ready: existsSync(p.emulator) && existsSync(p.adb) && existsSync(join(p.avds, `${avdName(this.getConfig().android)}.ini`)) }; }
   change(text) { if (text) this.progress = text; this.emit('change'); }
   async refresh() {
@@ -89,26 +91,50 @@ export class AndroidRuntime extends EventEmitter {
       }); child.stdin.end(input);
     });
   }
-  adb(args, options) { return this.run(this.paths().adb, ['-s', `emulator-${this.getConfig().android.port}`, ...args], options); }
+  adb(args, options) { return this.run(this.paths().adb, ['-s', `emulator-${(this.activeConfig || this.getConfig().android).port}`, ...args], options); }
   async start() {
     if (process.platform !== 'win32') throw new Error('Android仮想環境はWindows x64で実行してください');
-    if (this.child || this.busy) throw new Error('Androidは起動中またはセットアップ中です'); if (!this.snapshot().ready) throw new Error('先にAndroid環境をセットアップしてください');
-    const p = this.paths(), c = this.getConfig().android;
-    const devices = await this.run(p.adb, ['devices']); if (devices.includes(`emulator-${c.port}`)) throw new Error('指定したEmulatorポートは使用中です');
-    this.status = 'booting'; this.change('Androidを起動しています');
-    this.emulatorLog = ''; const boot = new AbortController();
-    const child = spawn(p.emulator, ['-avd', avdName(c), '-port', String(c.port), '-no-window', '-no-boot-anim', '-memory', String(c.ramMb), '-gpu', c.gpu, '-camera-back', 'none', '-camera-front', 'none'], { env: this.environment(), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); this.child = child;
-    const diagnostic = bytes => { this.emulatorLog = (this.emulatorLog + bytes.toString()).slice(-16384); };
-    child.stdout.on('data', diagnostic); child.stderr.on('data', diagnostic);
-    child.once('error', e => { if (this.child === child) this.child = null; this.status = 'error'; this.change(`Androidを起動できません: ${e.code}`); boot.abort(new Error(this.progress)); });
-    child.once('exit', code => { if (this.child === child) { this.child = null; this.status = 'stopped'; clearInterval(this.frameTimer); this.change(`Androidが終了しました (${code})`); boot.abort(new Error(this.progress)); } });
+    if (this.child || this.busy || this.bootController) throw new Error('Androidは起動中またはセットアップ中です'); if (!this.snapshot().ready) throw new Error('先にAndroid環境をセットアップしてください');
+    const c = structuredClone(this.getConfig().android); this.activeConfig = c; const p = this.paths();
+    const controller = this.bootController = new AbortController(); this.bootAttempts = [];
     try {
-      await this.adb(['wait-for-device'], { timeout: 180000, signal: boot.signal });
-      const deadline = Date.now() + 180000;
-      while (Date.now() < deadline) { boot.signal.throwIfAborted(); if ((await this.adb(['shell', 'getprop', 'sys.boot_completed'], { signal: boot.signal })).trim() === '1') break; await new Promise(r => setTimeout(r, 1000)); }
-      if ((await this.adb(['shell', 'getprop', 'sys.boot_completed'], { signal: boot.signal })).trim() !== '1') throw new Error('Androidの起動がタイムアウトしました');
-      this.status = 'running'; this.change('Androidを起動しました'); this.frameTimer = setInterval(() => this.frame(), 350); void this.frame(); return this.snapshot();
-    } catch (e) { const error = boot.signal.aborted ? boot.signal.reason : e; if (this.emulatorLog) this.log('error', `Android起動診断: ${this.emulatorLog.trim().slice(-2000)}`); await this.stop(); this.status = 'error'; this.change(error.message); throw error; }
+      const devices = await this.run(p.adb, ['devices'], { signal: controller.signal }); if (devices.includes(`emulator-${c.port}`)) throw new Error('指定したEmulatorポートは使用中です');
+      for (let attempt = 0; attempt < 2; attempt++) {
+        controller.signal.throwIfAborted(); this.status = 'booting';
+        this.change(attempt ? 'Androidをソフトウェア描画・コールドブートで復旧しています' : 'Androidを起動しています');
+        const entry = { recovery: Boolean(attempt), args: emulatorArguments({ ...c, avd: avdName(c) }, { recovery: Boolean(attempt), cores: availableParallelism() }), log: '', state: null };
+        this.bootAttempts.push(entry); this.emulatorLog = '';
+        const exited = new AbortController();
+        const signal = AbortSignal.any([controller.signal, exited.signal]);
+        const child = spawn(p.emulator, entry.args, { env: this.environment(), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); this.child = child;
+        const diagnostic = bytes => { entry.log = (entry.log + bytes.toString()).slice(-65536); this.emulatorLog = entry.log; };
+        child.stdout.on('data', diagnostic); child.stderr.on('data', diagnostic);
+        child.once('error', e => exited.abort(new Error(`Androidを起動できません: ${e.code}`)));
+        child.once('exit', code => {
+          exited.abort(new Error(`Androidが終了しました (${code})`));
+          if (this.child === child && this.status === 'running') { this.child = null; this.activeConfig = null; this.status = 'stopped'; clearInterval(this.frameTimer); this.change(`Androidが終了しました (${code})`); }
+        });
+        try {
+          entry.state = await waitForAndroidBoot((args, options) => this.adb(args, options), {
+            signal, maxMs: c.bootTimeoutSeconds * 1000,
+            changed: state => { entry.state = state; this.change(`${attempt ? '復旧起動' : 'Android起動'}: ${state.phase}（${Math.floor(state.elapsedMs / 1000)}秒）`); },
+          });
+          await this.adb(['shell', 'input', 'keyevent', '82'], { signal }).catch(() => {});
+          controller.signal.throwIfAborted(); this.status = 'running'; this.change('Androidを起動しました');
+          this.frameTimer = setInterval(() => this.frame(), 350); void this.frame(); return this.snapshot();
+        } catch (e) {
+          entry.error = signal.aborted ? signal.reason.message : e.message; entry.state = e.state || entry.state;
+          await this.stopProcess(); controller.signal.throwIfAborted();
+          if (attempt) throw new Error(`Androidを起動できません: ${entry.error}`);
+          this.log('warn', `Android初回起動: ${entry.error}。端末データを保持して復旧起動します`);
+        }
+      }
+    } catch (e) {
+      await this.stopProcess(); this.activeConfig = null;
+      if (controller.signal.aborted) { this.status = 'stopped'; this.change('Androidの起動を中止しました'); }
+      else { if (this.emulatorLog) this.log('error', `Android起動診断: ${this.emulatorLog.trim().slice(-2000)}`); this.status = 'error'; this.change(e.message); }
+      throw e;
+    } finally { if (this.bootController === controller) this.bootController = null; }
   }
   async frame() { if (this.frameBusy || this.status !== 'running') return; this.frameBusy = true; try { const png = await this.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 10000 }); if (png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) this.emit('frame', png); } catch (e) { this.progress = e.message; } finally { this.frameBusy = false; } }
   async input(data) {
@@ -122,6 +148,14 @@ export class AndroidRuntime extends EventEmitter {
   }
   async openPlay(packageId = '') { if (this.status !== 'running') throw new Error('Androidを起動してください'); if (packageId && !/^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(packageId)) throw new Error('アプリのパッケージIDを確認してください'); return packageId ? this.adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(`market://details?id=${packageId}`)]) : this.adb(['shell', 'monkey', '-p', 'com.android.vending', '-c', 'android.intent.category.LAUNCHER', '1']); }
   cancelSetup() { this.installController?.abort(); }
-  async stop() { clearInterval(this.frameTimer); const child = this.child; this.child = null; this.status = 'stopped'; if (child) { await this.adb(['emu', 'kill'], { timeout: 5000 }).catch(() => {}); child.kill(); } this.change(); }
-  close() { this.cancelSetup(); clearInterval(this.frameTimer); this.child?.kill(); this.child = null; }
+  async stopProcess() {
+    clearInterval(this.frameTimer); const child = this.child; this.child = null;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const closed = new Promise(resolve => child.once('close', resolve));
+    await this.adb(['emu', 'kill'], { timeout: 5000 }).catch(() => {});
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    let timer; await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, 5000); })]); clearTimeout(timer);
+  }
+  async stop() { this.bootController?.abort(new DOMException('起動を中止しました', 'AbortError')); await this.stopProcess(); this.activeConfig = null; this.status = 'stopped'; this.change(); }
+  close() { this.cancelSetup(); this.bootController?.abort(new DOMException('終了しました', 'AbortError')); clearInterval(this.frameTimer); this.child?.kill(); this.child = null; }
 }
