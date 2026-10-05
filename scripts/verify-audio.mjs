@@ -211,9 +211,10 @@ try {
       report.liveMedia.push(outcome); console.log('LIVE_MEDIA', JSON.stringify(outcome));
     }
   }
-  if (process.env.NYAN_REQUIRE_LIVE_AUDIO && report.liveMedia.some(m => !m.verifiedAudio)) process.exitCode = 1;
   report.requiredLiveServices = (process.env.NYAN_REQUIRE_LIVE_SERVICES || '').split(',').filter(Boolean);
-  if (report.requiredLiveServices.some(service => !verifiedServices.has(service))) process.exitCode = 1;
+  if ((process.env.NYAN_REQUIRE_LIVE_AUDIO && report.liveMedia.some(m => !m.verifiedAudio)) || report.requiredLiveServices.some(service => !verifiedServices.has(service))) {
+    report.passed = false; process.exitCode = 1;
+  }
 } catch (error) { report.passed = false; report.error = error.stack; process.exitCode = 1; }
 finally {
   writeFileSync(join(reports, 'audio-report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));

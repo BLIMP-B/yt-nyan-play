@@ -1,4 +1,4 @@
-name: Verify public YouTube audio on Linux
+name: Verify public YouTube audio in additional environments
 on:
   push:
     paths:
@@ -36,4 +36,24 @@ jobs:
         if: always()
         with:
           name: audio-verification-youtube-linux
+          path: dist/audio-verification
+  youtube-audio-macos:
+    runs-on: macos-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check YouTube content audio and Discord encoding
+        run: npm run verify:audio
+        env:
+          NYAN_LIVE_MEDIA_URLS: '["https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1"]'
+          NYAN_REQUIRE_LIVE_SERVICES: youtube
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-youtube-macos
           path: dist/audio-verification
