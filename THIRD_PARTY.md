@@ -14,3 +14,9 @@
 VOICEVOX Engine・音声モデル・exVOICE素材・棒読みちゃんは現在のインストーラーに含めません。ユーザーが用意したエンジンのAPIを利用、または選択したエンジン実行ファイルをアプリから起動します。音声生成は `VOICEVOX:ずんだもん` と明記し、[VOICEVOX利用規約](https://voicevox.hiroshiba.jp/term/) と [ずんだもんの規約](https://zunko.jp/con_ongen_kiyaku.html) に従って使用してください。
 
 DiSpeak 2.6.6 ([公開ソース](https://github.com/yudukiak/DiSpeak)、MIT) は機能の調査資料です。ソースをそのまま取り込んでいません。元CRXのコード・アイコンには新たな利用許諾を付与していません。未確認の第三者素材の再配布は含めていません。
+
+VS CodeのWorkbench/Button/InputBoxのCSS、Light Modern/Dark ModernテーマとMIT LICENSEを、Microsoftの公式リポジトリの固定コミットから取得し `apps/desktop/renderer/vendor/vscode/` に保存しています。取得元・コミットは同フォルダの `SOURCE.md` を参照してください。VS Code WebのホストからCSSを直接取得できなかったため、Web/Desktopで共有する公式ソースを使用しています。
+
+fast-xml-parser (MIT) はSDK・棒読みちゃん設定のXML読み込み、fflate (MIT) はZIPの展開に使います。Android SDK/Emulator/Google Playイメージは利用者が規約を確認した後にGoogleの公式配布から取得し、Windowsパッケージへ事前同梱しません。JavaはEclipse Temurin (GPL-2.0 with Classpath Exception) の公式配布を取得し、付属LICENSE/NOTICEを保持します。
+
+棒読みちゃんBeta21のユーザー共有ZIPに含まれるReadMeは無許可の再頒布を禁止しています。元本体・AquesTalk・個人設定は公開配布せず、利用者のZIPをローカルへ取り込む方式です。X API2の認証とGoogle Playログインは利用者自身のアカウントで行います。

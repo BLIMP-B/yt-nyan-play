@@ -1,14 +1,14 @@
 (() => {
   if (!window.nyan) return;
-  const playing = new Map(); let capture = null;
-  const stopCapture = async () => {
-    if (!capture) return;
+  const playing = new Map(); const captures = new Map();
+  const stopCapture = async id => {
+    const capture = captures.get(id); if (!capture) return; captures.delete(id);
     capture.stream?.getTracks().forEach(track => track.stop()); capture.processor?.disconnect();
-    await capture.context?.close(); capture = null;
+    await capture.context?.close();
   };
   const handleAudio = async message => {
     if (message.type === 'cancel') { const audio = playing.get(message.id); audio?.pause(); audio?.dispatchEvent(new Event('ended')); return; }
-    if (message.type === 'capture:stop') { await stopCapture(); return; }
+    if (message.type === 'capture:stop') { await stopCapture(message.id); return; }
     try {
       if (message.type === 'play') {
         const bytes = new Uint8Array(message.bytes);
@@ -23,9 +23,9 @@
         } finally { playing.delete(message.id); audio.pause(); URL.revokeObjectURL(url); }
       }
       if (message.type === 'capture:start') {
-        await stopCapture();
+        await stopCapture(message.id);
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2, sampleRate: 48000 } });
-        capture = { stream };
+        const capture = { stream }; captures.set(message.id, capture);
         if (!stream.getAudioTracks().length) throw new Error('再生ウィンドウから音声を取得できません');
         const context = new AudioContext({ sampleRate: 48000 }); capture.context = context;
         await context.audioWorklet.addModule('pcm-worklet.js');
@@ -34,7 +34,7 @@
         const mute = context.createGain(); mute.gain.value = 0; source.connect(processor).connect(mute).connect(context.destination); await context.resume();
       }
       window.nyan.audioResult({ id: message.id });
-    } catch (error) { if (message.type === 'capture:start') await stopCapture(); window.nyan.audioResult({ id: message.id, error: error.message }); }
+    } catch (error) { if (message.type === 'capture:start') await stopCapture(message.id); window.nyan.audioResult({ id: message.id, error: error.message }); }
   };
   window.nyan.onAudio(handleAudio);
   window.nyanCapture = handleAudio;

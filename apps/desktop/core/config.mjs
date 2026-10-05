@@ -2,11 +2,13 @@ import { isIP } from 'node:net';
 
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
-  desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true },
+  desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light' },
+  android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 2048, gpu: 'auto' },
+  twitter: { accounts: [], clientId: '', callbackPort: 11488, pollSeconds: 60, readRetweets: true, readReplies: true, readExisting: false, guildId: '' },
   bot: {
     autoConnect: false, prefix: '!nyan', includeBots: false, includeWebhooks: true,
     allowedWebhookIds: [], controlUserIds: [], autoJoin: false, autoLeave: true,
-    announceJoinLeave: false, readDMs: false, bindings: [],
+    announceJoinLeave: false, readDMs: false, bindings: [], masterTextChannelId: '',
   },
   speech: {
     enabled: true, provider: 'voicevox', engineUrl: 'http://127.0.0.1:50021',
@@ -18,8 +20,8 @@ export const DEFAULT_CONFIG = {
     leaveTemplate: '$nickname$が$channel$から退出しました',
     moveTemplate: '$nickname$が$channel-prev$から$channel-next$へ移動しました',
     ignoredUserIds: [], allowedUserIds: [], ignoredRoleIds: [], blockedWords: [],
-    profiles: [], emojiReadings: [], soundClips: [],
-    bouyomiHost: '127.0.0.1', bouyomiPort: 50001, bouyomiHttpPort: 50080, bouyomiCommunication: 'tcp', bouyomiVoice: 0, bouyomiTone: -1,
+    profiles: [], emojiReadings: [], soundClips: [], forwarding: [],
+    bouyomiNativeRules: true, bouyomiUseDefaults: true, bouyomiHost: '127.0.0.1', bouyomiPort: 50001, bouyomiHttpPort: 50080, bouyomiCommunication: 'tcp', bouyomiVoice: 0, bouyomiTone: -1,
   },
   media: {
     enabled: true, volume: 0.7, ducking: 0.35, showWindow: true,
@@ -53,12 +55,21 @@ const strings = (value, label, ids = false) => {
 export function normalizeConfig(patch) {
   const c = mergeKnown(DEFAULT_CONFIG, patch);
   c.schemaVersion = 1;
-  for (const group of ['desktop', 'bot', 'speech', 'media']) {
+  for (const group of ['desktop', 'bot', 'speech', 'media', 'android', 'twitter']) {
     for (const [key, value] of Object.entries(DEFAULT_CONFIG[group])) {
       if (typeof value === 'boolean' && typeof c[group][key] !== 'boolean') fail(`${group}.${key}`);
       if (typeof value === 'string' && (typeof c[group][key] !== 'string' || c[group][key].length > 2000)) fail(`${group}.${key}`);
     }
   }
+  if (!['light', 'dark'].includes(c.desktop.theme)) fail('配色');
+  if (!/^system-images;android-\d{2,3};google_apis_playstore;x86_64$/.test(c.android.image) || !/^[a-zA-Z0-9_-]{1,40}$/.test(c.android.avdName)) fail('Android端末・イメージ');
+  number(c.android.port, 5554, 5682, 'Emulatorポート', true); if (c.android.port % 2) fail('Emulatorポートは偶数');
+  number(c.android.ramMb, 1024, 8192, 'Androidメモリ', true); if (!['auto', 'software'].includes(c.android.gpu)) fail('Android描画');
+  strings(c.twitter.accounts, 'X対象アカウント'); c.twitter.accounts = [...new Set(c.twitter.accounts.map(a => a.replace(/^@/, '').toLowerCase()))];
+  if (c.twitter.accounts.some(a => !/^[a-zA-Z0-9_]{1,15}$/.test(a))) fail('Xアカウント名');
+  number(c.twitter.callbackPort, 1024, 65535, 'Xログイン待受けポート', true); number(c.twitter.pollSeconds, 30, 3600, 'X取得間隔', true);
+  if (c.twitter.guildId && !/^\d{5,22}$/.test(c.twitter.guildId)) fail('X読み上げ先');
+  if (c.bot.masterTextChannelId && !/^\d{5,22}$/.test(c.bot.masterTextChannelId)) fail('マスタチャンネルID');
   if (!['voicevox', 'bouyomi'].includes(c.speech.provider)) fail('音声エンジン');
   for (const g of ['speech', 'media']) if (!['local', 'discord', 'both'].includes(c[g].output)) fail('音声出力先');
   number(c.speech.styleId, 0, 65535, '声種', true);
@@ -82,9 +93,12 @@ export function normalizeConfig(patch) {
   c.bot.bindings = c.bot.bindings.map(b => {
     if (!b || !/^\d{5,22}$/.test(b.guildId) || !/^\d{5,22}$/.test(b.voiceChannelId)) fail('サーバー・音声チャンネルID');
     strings(b.textChannelIds, 'テキストチャンネルID', true);
-    return { guildId: b.guildId, voiceChannelId: b.voiceChannelId, textChannelIds: b.textChannelIds, label: String(b.label || '').slice(0, 100) };
+    const disabledTextChannelIds = b.disabledTextChannelIds || []; strings(disabledTextChannelIds, '無効チャンネルID', true);
+    return { guildId: b.guildId, voiceChannelId: b.voiceChannelId, textChannelIds: b.textChannelIds, disabledTextChannelIds, label: String(b.label || '').slice(0, 100) };
   });
   if (new Set(c.bot.bindings.map(b => b.guildId)).size !== c.bot.bindings.length) fail('1サーバーにつき1接続先を設定してください');
+  if (!Array.isArray(c.speech.forwarding) || c.speech.forwarding.length > 100) fail('読み上げ転送');
+  c.speech.forwarding = c.speech.forwarding.map(f => { if (!/^\d{5,22}$/.test(f.fromGuildId) || !/^\d{5,22}$/.test(f.toGuildId) || f.fromGuildId === f.toGuildId || !['one-way', 'two-way', 'none'].includes(f.mode)) fail('読み上げ転送先・方向'); return { fromGuildId: f.fromGuildId, toGuildId: f.toGuildId, mode: f.mode }; });
   if (!Array.isArray(c.dictionary) || c.dictionary.length > 10000) fail('辞書');
   c.dictionary = c.dictionary.map(d => {
     if (!d || typeof d.source !== 'string' || !d.source || d.source.length > 200 || typeof d.replacement !== 'string' || d.replacement.length > 500) fail('辞書の単語・読み方');

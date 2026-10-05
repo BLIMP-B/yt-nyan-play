@@ -3,10 +3,10 @@ import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 export class Vault {
-  constructor(directory) { this.path = join(directory, 'bot-token.bin'); }
+  constructor(directory, filename = 'bot-token.bin') { this.path = join(directory, filename); }
   available() { return safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text'); }
   save(token) {
-    if (typeof token !== 'string' || token.length > 300 || !token.trim()) throw new Error('有効なBotトークンを入力してください');
+    if (typeof token !== 'string' || token.length > 8192 || !token.trim()) throw new Error('有効な認証情報を入力してください');
     if (!this.available()) throw new Error('OSの暗号化保管を利用できません。この環境ではトークンを保存しません');
     writeFileSync(this.path, safeStorage.encryptString(token.trim()), { mode: 0o600 });
   }

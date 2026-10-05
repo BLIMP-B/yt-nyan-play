@@ -1,8 +1,8 @@
 {
-  "name": "yt-nyan-play",
-  "version": "0.2.0",
+  "name": "nyan-talk-damare",
+  "version": "0.3.0",
   "private": true,
-  "description": "にゃんぷれい Chrome拡張とWindows Discord.js統合アプリ",
+  "description": "にゃんとーく〜Damare〜 Windows Discord.js統合アプリと送信側Chrome拡張",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -22,6 +22,8 @@
   "dependencies": {
     "@discordjs/voice": "0.19.2",
     "discord.js": "14.27.0",
+    "fast-xml-parser": "5.11.2",
+    "fflate": "0.8.3",
     "ffmpeg-static": "5.3.0",
     "opusscript": "0.1.1",
     "re2-wasm": "1.0.2"
@@ -34,8 +36,8 @@
   "extensionVersion": "0.1.2",
   "license": "UNLICENSED",
   "build": {
-    "appId": "jp.blimp.nyanplay",
-    "productName": "NyanPlay",
+    "appId": "jp.blimp.nyantalkdamare",
+    "productName": "にゃんとーく〜Damare〜",
     "directories": {
       "output": "dist/desktop"
     },
@@ -67,19 +69,20 @@
         "nsis",
         "zip"
       ],
-      "artifactName": "NyanPlay-${version}-${arch}.${ext}"
+      "artifactName": "NyanTalk-Damare-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
-      "artifactName": "NyanPlay-Setup-${version}-${arch}.${ext}"
+      "artifactName": "NyanTalk-Damare-Setup-${version}-${arch}.${ext}"
     },
     "linux": {
       "target": [
         "dir"
       ]
-    }
+    },
+    "executableName": "NyanTalk-Damare"
   }
 }

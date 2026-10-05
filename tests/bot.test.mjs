@@ -22,3 +22,22 @@ test('ordinary speech uses template while unconfigured channels and self message
   const s = setup(t); await s.bot.message(s.message('こんにちは')); assert.equal(s.speech[0].text, 'ねこ、こんにちは');
   const m = s.message('無視', '2'); m.channelId = '77777'; await s.bot.message(m); m.channelId = '22222'; m.author.id = '99999'; await s.bot.message(m); assert.equal(s.speech.length, 1);
 });
+test('read-channel off persists and suppresses speech while accepting media and admin commands', async t => {
+  const s = setup(t);
+  await s.bot.message(s.message('!nyan read-channel 22222 off', '1', true));
+  assert.deepEqual(s.store.config.bot.bindings[0].disabledTextChannelIds, ['22222']);
+  await s.bot.message(s.message('読み上げない', '2'));
+  await s.bot.message(s.message('https://youtu.be/abc再生', '3'));
+  assert.equal(s.speech.length, 0); assert.equal(s.media.length, 1);
+  await s.bot.message(s.message('!nyan read-channel 22222 on', '4', true));
+  await s.bot.message(s.message('読み上げる', '5')); assert.equal(s.speech.length, 1);
+});
+test('master media routing and failed enqueue do not lose retryable incoming requests', async t => {
+  const s = setup(t); s.store.config.bot.masterTextChannelId = '22222';
+  const handler = s.bot.handlers.media;
+  s.bot.handlers.media = () => { throw new Error('queue full'); };
+  const m = s.message('https://youtu.be/abc再生');
+  await assert.rejects(s.bot.message(m), /queue full/); assert.equal(s.store.seen.includes('message:1'), false);
+  s.bot.handlers.media = handler; await s.bot.message(m);
+  assert.equal(s.media.length, 1); assert.equal(s.media[0].master, true);
+});

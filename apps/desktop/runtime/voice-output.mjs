@@ -100,7 +100,7 @@ export class VoiceOutput {
     const pcm = await decodeAudio(buffer, signal); await entry.mixer.addSpeech(pcm, volume, signal);
   }
   async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; return entry; }
-  media(guildId, chunk) { this.connections.get(guildId)?.mixer.addMedia(chunk); }
+  media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; entry.mixer.addMedia(chunk); }
   endMedia(guildId) { this.connections.get(guildId)?.mixer.clearMedia(); }
   disconnect(guildId) { const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); }
   close() { for (const id of [...this.connections.keys()]) this.disconnect(id); }

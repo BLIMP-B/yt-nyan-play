@@ -3,7 +3,7 @@ import { RE2 } from 're2-wasm';
 export function formatTemplate(template, values) {
   return template.replace(/\$([\w-]+)\$/g, (_, key) => String(values[key] ?? ''));
 }
-export function shouldRead(message, config) {
+export function shouldReceive(message, config) {
   if (message.isSelf || message.isSystem) return false;
   if (config.speech.ignoredUserIds.includes(message.userId)) return false;
   if (config.speech.allowedUserIds.length && !config.speech.allowedUserIds.includes(message.userId)) return false;
@@ -13,8 +13,13 @@ export function shouldRead(message, config) {
     if (!config.bot.includeWebhooks || config.bot.allowedWebhookIds.length && !config.bot.allowedWebhookIds.includes(message.webhookId)) return false;
   } else if (message.isBot && !config.bot.includeBots) return false;
   if (!message.guildId) return config.bot.readDMs;
+  if (config.bot.masterTextChannelId === message.channelId) return true;
   return config.bot.bindings.some(b => b.guildId === message.guildId && b.textChannelIds.includes(message.channelId));
 }
+export function shouldRead(message, config) {
+  return shouldReceive(message, config) && (!message.guildId || config.bot.masterTextChannelId === message.channelId || config.bot.bindings.some(b => b.guildId === message.guildId && b.textChannelIds.includes(message.channelId) && !b.disabledTextChannelIds?.includes(message.channelId)));
+}
+export function speechTargets(guildId, forwarding) { const targets = new Set(guildId ? [guildId] : []); for (const f of forwarding) { if (f.mode !== 'none' && f.fromGuildId === guildId) targets.add(f.toGuildId); if (f.mode === 'two-way' && f.toGuildId === guildId) targets.add(f.fromGuildId); } return [...targets]; }
 export function applyDictionary(text, entries, context) {
   const matching = entries.filter(d => d.scope === 'global' || d.scope === 'guild' && d.scopeId === context.guildId || d.scope === 'user' && d.scopeId === context.userId)
     .sort((a, b) => b.source.length - a.source.length);
@@ -29,6 +34,10 @@ export function applyDictionary(text, entries, context) {
 export function prepareSpeech(message, config) {
   const s = config.speech;
   let text = message.content;
+  if (s.provider === 'bouyomi' && s.bouyomiNativeRules) {
+    const values = { username: message.userName || '', nickname: message.displayName || message.userName || '', server: message.guildName || '', channel: message.channelName || '', text, userid: message.userId || '', time: new Date().toLocaleTimeString('ja-JP') };
+    return s.readNames ? formatTemplate(s.messageTemplate, values) : text;
+  }
   if (!s.readSpoilers) text = text.replace(/\|\|[\s\S]*?\|\|/g, s.spoilerText);
   if (!s.readCode) text = text.replace(/```[\s\S]*?```/g, 'コード').replace(/`([^`]+)`/g, '$1');
   text = text.replace(/<@!?(\d+)>/g, (_, id) => message.mentions?.[id] || 'メンション')

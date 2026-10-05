@@ -1,4 +1,4 @@
-# にゃんぷれい — Chrome拡張とWindowsアプリ
+# にゃんぷれい / にゃんとーく〜Damare〜
 
 YouTubeの動画ページに「再生」ボタンを追加し、動画のURL・再生指定・タイトルを、選択したDiscordのWebhookへ送信するChrome拡張機能です。
 
@@ -6,17 +6,17 @@ YouTubeの動画ページに「再生」ボタンを追加し、動画のURL・�
 
 [Chromeウェブストア](https://chromewebstore.google.com/detail/nehmipbdoecdjefdlneejdaphpjbhlnf) · [元ファイルと変更点](docs/SOURCE.md) · [関連ソフトをまとめる方針](docs/INTEGRATION_PLAN.md)
 
-過去チャット「YTにゃんぷれい_AHKClab」の取得可能なやり取りも参照し、**送信側のChrome拡張を残し、Discord読み上げBot・読み上げちゃん・ずんだもん音声生成・DiSpeak・AHKでのブラウザ再生を一つのデスクトップアプリへ統合する方針**を記録しています。
+過去チャット「YTにゃんぷれい_AHKClab」の取得可能なやり取りも参照し、**送信側のChrome拡張を残し、Discord読み上げBot・棒読みちゃん・ずんだもん音声生成・DiSpeak・AHKでのブラウザ再生を一つのデスクトップアプリへ統合する方針**を記録しています。
 
 デスクトップ側は**常時稼働Windows PC上のDiscord.js Bot**とします。VOICEVOX以外の統合元は全機能の移植を対象とし、[機能対応表の方針](docs/FEATURE_PARITY.md)で確認状況と完了条件を管理します。
 
-拡張側のSNS・ニコニコ動画対応と「再生可能なメディアのボタンから送信画面を開く」仕様は[送信側の拡張仕様](docs/EXTENSION_SPEC.md)に整理しています。PC側 v0.2.0を実装しました。Electronの日本語設定画面、常駐Discord.js Bot、VOICEVOX読み上げ、辞書・利用者ごとの声、専用ブラウザ再生、PC / Discord音声出力、永続キューをまとめています。Chrome拡張はYouTube向けv0.1.2を維持し、SNS向けの検出UIと統合元全機能の照合は残っています。
+拡張側のSNS・ニコニコ動画対応と「再生可能なメディアのボタンから送信画面を開く」仕様は[送信側の拡張仕様](docs/EXTENSION_SPEC.md)に整理しています。PC側 v0.3.0では、マスタ共通再生・サーバー別独立再生、読み上げの方向別転送、Android管理導入と更新、複数アカウントのX読み上げ、棒読みちゃんのZIP取り込みと原文送信、VS Codeのライト/ダーク切替を追加しました。Electronの日本語設定画面、常駐Discord.js Bot、VOICEVOX読み上げ、辞書・利用者ごとの声、専用ブラウザ再生、PC / Discord音声出力、永続キューをまとめています。Chrome拡張はYouTube向けv0.1.2を維持し、SNS向けの検出UIと統合元全機能の照合は残っています。
 
-## Windowsアプリを使う
+## にゃんとーく〜Damare〜を使う
 
-[導入と操作](docs/DESKTOP.md) · [PC側の設計](docs/INTEGRATION_PLAN.md) · [機能対応と未解決点](docs/FEATURE_PARITY.md) · [第三者ソフトウェア](THIRD_PARTY.md)
+[導入と操作](docs/DESKTOP.md) · [PC側の設計](docs/INTEGRATION_PLAN.md) · [機能対応と未解決点](docs/FEATURE_PARITY.md) · [LAN音声の設計](docs/LAN_VOICE_DESIGN.md) · [棒読みちゃん](docs/BOUYOMI_IMPORT.md) · [第三者ソフトウェア](THIRD_PARTY.md)
 
-GitHub Actionsの **Desktop tests and Windows package** の成功した実行から `nyan-play-windows-x64` をダウンロードし、セットアップEXEで導入できます。Botトークン、受信チャンネルと音声チャンネル、VOICEVOX Engineを設定してください。エンジン・モデルはこの版に同梱していません。
+GitHub Actionsの **Desktop tests and Windows package** の成功した実行から `nyan-talk-damare-windows-x64` をダウンロードし、セットアップEXEで導入できます。Botトークン、受信チャンネルと音声チャンネル、VOICEVOX Engineを設定してください。エンジン・モデルはこの版に同梱していません。
 
 ソースからはNode.js 22.12以上で `npm ci`、`npm start`。Windows上で `npm run dist:win` を実行するとインストーラーとZIPを作成します。Node.js / Discord.js / FFmpegとChrome拡張を同梱します。Chrome拡張の導入はChrome側で行います。
 
