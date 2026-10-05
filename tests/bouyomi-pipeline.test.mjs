@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nativeSegments, nativeSpeed, nativeTagSettings, runNativeSpeech } from '../apps/desktop/core/bouyomi-pipeline.mjs';
+import { nativeSegments, nativeSpeed, nativeTagSettings, nativeSpeechDefaults, runNativeSpeech } from '../apps/desktop/core/bouyomi-pipeline.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { prepareSpeech } from '../apps/desktop/core/text.mjs';
 const original = () => ({ BroadcasterMode: 'true', Speed: '139', Volume: '100', Tone: '100', SpeedUpEnable: 'true', SpeedUpMin: '120', SpeedUpMax: '300', SpeedUpStartCount: '120', SpeedUpRate: '500', TextLengthEnable: 'false', TagEnable: 'true', StudyTag: 'true', ForgetTag: 'true', SpeedTag: 'true', ToneTag: 'true', VolumeTag: 'true', VoiceTag: 'true', SpeedMin: '150', SpeedMax: '300', ToneMin: '50', ToneMax: '200', VolumeMin: '0', VolumeMax: '300' });
@@ -17,6 +17,7 @@ test('native segment provenance requires generated tag markers; raw command synt
 test('native acceleration uses accumulated source characters and respects global broadcaster switch', () => {
   const s = original(); assert.equal(nativeSpeed(s, 120), 120); assert.equal(nativeSpeed(s, 370), 170); assert.equal(nativeSpeed(s, 10000), 300);
   s.BroadcasterMode = 'false'; assert.equal(nativeSpeed(s, 10000), 139);
+  const defaults = nativeSpeechDefaults(normalizeConfig().speech, s, 10000); assert.equal(defaults.speed, 1.39); assert.equal(defaults.volume, 1); assert.equal(defaults.pitch, 0);
 });
 test('native voice IDs require an explicit mapping, speed/volume obey original tag limits', () => {
   const settings = normalizeConfig({ speech: { bouyomiVoiceMap: [{ voiceId: 10001, styleId: 22 }] } }).speech;
@@ -36,8 +37,8 @@ test('native processing applies tags in order, learns only through generated tag
   assert.deepEqual(operations, [['process', '原文', 'on'], ['learn', 'Study', '猫猫=ねこ'], ['process', '猫猫 わ ねこ を 覚えました', 'off']]);
 });
 test('cancelled native preprocessing cannot start synthesis or mutate the education dictionary', async () => {
-  const controller = new AbortController(); let spoken = false, learned = false;
+  const controller = new AbortController(), errors = []; let spoken = false, learned = false;
   const processor = { process: async () => { controller.abort(); return { text: '(Ｔ １)', tags: [{ type: 'Forget', args: '猫猫' }] }; }, learn: async () => { learned = true; } };
-  await assert.rejects(runNativeSpeech({ text: '原文', settings: normalizeConfig().speech, original: original(), pendingCharacters: 0, processor, output: async () => { spoken = true; } }, controller.signal), { name: 'AbortError' });
-  assert.equal(spoken, false); assert.equal(learned, false);
+  await assert.rejects(runNativeSpeech({ text: '原文', settings: normalizeConfig().speech, original: original(), pendingCharacters: 0, processor, output: async () => { spoken = true; }, log: (_level, text) => errors.push(text) }, controller.signal), { name: 'AbortError' });
+  assert.equal(spoken, false); assert.equal(learned, false); assert.deepEqual(errors, []);
 });

@@ -15,7 +15,7 @@ export class DiscordBot {
     if (typeof token !== 'string' || !token.trim()) throw new Error('Botトークンを保存してください');
     this.status = 'connecting'; this.store.emit('change');
     const client = this.clientFactory(); this.client = client;
-    const safe = callback => (...args) => { Promise.resolve().then(() => callback(...args)).catch(e => this.store.log('error', e.message)); };
+    const safe = callback => (...args) => { Promise.resolve().then(() => callback(...args)).catch(e => { if (e.name !== 'AbortError') this.store.log('error', e.message); }); };
     client.on(Events.ClientReady, safe(async () => {
       this.status = 'online'; this.startedAt = new Date().toISOString(); this.store.log('info', 'Discord Botに接続しました');
       this.presenceKey = null; this.updateMediaActivity(this.mediaActivity);

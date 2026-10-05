@@ -16,6 +16,11 @@ export function nativeSpeed(settings, pendingCharacters) {
   return Math.min(Number(settings.SpeedUpMax), Math.max(Number(settings.SpeedUpMin), Math.floor(excess / Number(settings.SpeedUpRate) * 100) + Number(settings.SpeedUpMin)));
 }
 const clamp = (value, min, max) => Math.min(Number(max), Math.max(Number(min), value));
+export function nativeSpeechDefaults(settings, original, pendingCharacters) {
+  if (!settings.bouyomiUseDefaults) return settings;
+  const source = { ...original, BroadcasterMode: settings.bouyomiTagMode === 'original' ? original.BroadcasterMode : String(settings.bouyomiTagMode === 'on') };
+  return { ...settings, speed: nativeSpeed(source, pendingCharacters) / 100, volume: Number(source.Volume) / 100, pitch: Math.log2(Number(source.Tone) / 100) };
+}
 export function nativeTagSettings(tag, settings, original) {
   const next = { ...settings }; const n = Number(tag.args);
   if (tag.type === 'Speed' && original.SpeedTag === 'true' && Number.isInteger(n)) next.speed = clamp(Math.trunc(clamp(n, original.SpeedMin, original.SpeedMax) * (settings.nativeBaseSpeed ?? settings.speed)), 50, 300) / 100;
@@ -38,8 +43,7 @@ export function nativeTagSettings(tag, settings, original) {
 
 export async function runNativeSpeech({ text, settings, original, pendingCharacters, processor, output, sound, log }, signal) {
   const source = { ...original, BroadcasterMode: settings.bouyomiTagMode === 'original' ? original.BroadcasterMode : String(settings.bouyomiTagMode === 'on') };
-  let current = { ...settings };
-  if (settings.bouyomiUseDefaults) current = { ...current, speed: nativeSpeed(source, pendingCharacters) / 100, volume: Number(source.Volume) / 100, pitch: Math.log2(Number(source.Tone) / 100) };
+  let current = nativeSpeechDefaults(settings, source, pendingCharacters);
   current = { ...current, nativeBaseSpeed: current.speed, nativeBaseVolume: current.volume, nativeBaseTone: settings.bouyomiUseDefaults ? Number(source.Tone) : 2 ** current.pitch * 100 };
   let input = text;
   if (source.TextLengthEnable === 'true' && input.length > Number(source.TextLengthNum)) input = input.slice(0, Number(source.TextLengthNum)) + (source.TextLengthAdd || '');
@@ -60,5 +64,5 @@ export async function runNativeSpeech({ text, settings, original, pendingCharact
       else throw new Error(`${segment.type}タグのVOICEVOX出力への移植は対応待ちです`);
     }
     await Promise.all(parallel);
-  } catch (error) { log?.('error', error.message); throw error; }
+  } catch (error) { if (error.name !== 'AbortError') log?.('error', error.message); throw error; }
 }

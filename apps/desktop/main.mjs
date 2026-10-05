@@ -15,12 +15,12 @@ import { Vault } from './runtime/vault.mjs';
 import { EngineProcess } from './runtime/engine-process.mjs';
 import { BouyomiImport, inspectBouyomi } from './runtime/bouyomi-import.mjs';
 import { BouyomiProcessor } from './runtime/bouyomi-processor.mjs';
-import { runNativeSpeech } from './core/bouyomi-pipeline.mjs';
+import { runNativeSpeech, nativeSpeechDefaults } from './core/bouyomi-pipeline.mjs';
 import { bouyomiSpeak } from './runtime/bouyomi.mjs';
 import { AndroidRuntime } from './runtime/android.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
 import { MediaPool } from './core/media-pool.mjs';
-import { speechTargets } from './core/text.mjs';
+import { speechTargets, applyDictionary } from './core/text.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const smoke = process.argv.includes('--smoke');
@@ -189,7 +189,11 @@ else {
     });
     speechRunner = new SpeechPool(store, async (job, signal) => {
       const c = getConfig(); const profile = c.speech.profiles.find(p => p.userId === job.payload.userId);
-      const settings = { ...c.speech, ...(!job.payload.system ? profile : {}), ...(job.payload.styleId !== undefined ? { styleId: job.payload.styleId } : {}), ...(job.payload.system ? { provider: 'voicevox', output: job.payload.output || c.speech.output } : {}) };
+      let settings = { ...c.speech, ...(!job.payload.system ? profile : {}), ...(job.payload.styleId !== undefined ? { styleId: job.payload.styleId } : {}), ...(job.payload.system ? { provider: 'voicevox', output: job.payload.output || c.speech.output } : {}) };
+      if (job.payload.system && settings.bouyomiPreprocess && settings.bouyomiUseDefaults) {
+        const pending = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
+        settings = nativeSpeechDefaults(settings, inspectBouyomi(bouyomi.directory).settings, pending);
+      }
       if (job.payload.privateOwnerId) { await twitter.userSession(); if (twitter.owner()?.id !== job.payload.privateOwnerId) throw new Error('非公開投稿は本人のXログイン中だけ読み上げます'); }
       const targets = job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
       if (settings.output !== 'local' && !targets.length) throw new Error('Discordへの読み上げにはサーバーを選択し、マスタ再生にはVCへ接続してください');
@@ -211,7 +215,8 @@ else {
         const { settings: original } = inspectBouyomi(bouyomi.directory);
         const pendingCharacters = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
         const pipelineController = new AbortController(); const pipelineSignal = AbortSignal.any([signal, pipelineController.signal]);
-        try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: bouyomiProcessor, output, log: (l, text) => store.log(l, text),
+        try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: bouyomiProcessor,
+          output: (text, options, textSignal) => output(applyDictionary(text, c.dictionary, job.payload), options, textSignal), log: (l, text) => store.log(l, text),
           sound: async (name, options, original, soundSignal) => {
             if (original.SoundDisablePath === 'true' && (isAbsolute(name) || name.split(/[\\/]/).includes('..'))) throw new Error('Soundタグの外部パスは無効です');
             const base = resolve(bouyomi.directory, original.SoundPath || 'Sound'); let file = resolve(base, name);
