@@ -19,6 +19,19 @@ jobs:
       - run: npm run check:desktop
       - run: npm test
       - run: xvfb-run --auto-servernum npm run smoke:desktop
+      - name: Check real speech, video audio and PC output
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=nyan_verify rate=48000 channels=2
+          pactl set-default-sink nyan_verify
+          NYAN_AUDIO_MONITOR_SOURCE=nyan_verify.monitor xvfb-run --auto-servernum npm run verify:audio
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-linux
+          path: dist/audio-verification
   windows:
     needs: tests
     runs-on: windows-latest
@@ -32,6 +45,12 @@ jobs:
       - run: ./scripts/check-bouyomi-helper.ps1
       - run: npm test
       - run: npm run smoke:desktop
+      - run: npm run verify:audio
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-windows
+          path: dist/audio-verification
       - run: npm run dist:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -43,3 +62,24 @@ jobs:
             dist/desktop/*.exe
             dist/desktop/*.zip
           if-no-files-found: error
+  live-media:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify public YouTube and Niconico audio
+        continue-on-error: true
+        run: npm run verify:audio
+        env:
+          NYAN_LIVE_MEDIA_URLS: '["https://youtu.be/ro_v7LqdI58","https://www.nicovideo.jp/watch/sm9"]'
+          NYAN_REQUIRE_LIVE_AUDIO: '1'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-live-sites
+          path: dist/audio-verification

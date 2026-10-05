@@ -79,7 +79,13 @@ import { ServerSettings } from './server-settings.js';
     if (!state.vaultAvailable) $('bot-token').placeholder = 'この環境ではOSの暗号化機能を利用できません';
     decorateButton($('pause-toggle'), state.paused.media || state.paused.speech ? 'play' : 'pause', state.paused.media || state.paused.speech ? '再開' : '一時停止');
     const current = state.jobs.filter(j => j.status === 'running'); const now = $('now-playing'); now.replaceChildren(); if (current.length) { for (const j of current) { now.append(node('strong', j.payload.title || j.payload.text || j.payload.url)); now.append(node('small', j.payload.master ? 'マスタキュー: 全サーバー共通' : `サーバー: ${j.payload.guildId || 'ローカル'}`)); } } else now.append(node('p', '再生中の項目はありません'));
-    document.querySelectorAll('.guild-picker').forEach(select => { const value = select.dataset.populated ? select.value : select.dataset.config ? getPath(state.config, select.dataset.config) : select.value; select.dataset.populated = 'true'; select.replaceChildren(node('option', 'サーバー未指定')); select.firstChild.value = ''; for (const b of state.config.bot.bindings) { const option = node('option', b.label || b.guildId); option.value = b.guildId; select.append(option); } select.value = value; });
+    document.querySelectorAll('.guild-picker').forEach(select => {
+      let value = select.dataset.populated ? select.value : select.dataset.config ? getPath(state.config, select.dataset.config) : select.value;
+      const ready = state.voices.filter(v => v.status === 'ready');
+      if (!value && !select.dataset.config) value = ready.length === 1 ? ready[0].guildId : !ready.length && state.config.bot.bindings.length === 1 ? state.config.bot.bindings[0].guildId : '';
+      select.dataset.populated = 'true'; select.replaceChildren(node('option', '送信先サーバーを選択')); select.firstChild.value = '';
+      for (const b of state.config.bot.bindings) { const option = node('option', b.label || b.guildId); option.value = b.guildId; select.append(option); } select.value = value;
+    });
     serverSettings.render(state);
     renderJobs(); renderCollections(); const logs = $('log-list'); logs.replaceChildren(); for (const entry of state.logs) logs.append(row(entry.text, `${new Date(entry.time).toLocaleTimeString('ja-JP')} · ${entry.level}`)); if (!state.logs.length) empty(logs, 'イベントはまだありません。');
     if (state.bouyomi) {

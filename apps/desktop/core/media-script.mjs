@@ -6,7 +6,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
     if (!chosen) return { found: false };
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
-    chosen.volume = options.volume; chosen.loop = false; chosen.playbackRate = 1;
+    chosen.muted = false; chosen.volume = options.volume; chosen.loop = false; chosen.playbackRate = 1;
     if (!window.__nyanStarted && chosen.readyState >= 1) {
       try { chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
@@ -25,9 +25,14 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
       check();
     }
     if (options.paused || chosen.__nyanBudget?.finished) chosen.pause();
-    else if (chosen.paused && !chosen.ended) chosen.play().catch(() => {});
+    else if (chosen.paused && !chosen.ended && !chosen.__nyanPlayPending) {
+      chosen.__nyanPlayPending = true;
+      chosen.play().then(() => { chosen.__nyanPlayError = null; }).catch(error => {
+        if (error.name !== 'AbortError') chosen.__nyanPlayError = error.message || error.name;
+      }).finally(() => { chosen.__nyanPlayPending = false; });
+    }
     return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: chosen.ended,
       currentTime: chosen.currentTime, duration: Number.isFinite(chosen.duration) ? chosen.duration : null,
-      previewFinished: chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', pageTitle: document.title || '', error: chosen.error?.code || null };
+      previewFinished: chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', pageTitle: document.title || '', error: chosen.__nyanPlayError || chosen.error?.code || null };
   })()`;
 }

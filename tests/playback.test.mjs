@@ -55,7 +55,7 @@ test('45-second playback begins at URL offset, excludes buffering and pause, and
 });
 test('無限 and 直接 play once to natural end without the 45-second cutoff', () => {
   for (const mode of ['full', 'direct']) {
-    const p = player(mode); p.read(); p.video.currentTime = 200; assert.equal(p.read().previewFinished, false); assert.equal(p.video.loop, false);
+    const p = player(mode); p.video.muted = true; p.read(); assert.equal(p.video.muted, false); p.video.currentTime = 200; assert.equal(p.read().previewFinished, false); assert.equal(p.video.loop, false);
     p.video.ended = true; p.video.paused = true; assert.equal(p.read().ended, true); assert.equal(p.video.paused, true);
   }
 });

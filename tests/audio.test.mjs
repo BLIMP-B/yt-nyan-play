@@ -7,6 +7,8 @@ import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { Voicevox, ZUNDAMON_STYLES } from '../apps/desktop/core/voicevox.mjs';
 import { bouyomiSpeak } from '../apps/desktop/runtime/bouyomi.mjs';
 import { PcmMixer, decodeAudio, VoiceOutput } from '../apps/desktop/runtime/voice-output.mjs';
+import { createAudioPlayer, createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus } from '@discordjs/voice';
+import OpusScript from 'opusscript';
 const pcm = value => { const b = Buffer.alloc(3840); for (let i = 0; i < b.length; i += 2) b.writeInt16LE(value, i); return b; };
 function wav() { const data = pcm(1000), b = Buffer.alloc(44); b.write('RIFF'); b.writeUInt32LE(36 + data.length, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(2, 22); b.writeUInt32LE(48000, 24); b.writeUInt32LE(192000, 28); b.writeUInt16LE(4, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(data.length, 40); return Buffer.concat([b, data]); }
 test('VOICEVOX discovers all Zundamon styles and uses audio_query then synthesis', async t => {
@@ -33,6 +35,28 @@ test('mixer ducks media while speaking and restores volume, with clipping protec
 });
 test('FFmpeg decodes WAV to 48kHz stereo PCM and rejects invalid audio', async () => {
   assert.deepEqual(await decodeAudio(wav()), pcm(1000)); await assert.rejects(decodeAudio(Buffer.from('broken')), /FFmpeg/);
+});
+test('real Discord audio encoder advances successive speech jobs and sends non-silent Opus', { timeout: 12000 }, async t => {
+  const mixer = new PcmMixer(), player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
+  t.after(() => { player.stop(true); mixer.destroy(); });
+  const decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO); t.after(() => decoder.delete());
+  const packets = []; player._preparePacket = packet => packets.push(Buffer.from(packet));
+  player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+  for (let i = 0; i < 3; i++) await mixer.addSpeech(Buffer.concat(Array.from({ length: 15 }, () => pcm(1000 + i * 1000))), 1, AbortSignal.timeout(3000));
+  assert.equal(player.state.status, AudioPlayerStatus.Playing);
+  assert.ok(packets.length >= 30);
+  assert.ok(packets.some(packet => decoder.decode(packet).some(byte => byte !== 0)), 'Opus must contain audible PCM');
+});
+test('an ended Discord stream rejects new speech immediately instead of freezing the queue', async t => {
+  const mixer = new PcmMixer(), player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
+  t.after(() => { player.stop(true); mixer.destroy(); });
+  player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+  await mixer.addSpeech(pcm(1000), 1);
+  // An encoder underrun used to leave the VC marked ready with a destroyed mixer.
+  clearInterval(mixer.timer);
+  await once(player, AudioPlayerStatus.Idle); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(mixer.destroyed, true);
+  await assert.rejects(mixer.addSpeech(pcm(1000), 1), /終了/);
 });
 test('classic Bouyomi TCP packet contains UTF-8 text and 15-byte header', async t => {
   let resolvePacket; const packet = new Promise(resolve => { resolvePacket = resolve; }); const server = createTcpServer(socket => { const chunks = []; socket.on('data', b => chunks.push(b)); socket.on('end', () => { resolvePacket(Buffer.concat(chunks)); socket.end(); }); });

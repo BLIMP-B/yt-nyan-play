@@ -22,6 +22,9 @@ import { AndroidRuntime } from './runtime/android.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
 import { MediaPool } from './core/media-pool.mjs';
 import { speechTargets, applyDictionary } from './core/text.mjs';
+import { resolveDestination } from './core/destination.mjs';
+import { AudioBridge } from './runtime/audio-bridge.mjs';
+import { browserUserAgent } from './core/browser-user-agent.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const smoke = process.argv.includes('--smoke');
@@ -34,7 +37,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   let window, tray, store, vault, bot, voice, media, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor;
-  let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const pendingAudio = new Map(); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
+  let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const audioBridge = new AudioBridge(() => window); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
   const emitState = () => {
     if (bot && media) bot.updateMediaActivity(media.status);
@@ -45,15 +48,7 @@ else {
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
     voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs,
     paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot() });
-  const audioCommand = (type, data, signal, timeout = 180000) => new Promise((resolve, reject) => {
-    signal?.throwIfAborted(); const id = data.id || crypto.randomUUID();
-    const timer = setTimeout(() => finish(new Error('音声処理がタイムアウトしました')), timeout);
-    const abort = () => { window?.webContents.send('nyan:audio', { type: 'cancel', id }); finish(new DOMException('Cancelled', 'AbortError')); };
-    const finish = error => { if (!pendingAudio.has(id)) return; pendingAudio.delete(id); clearTimeout(timer); signal?.removeEventListener('abort', abort); error ? reject(error) : resolve(); };
-    pendingAudio.set(id, finish); signal?.addEventListener('abort', abort, { once: true });
-    if (type === 'capture:start') window.webContents.executeJavaScript(`window.nyanCapture(${JSON.stringify({ type, id })})`, true).catch(finish);
-    else window.webContents.send('nyan:audio', { ...data, type, id });
-  });
+  const audioCommand = (...args) => audioBridge.command(...args);
   const control = (name, guildId) => {
     if (name === 'pause' || name === 'resume') { const paused = name === 'pause'; if (guildId) speechRunner.pauseGuild(guildId, paused); else speechRunner.pause(paused); media.pause(paused, guildId); }
     if (name === 'skip') media.skip(guildId);
@@ -102,12 +97,16 @@ else {
     if (name === 'clip:choose') { const result = await dialog.showOpenDialog(window, { properties: ['openFile'], filters: [{ name: '音声', extensions: ['wav', 'mp3', 'ogg', 'flac'] }] }); return result.filePaths[0] || ''; }
     if (name === 'speech:test') {
       if (typeof data?.text !== 'string' || !data.text.trim() || data.text.length > 2000) throw new Error('読み上げる文章を入力してください');
-      const job = store.enqueue('speech', { text: data.text, guildId: String(data.guildId || ''), userId: '', styleId: Number(data.styleId ?? getConfig().speech.styleId) }); void speechRunner.drain(); return job;
+      const payload = resolveDestination({ text: data.text, guildId: String(data.guildId || ''), userId: '', styleId: Number(data.styleId ?? getConfig().speech.styleId) }, getConfig().speech.output, getConfig().bot.bindings, voice.snapshot());
+      if (getConfig().speech.output !== 'local') await voice.connect(payload.guildId);
+      return speechRunner.enqueue(payload);
     }
     if (name === 'media:add') {
       const command = parseMediaCommand(`${String(data?.url || '')}${{ preview: '再生', full: '無限', direct: '直接' }[data?.mode] || (data?.loop ? '無限' : '再生')}`, getConfig());
       if (!command) throw new Error('再生URLを入力してください');
-      return media.enqueue({ ...command, master: data?.master === true, guildId: String(data.guildId || ''), startSeconds: Math.max(0, Math.min(86400, Number(data.startSeconds) || command.startSeconds)), title: command.title });
+      const payload = resolveDestination({ ...command, master: data?.master === true, guildId: String(data.guildId || ''), startSeconds: Math.max(0, Math.min(86400, Number(data.startSeconds) || command.startSeconds)), title: command.title }, getConfig().media.output, getConfig().bot.bindings, voice.snapshot());
+      if (getConfig().media.output !== 'local' && !payload.master) await voice.connect(payload.guildId);
+      return media.enqueue(payload);
     }
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
     if (name === 'media:show') { media.show(); return null; }
@@ -156,6 +155,7 @@ else {
   const trusted = event => event.sender === window?.webContents && event.senderFrame === window.webContents.mainFrame;
   app.on('second-instance', () => { window?.show(); window?.focus(); });
   app.whenReady().then(async () => {
+    app.userAgentFallback = browserUserAgent(app.userAgentFallback);
     store = new Store(app.getPath('userData')); vault = new Vault(store.directory); engine = new EngineProcess((l, t) => store.log(l, t));
     bouyomi = new BouyomiImport(store.directory); bouyomi.on('change', emitState);
     bouyomiProcessor = new BouyomiProcessor(store.directory);
@@ -172,6 +172,12 @@ else {
       let browser;
       browser = new MediaBrowser(getConfig, {
         changed: emitState,
+        captureError: id => {
+          const capture = captures.get(id); if (!capture) return;
+          if (capture.error) return capture.error;
+          if (!capture.master && !voice.connections.has(capture.guildId)) return 'Discordの音声接続が終了しました。再試行すると再接続します';
+          if (capture.master && !voice.connections.size) return 'マスタ再生の送信先VCがありません';
+        },
         startCapture: (id, guildId, signal) => {
           const master = scope === 'master';
           captureChain = captureChain.catch(() => {}).then(async () => {
@@ -249,10 +255,15 @@ else {
       callback({ video: frame, audio: frame, enableLocalEcho: getConfig().media.output === 'both' });
     });
     ipcMain.handle('nyan:action', async (event, name, data) => { if (!trusted(event)) throw new Error('操作元を確認できません'); try { return { ok: true, value: await action(name, data) }; } catch (e) { store.log('error', e.message); return { ok: false, error: e.message }; } });
-    ipcMain.on('nyan:audio-result', (event, data) => { if (trusted(event) && typeof data?.id === 'string') pendingAudio.get(data.id)?.(data.error ? new Error(String(data.error).slice(0, 300)) : null); });
+    ipcMain.on('nyan:audio-result', (event, data) => {
+      if (!trusted(event)) return;
+      if (data?.type === 'capture:error' && captures.has(data.id)) captures.get(data.id).error = String(data.error || 'メディア音声の転送が停止しました').slice(0, 300);
+      else audioBridge.result(data);
+    });
     ipcMain.on('nyan:pcm', (event, id, bytes) => { const capture = captures.get(id); if (!trusted(event) || !capture || !(bytes instanceof Uint8Array) || bytes.length > 32768 || bytes.length % 4) return; if (capture.master) { for (const key of [...voice.connections.keys()]) voice.media(key, Buffer.from(bytes)); } else if (!media.masterActive) voice.media(capture.guildId, Buffer.from(bytes)); });
     window.on('close', event => { if (!quitting && store.config.desktop.closeToTray) { event.preventDefault(); window.hide(); } });
     window.on('closed', () => { if (!quitting) app.quit(); });
+    window.webContents.on('render-process-gone', () => audioBridge.close());
     store.on('change', emitState);
     store.on('change', () => { const entry = store.logs[0]; if (entry?.level === 'error' && entry !== notifiedEntry && getConfig().desktop.notifications && Date.now() - notificationAt > 15000 && Notification.isSupported()) { notificationAt = Date.now(); notifiedEntry = entry; new Notification({ title: 'にゃんとーく〜Damare〜', body: entry.text }).show(); } });
     await window.loadFile(join(directory, 'renderer/index.html'));
@@ -354,6 +365,6 @@ else {
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });
-  app.on('before-quit', () => { quitting = true; if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); for (const finish of pendingAudio.values()) finish(new Error('アプリを終了します')); tray?.destroy(); });
+  app.on('before-quit', () => { quitting = true; if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); audioBridge.close(); tray?.destroy(); });
   app.on('window-all-closed', () => { if (quitting) app.quit(); });
 }

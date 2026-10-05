@@ -4,6 +4,7 @@ import { mediaServiceName } from '../core/protocol.mjs';
 
 import { mediaScript } from '../core/media-script.mjs';
 import { APP_ICON } from './app-icon.mjs';
+import { browserUserAgent } from '../core/browser-user-agent.mjs';
 
 export class MediaBrowser {
   constructor(getConfig, bridge, log) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.window = null; this.paused = false; this.ducked = false; this.status = null; }
@@ -11,6 +12,7 @@ export class MediaBrowser {
     signal.throwIfAborted(); const c = this.getConfig(); const payload = job.payload;
     const url = validateMediaUrl(payload.url, c.media.allowedHosts);
     const ses = session.fromPartition('persist:nyan-playback');
+    ses.setUserAgent(browserUserAgent(ses.getUserAgent()));
     ses.setPermissionRequestHandler((_web, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
     const window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
@@ -23,13 +25,17 @@ export class MediaBrowser {
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
     try {
-      await Promise.race([window.loadURL(url), new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); t.unref(); window.webContents.once('did-finish-load', () => clearTimeout(t)); })]);
+      let loadingTimer;
+      try { await Promise.race([window.loadURL(url), new Promise((_, reject) => { loadingTimer = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); })]); }
+      finally { clearTimeout(loadingTimer); }
       if (c.media.output !== 'local') {
         if (!payload.guildId && !payload.master) throw new Error('Discord送信にはサーバーと音声チャンネルを指定してください');
         captureStarted = true; await this.bridge.startCapture(job.id, payload.guildId, signal);
       }
       const startedAt = Date.now(); let seen = false, playbackStartedAt = null;
       while (!signal.aborted && !window.isDestroyed()) {
+        const captureError = this.bridge.captureError?.(job.id);
+        if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
         const volume = c.media.output === 'discord' ? 1 : this.getConfig().media.volume * (this.ducked ? this.getConfig().media.ducking : 1);
         const mode = payload.mode || (payload.loop ? 'full' : 'preview');
         const options = { startSeconds: payload.startSeconds, mode, volume, paused: this.paused };
@@ -40,7 +46,7 @@ export class MediaBrowser {
         if (state.found && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
         this.status = { ...state, title, service: mediaServiceName(url), startedAt: playbackStartedAt, paused: this.paused }; this.bridge.changed();
-        if (state.error) throw new Error(`メディアを再生できません (コード${state.error})`);
+        if (state.error) throw new Error(`メディアを再生できません: ${state.error}`);
         if (state.previewFinished || state.ended) return;
         if (!seen && Date.now() - startedAt > 90000) throw new Error('再生できる動画・音声を見つけられません。ログインやサイトの再生条件を確認してください');
         await new Promise(resolve => { const t = setTimeout(resolve, 500); const stop = () => { clearTimeout(t); resolve(); }; signal.addEventListener('abort', stop, { once: true }); setTimeout(() => signal.removeEventListener('abort', stop), 550).unref(); });

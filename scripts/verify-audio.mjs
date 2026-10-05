@@ -1,0 +1,177 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
+import { execFileSync, spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { _electron } from 'playwright-core';
+import ffmpeg from 'ffmpeg-static';
+import { PcmMixer } from '../apps/desktop/runtime/voice-output.mjs';
+import { createAudioPlayer, createAudioResource, NoSubscriberBehavior, StreamType } from '@discordjs/voice';
+import OpusScript from 'opusscript';
+import { normalizeConfig } from '../apps/desktop/core/config.mjs';
+const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
+const directory = mkdtempSync(join(tmpdir(), 'damare-audio-'));
+const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/audio-verification')); mkdirSync(reports, { recursive: true });
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.7', '-ar', '48000', '-ac', '2', join(directory, 'speech.wav')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=320x180:rate=25:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:v', 'libvpx', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-shortest', join(directory, 'video.webm')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
+const wav = readFileSync(join(directory, 'speech.wav'));
+const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query')) res.end('{}'); else if (req.url.startsWith('/synthesis')) { res.setHeader('Content-Type', 'audio/wav'); res.end(wav); } else { res.statusCode = 404; res.end(); } });
+engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
+const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'local', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'local', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
+writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
+let application, monitor;
+const monitorChunks = [];
+if (process.env.NYAN_AUDIO_MONITOR_SOURCE) {
+  monitor = spawn(process.env.NYAN_PAREC || 'parec', ['--device=' + process.env.NYAN_AUDIO_MONITOR_SOURCE, '--rate=48000', '--channels=2', '--format=s16le', '--raw'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  monitor.stdout.on('data', bytes => monitorChunks.push(bytes));
+  monitor.on('error', error => { console.error(error); process.exitCode = 1; });
+}
+const report = { platform: process.platform, version: JSON.parse(readFileSync(join(root, 'package.json'))).version, fixtureEngine: true, discordLogin: false, speech: [], media: [] };
+const call = async (page, action, data) => {
+  const result = await page.evaluate(async ({ action, data }) => window.nyan.invoke(action, data), { action, data });
+  assert.equal(result.ok, true, result.error); return result.value;
+};
+const waitForJob = async (page, id, timeout = 15000) => {
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    const state = await call(page, 'state'), job = state.jobs.find(j => j.id === id);
+    if (job && !['waiting', 'running'].includes(job.status)) { assert.equal(job.status, 'completed', job.error); return state; }
+    await new Promise(resolve => setTimeout(resolve, 80));
+  }
+  throw new Error(`Job ${id} did not complete within ${timeout}ms`);
+};
+try {
+  const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
+  application = await _electron.launch({ executablePath: require('electron'), args: [root, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
+  application.on('console', message => console.log('Electron:', message.text()));
+  const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
+  // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
+  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio }) => {
+    const ui = BrowserWindow.getAllWindows()[0];
+    const probe = globalThis.nyanAudioProbe = { ui, target: ui, active: 'speech', metrics: {}, chunks: {} };
+    ui.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+      if (request.frame !== ui.webContents.mainFrame || probe.target.isDestroyed()) return callback({});
+      callback({ video: probe.target.webContents.mainFrame, audio: probe.target.webContents.mainFrame, enableLocalEcho: true });
+    });
+    ipcMain.on('nyan:pcm', (event, id, bytes) => {
+      if (event.sender !== ui.webContents || id !== 'audio-probe') return;
+      const label = probe.active, buffer = Buffer.from(bytes);
+      const metrics = probe.metrics[label] ||= { frames: 0, nonSilentSamples: 0, peak: 0 };
+      metrics.frames++;
+      for (let i = 0; i + 1 < buffer.length; i += 2) { const v = Math.abs(buffer.readInt16LE(i)); metrics.peak = Math.max(metrics.peak, v); if (v > 100) metrics.nonSilentSamples++; }
+      if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
+    });
+    const mediaSession = session.fromPartition('persist:nyan-playback');
+    await mediaSession.protocol.handle('http', request => {
+      if (new URL(request.url).hostname !== 'media-fixture.test') return net.fetch(request, { bypassCustomProtocolHandlers: true });
+      const file = new URL(request.url).pathname;
+      if (file === '/video.webm') return new Response(new Uint8Array(video), { headers: { 'Content-Type': 'video/webm' } });
+      if (file === '/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
+      const tag = file.includes('audio') ? 'audio' : 'video', source = tag === 'audio' ? '/audio.ogg' : '/video.webm';
+      return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>`, { headers: { 'Content-Type': 'text/html' } });
+    });
+    ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture'].includes(permission)));
+  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
+  await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
+  const jobs = [];
+  for (let n = 1; n <= 3; n++) jobs.push(await call(page, 'speech:test', { text: `連続読み上げ${n}`, styleId: 3 }));
+  for (const job of jobs) { await waitForJob(page, job.id); report.speech.push({ text: job.payload.text, status: 'completed' }); }
+  await page.waitForFunction(() => document.querySelector('#now-playing').textContent.includes('再生中の項目はありません'));
+  const displayed = await page.evaluate(() => window.__nyanDisplayed);
+  for (const job of jobs) assert.ok(displayed.some(text => text.includes(job.payload.text)), `Now-playing did not show ${job.payload.text}`);
+  report.nowPlayingUpdated = true;
+  const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
+  assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  // Validate the full production MediaBrowser with both VIDEO and AUDIO HTML players.
+  for (const kind of ['video', 'audio']) {
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: kind === 'video' ? 'direct' : 'full' });
+    await application.evaluate(async ({ BrowserWindow }, kind) => {
+      const probe = globalThis.nyanAudioProbe;
+      const until = Date.now() + 8000;
+      while (Date.now() < until) {
+        const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
+        if (target) { probe.target = target; probe.active = kind; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      throw new Error('Playback window did not open');
+    }, kind);
+    await waitForJob(page, job.id);
+    const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
+    assert.ok(metrics?.nonSilentSamples > 1000, `${kind} audio missing: ${JSON.stringify(metrics)}`);
+    report.media.push({ kind, status: 'completed', ...metrics });
+    await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  }
+  // Confirm captured media passes through the same mixer and Opus resource used for Discord.
+  const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks.video)]));
+  const mixer = new PcmMixer(); mixer.mediaVolume = 1;
+  const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
+  const decoded = [], decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+  player._preparePacket = packet => decoded.push(Buffer.from(decoder.decode(packet)));
+  player.play(createAudioResource(mixer, { inputType: StreamType.Raw }));
+  try {
+    await new Promise(resolve => { let position = 0; const timer = setInterval(() => { mixer.addMedia(pcm.subarray(position, position + 3840)); position += 3840; if (position >= pcm.length) { clearInterval(timer); resolve(); } }, 20); });
+    await new Promise(r => setTimeout(r, 500));
+  }
+  finally { player.stop(true); mixer.destroy(); decoder.delete(); }
+  const bytes = Buffer.concat(decoded); let peak = 0; for (let i = 0; i + 1 < bytes.length; i += 2) peak = Math.max(peak, Math.abs(bytes.readInt16LE(i)));
+  const header = Buffer.alloc(44); header.write('RIFF'); header.writeUInt32LE(36 + bytes.length, 4); header.write('WAVEfmt ', 8); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(2, 22); header.writeUInt32LE(48000, 24); header.writeUInt32LE(192000, 28); header.writeUInt16LE(4, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(bytes.length, 40);
+  writeFileSync(join(reports, 'video-after-discord-encoder.wav'), Buffer.concat([header, bytes]));
+  report.discordEncoder = { packets: decoded.length, peak, bytes: bytes.length };
+  assert.ok(report.discordEncoder.peak > 100);
+  if (monitor) {
+    monitor.kill(); await once(monitor, 'close'); monitor = null;
+    const output = Buffer.concat(monitorChunks); let outputPeak = 0;
+    for (let i = 0; i + 1 < output.length; i += 2) outputPeak = Math.max(outputPeak, Math.abs(output.readInt16LE(i)));
+    report.pcOutput = { bytes: output.length, peak: outputPeak, virtualOutputDevice: true };
+    assert.ok(outputPeak > 100, 'PC output device received no audible samples');
+  }
+  report.passed = true;
+  report.liveMedia = [];
+  // Public sites can require login, consent or block hosted CI. Record failures explicitly.
+  for (const url of JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]')) {
+    const outcome = { url, verifiedAudio: false };
+    let job;
+    try {
+      job = await call(page, 'media:add', { url, mode: 'direct' });
+      await application.evaluate(async ({ BrowserWindow }, label) => {
+        const probe = globalThis.nyanAudioProbe; probe.active = label;
+        const until = Date.now() + 10000;
+        while (Date.now() < until) {
+          const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
+          if (target) { probe.target = target; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Playback window did not open');
+      }, url);
+      const until = Date.now() + 55000;
+      while (Date.now() < until) {
+        const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
+        if (metrics?.nonSilentSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
+        const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
+        if (current.status === 'failed') throw new Error(current.error);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      outcome.page = await application.evaluate(() => {
+        const target = globalThis.nyanAudioProbe.target;
+        return target.isDestroyed() ? {} : { url: target.webContents.getURL(), title: target.webContents.getTitle() };
+      });
+      if (!outcome.verifiedAudio) outcome.error = 'No audible media samples within 55 seconds; site playback remains unverified';
+    } catch (error) { outcome.error = error.message; }
+    finally {
+      if (job) await call(page, 'job:action', { id: job.id, action: 'cancel' }).catch(() => {});
+      await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+      report.liveMedia.push(outcome); console.log('LIVE_MEDIA', JSON.stringify(outcome));
+    }
+  }
+  if (process.env.NYAN_REQUIRE_LIVE_AUDIO && report.liveMedia.some(m => !m.verifiedAudio)) process.exitCode = 1;
+} catch (error) { report.passed = false; report.error = error.stack; process.exitCode = 1; }
+finally {
+  writeFileSync(join(reports, 'audio-report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));
+  monitor?.kill(); await application?.close(); engine.close(); rmSync(directory, { recursive: true, force: true });
+}

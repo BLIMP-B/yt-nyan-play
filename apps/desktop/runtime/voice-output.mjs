@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
-  createAudioResource, StreamType, NoSubscriberBehavior,
+  createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus,
 } from '@discordjs/voice';
 
 export class PcmMixer extends Readable {
@@ -11,14 +11,19 @@ export class PcmMixer extends Readable {
     super({ highWaterMark: 3840 * 5 }); this.media = Buffer.alloc(0); this.speech = [];
     this.ducking = 0.35; this.mediaVolume = 0.7;
     this.timer = setInterval(() => this.frame(), 20);
+    this.watchdog = setInterval(() => {
+      if (this.speech.some(track => Date.now() - track.progressAt > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
+    }, 1000);
   }
   _read() {}
-  addMedia(chunk) { this.media = Buffer.concat([this.media, chunk]).subarray(-192000); }
+  addMedia(chunk) { if (!this.destroyed) this.media = Buffer.concat([this.media, chunk]).subarray(-192000); }
   clearMedia() { this.media = Buffer.alloc(0); }
   addSpeech(buffer, volume, signal) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
-      const track = { buffer, position: 0, volume, resolve, reject };
+      if (this.destroyed || this.readableEnded) throw new Error('Discord音声ストリームが終了しました。次の読み上げで再接続します');
+      if (!buffer.length) throw new Error('再生する音声が空です');
+      const track = { buffer, position: 0, volume, resolve, reject, progressAt: Date.now() };
       track.abort = () => { this.speech = this.speech.filter(t => t !== track); reject(new DOMException('Cancelled', 'AbortError')); };
       track.signal = signal; signal?.addEventListener('abort', track.abort, { once: true }); this.speech.push(track);
     });
@@ -34,7 +39,7 @@ export class PcmMixer extends Readable {
     }
     this.media = this.media.subarray(Math.min(3840, this.media.length));
     for (const track of [...this.speech]) {
-      track.position += 3840;
+      track.position += 3840; track.progressAt = Date.now();
       if (track.position >= track.buffer.length) {
         this.speech = this.speech.filter(t => t !== track); track.signal?.removeEventListener('abort', track.abort); track.resolve();
       }
@@ -42,7 +47,7 @@ export class PcmMixer extends Readable {
     this.push(out);
   }
   _destroy(error, callback) {
-    clearInterval(this.timer);
+    clearInterval(this.timer); clearInterval(this.watchdog);
     for (const track of this.speech) { track.signal?.removeEventListener('abort', track.abort); track.reject(error || new Error('音声接続が終了しました')); }
     this.speech = []; callback(error);
   }
@@ -76,24 +81,32 @@ export class VoiceOutput {
     const channelId = overrideChannel || binding?.voiceChannelId;
     if (!channelId) throw new Error('音声チャンネルを設定してください');
     const existing = this.connections.get(guildId);
-    if (existing && existing.channelId === channelId && existing.connection.state.status === VoiceConnectionStatus.Ready) return existing;
+    if (existing && existing.channelId === channelId && existing.connection.state.status === VoiceConnectionStatus.Ready && !existing.mixer.destroyed && existing.player.state.status !== AudioPlayerStatus.Idle) return existing;
     this.disconnect(guildId);
     const client = this.getClient(); if (!client?.isReady()) throw new Error('Discord Botに接続してください');
     const channel = await client.channels.fetch(channelId);
     if (this.getClient() !== client || !client.isReady()) throw new Error('Discord接続が終了しました');
     if (!channel?.isVoiceBased() || channel.guildId !== guildId) throw new Error('指定した音声チャンネルを利用できません');
     const connection = joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: true });
-    const mixer = new PcmMixer(); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
+    const mixer = new PcmMixer(); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
     const entry = { connection, mixer, player, channelId }; this.connections.set(guildId, entry);
     connection.on('error', error => this.log('error', `音声接続: ${error.message}`));
-    player.on('error', error => this.log('error', `音声再生: ${error.message}`));
+    const failed = error => {
+      if (this.connections.get(guildId) !== entry) return;
+      this.log('error', `音声再生 (${guildId}): ${error.message}`); this.disconnect(guildId);
+    };
+    player.on('error', failed);
+    mixer.on('error', failed);
+    player.on(AudioPlayerStatus.Idle, () => failed(new Error('音声ストリームが停止しました。次の読み上げで再接続します')));
     connection.on(VoiceConnectionStatus.Disconnected, async () => {
       try { await Promise.race([entersState(connection, VoiceConnectionStatus.Signalling, 5000), entersState(connection, VoiceConnectionStatus.Connecting, 5000)]); }
       catch { if (this.connections.get(guildId) === entry) this.disconnect(guildId); }
     });
     try { await entersState(connection, VoiceConnectionStatus.Ready, 20000); }
     catch { this.disconnect(guildId); throw new Error('Discord音声接続を確立できません。接続・発言権限と回線を確認してください'); }
-    connection.subscribe(player); player.play(createAudioResource(mixer, { inputType: StreamType.Raw })); return entry;
+    try { connection.subscribe(player); player.play(createAudioResource(mixer, { inputType: StreamType.Raw })); }
+    catch (error) { this.disconnect(guildId); throw error; }
+    return entry;
   }
   async speech(guildId, buffer, volume, signal, priority = 0) {
     const controller = new AbortController(); const playbackSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
