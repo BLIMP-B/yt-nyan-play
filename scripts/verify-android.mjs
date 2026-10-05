@@ -41,7 +41,15 @@ try {
     writeFileSync(join(reports, 'android-play.png'), png);
   }
   console.log('ANDROID_INSTALL_VERIFIED ' + JSON.stringify(report));
-} catch (e) { report.error = e.message; console.error(e); process.exitCode = 1; }
+} catch (e) {
+  report.error = e.message; report.errorState = e.state; console.error(e); process.exitCode = 1;
+  if (android.status === 'running') {
+    try {
+      writeFileSync(join(reports, 'android-failure.png'), await android.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 }));
+      writeFileSync(join(reports, 'android-display.txt'), await android.adb(['shell', 'dumpsys', 'window', 'displays']));
+    } catch (diagnosticError) { report.diagnosticError = diagnosticError.message; }
+  }
+}
 finally {
   clearTimeout(timeout); await android.stop().catch(() => {}); android.close(); report.emulatorOutput = android.emulatorLog; report.bootAttempts = android.bootAttempts;
   writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2));

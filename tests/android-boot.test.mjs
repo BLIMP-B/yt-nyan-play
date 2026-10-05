@@ -42,6 +42,7 @@ test('Play readiness recovers a first-boot launcher ANR and requires the actual 
   let clock = 0, recovered = false, launches = 0; const stopped = [];
   const state = await waitForPlayWindow(async args => {
     if (args.includes('force-stop')) { stopped.push(args.at(-1)); recovered = true; return ''; }
+    assert.deepEqual(args, ['shell', 'dumpsys', 'window', 'displays']);
     return recovered ? 'mCurrentFocus=Window{123 u0 com.android.vending/com.google.android.finsky.activities.MainActivity}' : 'mCurrentFocus=Window{123 u0 Application Not Responding: com.google.android.apps.nexuslauncher}';
   }, async () => { launches++; }, { now: () => clock, delay: async ms => { clock += ms; } });
   assert.deepEqual(stopped, ['com.google.android.apps.nexuslauncher']); assert.equal(launches, 1); assert.equal(state.launcherRecovered, true); assert.ok(state.elapsedMs >= 3000);

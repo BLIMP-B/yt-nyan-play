@@ -42,11 +42,12 @@ export async function waitForPlayWindow(adb, launch, {
   signal, maxMs = 120000, now = Date.now,
   delay = ms => wait(ms, undefined, { signal }), changed = () => {},
 } = {}) {
-  const began = now(); let stable = 0, recovered = false, focus = '';
+  const began = now(); let stable = 0, recovered = false, focus = '', lastError = '';
   while (now() - began < maxMs) {
     signal?.throwIfAborted();
     try {
-      const windows = await adb(['shell', 'dumpsys', 'window', 'windows'], { signal, timeout: 10000 });
+      // Android 15 keeps current focus in DisplayContent, not the windows-only dump.
+      const windows = await adb(['shell', 'dumpsys', 'window', 'displays'], { signal, timeout: 10000 });
       focus = windows.match(/mCurrentFocus[^\r\n]*/)?.[0] || '';
       // First-boot launcher ANRs can cover an already-resumed Play activity.
       // Recover only this launcher, never dismiss errors from arbitrary user apps.
@@ -57,10 +58,10 @@ export async function waitForPlayWindow(adb, launch, {
       } else if (/com\.android\.vending\//.test(focus) && !/Application (?:Not Responding|Error)/.test(focus)) {
         if (++stable >= 3) return { focus, launcherRecovered: recovered, elapsedMs: now() - began };
       } else stable = 0;
-    } catch (error) { signal?.throwIfAborted(); stable = 0; }
+    } catch (error) { signal?.throwIfAborted(); lastError = error.message; stable = 0; }
     await delay(1000);
   }
-  throw new AndroidBootError('Google Playの画面を準備できませんでした。Android画面とネットワーク接続を確認してください', { focus });
+  throw new AndroidBootError('Google Playの画面を準備できませんでした。Android画面とネットワーク接続を確認してください', { focus, lastError });
 }
 
 export function emulatorArguments(config, { recovery = false, cores = 2 } = {}) {
