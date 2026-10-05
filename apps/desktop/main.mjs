@@ -266,24 +266,60 @@ else {
         const initial = await window.nyan.invoke('state');
         if (!initial.ok || document.querySelector('#style-id').options.length !== 8) return false;
         if ([...document.querySelector('#media-mode').options].map(o => o.value).join(',') !== 'preview,full,direct' || document.querySelector('#media-loop')) return false;
+        const themeButton = document.querySelector('#theme-toggle');
+        const iconButton = (button, icon, label) => button?.dataset.icon === icon && button.getAttribute('aria-label') === label && button.title === label && button.querySelector('svg use') && !button.textContent.trim();
+        if (!iconButton(themeButton, 'moon', 'ダークモードに切り替え')) return false;
+        if ([...document.querySelectorAll('button')].some(button => !button.querySelector('svg use') || !button.getAttribute('aria-label') || !button.title)) return false;
+        for (const button of document.querySelectorAll('nav button')) {
+          button.click();
+          if (document.querySelector('#page-title').textContent !== button.dataset.label || document.querySelector('[data-panel="' + button.dataset.view + '"]').hidden) return false;
+        }
+        document.querySelector('#pause-toggle').click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const paused = await window.nyan.invoke('state');
+        if (!paused.value.paused.media || !paused.value.paused.speech || !iconButton(document.querySelector('#pause-toggle'), 'play', '再開')) return false;
+        document.querySelector('#pause-toggle').click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        if (!iconButton(document.querySelector('#pause-toggle'), 'pause', '一時停止')) return false;
         document.querySelector('[data-view="dictionary"]').click();
+        if (document.querySelector('#page-title').textContent !== '読み方の辞書') return false;
         document.querySelector('#dict-source').value = '<img src=x onerror=alert(1)>';
         document.querySelector('#dict-replacement').value = 'ねこ';
         document.querySelector('#dictionary-form').requestSubmit();
         await new Promise(resolve => setTimeout(resolve, 300));
         const saved = await window.nyan.invoke('state');
         if (!saved.ok || saved.value.config.dictionary.length !== 1 || document.querySelector('#dictionary-list img') || document.querySelector('[data-panel="dictionary"]').hidden) return false;
+        const remove = document.querySelector('#dictionary-list button');
+        if (!iconButton(remove, 'trash-2', '<img src=x onerror=alert(1)> → ねこを削除')) return false;
+        remove.click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        if ((await window.nyan.invoke('state')).value.config.dictionary.length !== 0) return false;
+        document.querySelector('[data-view="connections"]').click();
+        for (const [id, value] of Object.entries({ 'binding-guild': '100000000000000001', 'binding-label': '操作確認', 'binding-voice': '100000000000000002', 'binding-text': '100000000000000003' })) document.getElementById(id).value = value;
+        document.querySelector('#binding-form').requestSubmit();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const channelToggle = document.querySelector('#binding-list .channel-controls button');
+        if (channelToggle?.getAttribute('aria-pressed') !== 'true') return false;
+        channelToggle.click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const binding = (await window.nyan.invoke('state')).value.config.bot.bindings[0];
+        if (binding.disabledTextChannelIds.join(',') !== '100000000000000003' || document.querySelector('#binding-list .channel-controls button')?.getAttribute('aria-pressed') !== 'false') return false;
+        document.querySelector('#binding-list .row-actions [data-icon="trash-2"]').click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        if ((await window.nyan.invoke('state')).value.config.bot.bindings.length !== 0) return false;
         document.querySelector('#theme-toggle').click();
         await new Promise(resolve => setTimeout(resolve, 300));
         const dark = await window.nyan.invoke('state');
-        if (dark.value.config.desktop.theme !== 'dark' || document.body.dataset.theme !== 'dark' || !document.body.classList.contains('vs-dark')) return false;
+        if (dark.value.config.desktop.theme !== 'dark' || document.body.dataset.theme !== 'dark' || !document.body.classList.contains('vs-dark') || !iconButton(themeButton, 'sun', 'ライトモードに切り替え')) return false;
+        const themeStyle = getComputedStyle(document.body);
+        if (themeStyle.getPropertyValue('--line').trim() !== themeStyle.getPropertyValue('--vscode-editorGroup-border').trim() || themeStyle.getPropertyValue('--muted').trim() !== themeStyle.getPropertyValue('--vscode-descriptionForeground').trim()) return false;
         if (${process.env.NYAN_SCREENSHOT_THEME === 'dark'}) return true;
-        document.querySelector('#theme-toggle').click();
+        document.dispatchEvent(new KeyboardEvent('keydown', { ctrlKey: true, shiftKey: true, code: 'KeyL', bubbles: true }));
         await new Promise(resolve => setTimeout(resolve, 300));
-        return document.body.dataset.theme === 'light';
+        return document.body.dataset.theme === 'light' && iconButton(themeButton, 'moon', 'ダークモードに切り替え');
       })()`, true);
       if (!verified) throw new Error('画面と設定保存のスモークテストが失敗しました');
-      if (process.env.NYAN_SCREENSHOT_PATH) { window.webContents.executeJavaScript(`document.querySelector('[data-view="overview"]').click()`); await new Promise(resolve => setTimeout(resolve, 150)); const picture = await window.webContents.capturePage(); writeFileSync(process.env.NYAN_SCREENSHOT_PATH, picture.toPNG()); }
+      if (process.env.NYAN_SCREENSHOT_PATH) { await window.webContents.executeJavaScript(`document.querySelector('[data-view="overview"]').click(); document.querySelector('#toast').hidden = true;`); await new Promise(resolve => setTimeout(resolve, 150)); const picture = await window.webContents.capturePage(); writeFileSync(process.env.NYAN_SCREENSHOT_PATH, picture.toPNG()); }
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });

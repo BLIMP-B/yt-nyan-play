@@ -1,3 +1,5 @@
+import { decorateButton } from './icons.js';
+
 (() => {
   const api = window.nyan;
   if (!api) return;
@@ -9,17 +11,17 @@
   async function invoke(action, data) { const result = await api.invoke(action, data); if (!result.ok) throw new Error(result.error); return result.value; }
   function task(callback) { return async event => { event?.preventDefault(); const button = event?.currentTarget; if (button?.tagName === 'BUTTON') button.disabled = true; try { await callback(event); } catch (e) { toast(e.message, true); } finally { if (button?.tagName === 'BUTTON') button.disabled = false; } }; }
   function node(tag, text, className) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; }
-  function button(text, callback) { const e = node('button', text, 'secondary monaco-button monaco-text-button default-colors'); e.type = 'button'; e.addEventListener('click', task(callback)); return e; }
-  function row(title, detail, controls = []) { const e = node('div', undefined, 'list-row'); const body = node('div', undefined, 'details'); body.append(node('strong', title), node('small', detail)); e.append(body, ...controls); return e; }
+  function button(text, name, callback) { const e = node('button', undefined, 'secondary'); e.type = 'button'; e.setAttribute('data-icon-only', ''); decorateButton(e, name, text); if (name === 'trash-2') e.setAttribute('data-danger', ''); e.addEventListener('click', task(callback)); return e; }
+  function row(title, detail, controls = []) { const e = node('div', undefined, 'list-row'); const body = node('div', undefined, 'details'); body.append(node('strong', title), node('small', detail)); e.append(body); if (controls.length) { const actions = node('div', undefined, 'row-actions'); actions.append(...controls); e.append(actions); } return e; }
   function empty(target, text) { target.replaceChildren(node('p', text, 'subtle')); }
   function getPath(object, path) { return path.split('.').reduce((o, k) => o[k], object); }
   function setPath(object, path, value) { const keys = path.split('.'); const last = keys.pop(); keys.reduce((o, k) => o[k], object)[last] = value; }
   function draft() { const c = structuredClone(state.config); document.querySelectorAll('[data-config]').forEach(input => setPath(c, input.dataset.config, input.type === 'checkbox' ? input.checked : input.hasAttribute('data-number') ? Number(input.value) : input.hasAttribute('data-list') ? input.value.split(/[,\n、]/).map(s => s.trim()).filter(Boolean) : input.value)); return c; }
   function fillConfig() { document.querySelectorAll('[data-config]').forEach(input => { const value = getPath(state.config, input.dataset.config); if (input.type === 'checkbox') input.checked = value; else input.value = Array.isArray(value) ? value.join(', ') : value; }); }
   async function save(c = draft()) { state = await invoke('config:save', c); renderStyles(); fillConfig(); render(state); document.querySelectorAll('.guild-picker[data-config]').forEach(input => { input.value = getPath(state.config, input.dataset.config); }); toast('設定を保存しました'); }
-  function navigate(view) { document.querySelectorAll('[data-panel]').forEach(e => { e.hidden = e.dataset.panel !== view; }); document.querySelectorAll('nav [data-view]').forEach(e => e.classList.toggle('active', e.dataset.view === view)); $('page-title').textContent = document.querySelector(`nav [data-view="${view}"]`).textContent.slice(1).trim(); }
+  function navigate(view) { document.querySelectorAll('[data-panel]').forEach(e => { e.hidden = e.dataset.panel !== view; }); document.querySelectorAll('nav [data-view]').forEach(e => { const active = e.dataset.view === view; e.classList.toggle('active', active); if (active) e.setAttribute('aria-current', 'page'); else e.removeAttribute('aria-current'); }); $('page-title').textContent = document.querySelector(`nav [data-view="${view}"]`).dataset.label; }
   function renderStyles() { const source = speakers.length ? speakers : fallbackStyles; document.querySelectorAll('#style-id,.style-picker').forEach(select => { const previous = select.value || String(state?.config.speech.styleId ?? 3); select.replaceChildren(); for (const speaker of source) { const group = node('optgroup'); group.label = speaker.name; for (const style of speaker.styles.filter(s => !s.type || s.type === 'talk')) { const option = node('option', `${speaker.name}・${style.name}`); option.value = style.id; group.append(option); } select.append(group); } if (![...select.options].some(o => o.value === previous)) { const option = node('option', `声種ID ${previous}`); option.value = previous; select.append(option); } select.value = previous; }); }
-  function renderJobs() { if (!state) return; const target = $('job-list'), filter = $('queue-filter').value; target.replaceChildren(); const jobs = state.jobs.filter(j => filter === 'all' || (filter === 'failed' ? ['failed', 'interrupted'].includes(j.status) : j.status === filter)); for (const job of jobs.slice(0, 300)) { const controls = []; if (['waiting', 'running'].includes(job.status)) controls.push(button('取消', async () => render(await invoke('job:action', { id: job.id, action: 'cancel' })))); else controls.push(button('再実行', async () => render(await invoke('job:action', { id: job.id, action: 'retry' })))); target.append(row(`${job.kind === 'media' ? '▶' : '◉'} ${job.payload.title || job.payload.text || job.payload.url}`, `${labels[job.status]} · ${new Date(job.createdAt).toLocaleString('ja-JP')}${job.error ? ` · ${job.error}` : ''}`, controls)); } if (!jobs.length) empty(target, '該当するリクエストはありません。'); }
+  function renderJobs() { if (!state) return; const target = $('job-list'), filter = $('queue-filter').value; target.replaceChildren(); const jobs = state.jobs.filter(j => filter === 'all' || (filter === 'failed' ? ['failed', 'interrupted'].includes(j.status) : j.status === filter)); for (const job of jobs.slice(0, 300)) { const controls = []; if (['waiting', 'running'].includes(job.status)) controls.push(button('リクエストを取り消す', 'x', async () => render(await invoke('job:action', { id: job.id, action: 'cancel' })))); else controls.push(button('リクエストを再実行', 'refresh-cw', async () => render(await invoke('job:action', { id: job.id, action: 'retry' })))); target.append(row(`${job.kind === 'media' ? '▶' : '◉'} ${job.payload.title || job.payload.text || job.payload.url}`, `${labels[job.status]} · ${new Date(job.createdAt).toLocaleString('ja-JP')}${job.error ? ` · ${job.error}` : ''}`, controls)); } if (!jobs.length) empty(target, '該当するリクエストはありません。'); }
   function renderCollections() {
     const c = state.config;
     const collections = [
@@ -29,17 +31,46 @@
       ['binding-list', c.bot.bindings, b => [b.label || b.guildId, `受信 ${b.textChannelIds.join(', ')} → 音声 ${b.voiceChannelId}`], (config, b) => { config.bot.bindings = config.bot.bindings.filter(x => x.guildId !== b.guildId); }],
       ['forward-list', c.speech.forwarding, f => [`${f.fromGuildId} → ${f.toGuildId}`, { 'one-way': '片方向', 'two-way': '双方向', none: '転送なし' }[f.mode]], (config, f) => { config.speech.forwarding = config.speech.forwarding.filter(x => x.fromGuildId !== f.fromGuildId || x.toGuildId !== f.toGuildId); }],
     ];
-    for (const [id, values, describe, remove] of collections) { const target = $(id); target.replaceChildren(); for (const value of values) { const controls = [button('削除', async () => { const config = draft(); remove(config, value); await save(config); })]; if (id === 'binding-list') { controls.unshift(button('参加', async () => render(await invoke('voice:join', value.guildId))), button('退出', async () => render(await invoke('voice:leave', value.guildId)))); for (const channel of [...new Set([...value.textChannelIds, value.voiceChannelId])]) controls.push(button(`${channel}: ${value.disabledTextChannelIds.includes(channel) ? '読み上げONへ' : '読み上げOFFへ'}`, async () => { const config = draft(), binding = config.bot.bindings.find(b => b.guildId === value.guildId); binding.disabledTextChannelIds = binding.disabledTextChannelIds.includes(channel) ? binding.disabledTextChannelIds.filter(id => id !== channel) : binding.disabledTextChannelIds.concat(channel); await save(config); })); } target.append(row(...describe(value), controls)); } if (!values.length) empty(target, 'まだ登録されていません。'); }
+    for (const [id, values, describe, remove] of collections) {
+      const target = $(id); target.replaceChildren();
+      for (const value of values) {
+        const [title, detail] = describe(value);
+        const controls = [button(`${title}を削除`, 'trash-2', async () => { const config = draft(); remove(config, value); await save(config); })];
+        if (id === 'binding-list') controls.unshift(
+          button(`${title}の音声チャンネルに参加`, 'log-in', async () => render(await invoke('voice:join', value.guildId))),
+          button(`${title}の音声チャンネルから退出`, 'log-out', async () => render(await invoke('voice:leave', value.guildId))),
+        );
+        const item = row(title, detail, controls);
+        if (id === 'binding-list') {
+          const channels = node('div', undefined, 'channel-controls');
+          for (const channel of [...new Set([...value.textChannelIds, value.voiceChannelId])]) {
+            const enabled = !value.disabledTextChannelIds.includes(channel);
+            const toggle = button(`${channel}: 読み上げを${enabled ? '無効' : '有効'}にする`, enabled ? 'volume-2' : 'volume-x', async () => {
+              const config = draft(), binding = config.bot.bindings.find(b => b.guildId === value.guildId);
+              binding.disabledTextChannelIds = binding.disabledTextChannelIds.includes(channel) ? binding.disabledTextChannelIds.filter(id => id !== channel) : binding.disabledTextChannelIds.concat(channel);
+              await save(config);
+            });
+            toggle.setAttribute('aria-label', `チャンネル ${channel} の読み上げ`);
+            toggle.setAttribute('aria-pressed', String(enabled));
+            const control = node('div', undefined, 'channel-toggle');
+            control.append(node('span', channel), toggle); channels.append(control);
+          }
+          item.querySelector('.details').append(channels);
+        }
+        target.append(item);
+      }
+      if (!values.length) empty(target, 'まだ登録されていません。');
+    }
   }
   function render(next) {
     state = next;
-    document.body.dataset.theme = state.config.desktop.theme; document.body.classList.toggle('vs-dark', state.config.desktop.theme === 'dark'); document.body.classList.toggle('vs', state.config.desktop.theme === 'light'); $('theme-toggle').textContent = state.config.desktop.theme === 'light' ? 'ダークへ' : 'ライトへ';
+    document.body.dataset.theme = state.config.desktop.theme; document.body.classList.toggle('vs-dark', state.config.desktop.theme === 'dark'); document.body.classList.toggle('vs', state.config.desktop.theme === 'light'); decorateButton($('theme-toggle'), state.config.desktop.theme === 'light' ? 'moon' : 'sun', state.config.desktop.theme === 'light' ? 'ダークモードに切り替え' : 'ライトモードに切り替え');
     if (!initialized) { renderStyles(); fillConfig(); initialized = true; }
     const status = { offline: '停止中', connecting: '接続中', online: '接続済み', reconnecting: '再接続中' }[state.bot.status] || state.bot.status;
     $('status-badge').textContent = status; $('status-badge').classList.toggle('mint', state.bot.status === 'online'); $('sidebar-status').textContent = `Bot ${status}`; $('sidebar-dot').classList.toggle('online', state.bot.status === 'online'); $('bot-start').disabled = state.bot.status !== 'offline'; $('bot-stop').disabled = state.bot.status === 'offline'; $('version').textContent = `v${state.version}`;
     $('token-state').textContent = state.tokenSaved ? '保存済み' : '未設定'; $('token-state').classList.toggle('mint', state.tokenSaved); $('token-form').querySelector('button').disabled = !state.vaultAvailable;
     if (!state.vaultAvailable) $('bot-token').placeholder = 'この環境ではOSの暗号化機能を利用できません';
-    $('pause-toggle').textContent = state.paused.media || state.paused.speech ? '再開' : '一時停止';
+    decorateButton($('pause-toggle'), state.paused.media || state.paused.speech ? 'play' : 'pause', state.paused.media || state.paused.speech ? '再開' : '一時停止');
     const current = state.jobs.filter(j => j.status === 'running'); const now = $('now-playing'); now.replaceChildren(); if (current.length) { for (const j of current) { now.append(node('strong', j.payload.title || j.payload.text || j.payload.url)); now.append(node('small', j.payload.master ? 'マスタキュー: 全サーバー共通' : `サーバー: ${j.payload.guildId || 'ローカル'}`)); } } else now.append(node('p', '再生中の項目はありません'));
     document.querySelectorAll('.guild-picker').forEach(select => { const value = select.dataset.populated ? select.value : select.dataset.config ? getPath(state.config, select.dataset.config) : select.value; select.dataset.populated = 'true'; select.replaceChildren(node('option', 'サーバー未指定')); select.firstChild.value = ''; for (const b of state.config.bot.bindings) { const option = node('option', b.label || b.guildId); option.value = b.guildId; select.append(option); } select.value = value; });
     const catalog = $('server-catalog'); catalog.replaceChildren(); for (const guild of state.bot.servers) { const detail = node('details'); detail.append(node('summary', `${guild.name} (${guild.id})`)); for (const channel of guild.channels) detail.append(node('p', `${channel.voice ? '音声' : 'テキスト'} #${channel.name} · ${channel.id}`)); catalog.append(detail); } if (!state.bot.servers.length) empty(catalog, 'Botを接続するとサーバー一覧を取得します。');
@@ -79,6 +110,7 @@
   $('import-config').addEventListener('click', task(async () => { const value = await invoke('config:import'); if (value) { render(value); renderStyles(); fillConfig(); toast('設定を読み込みました'); } }));
   $('queue-filter').addEventListener('change', renderJobs);
   $('theme-toggle').addEventListener('click', task(async () => { const c = draft(); c.desktop.theme = state.config.desktop.theme === 'light' ? 'dark' : 'light'; await save(c); }));
+  document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && event.code === 'KeyL') { event.preventDefault(); if (!$('theme-toggle').disabled) $('theme-toggle').click(); } });
   for (const [id, action] of Object.entries({ 'bouyomi-import': 'bouyomi:import', 'bouyomi-start': 'bouyomi:start', 'bouyomi-stop': 'bouyomi:stop', 'bouyomi-folder': 'bouyomi:folder' })) $(id).addEventListener('click', task(async () => { const value = await invoke(action); if (value?.config) { render(value); fillConfig(); } else render(await invoke('state')); }));
   $('android-refresh').addEventListener('click', task(async () => { await save(); await invoke('android:catalog'); render(await invoke('state')); toast('Androidバージョン一覧を更新しました'); }));
   $('android-image').addEventListener('change', () => { $('android-accept').checked = false; });
@@ -91,7 +123,8 @@
   $('forward-form').addEventListener('submit', task(async () => { const c = draft(), f = { fromGuildId: $('forward-from').value, toGuildId: $('forward-to').value, mode: $('forward-mode').value }; c.speech.forwarding = c.speech.forwarding.filter(x => x.fromGuildId !== f.fromGuildId || x.toGuildId !== f.toGuildId); c.speech.forwarding.push(f); await save(c); }));
   for (const [id, action] of Object.entries({ 'twitter-start': 'twitter:start', 'twitter-stop': 'twitter:stop', 'twitter-login': 'twitter:login', 'twitter-logout': 'twitter:logout', 'twitter-token-clear': 'twitter:app-token-clear' })) $(id).addEventListener('click', task(async () => { if (['twitter:start', 'twitter:login'].includes(action)) await save(); await invoke(action); render(await invoke('state')); }));
   $('twitter-token-form').addEventListener('submit', task(async () => { await invoke('twitter:app-token', $('twitter-app-token').value); $('twitter-app-token').value = ''; toast('X認証情報を暗号化して保存しました'); }));
-  document.querySelectorAll('button.primary,button.secondary').forEach(e => e.classList.add('monaco-button', 'monaco-text-button', 'default-colors'));
+  document.querySelectorAll('button[data-icon]').forEach(e => decorateButton(e, e.dataset.icon));
+  document.querySelector('nav .active').setAttribute('aria-current', 'page');
   api.subscribe(render);
   task(async () => { render(await invoke('state')); if (navigator.mediaDevices?.enumerateDevices) { const devices = await navigator.mediaDevices.enumerateDevices(); for (const device of devices.filter(d => d.kind === 'audiooutput' && d.deviceId)) { const option = node('option', device.label || device.deviceId); option.value = device.deviceId; $('output-device').append(option); } fillConfig(); } })();
 })();

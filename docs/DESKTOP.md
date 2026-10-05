@@ -1,10 +1,10 @@
-# にゃんとーく〜Damare〜 v0.4.0
+# にゃんとーく〜Damare〜 v0.4.1
 
 「にゃんとーく〜Damare〜」は、常時稼働するWindows PC上で、Discord.js Bot、読み上げ、専用ブラウザによるメディア再生を一つのElectronアプリから操作します。Node.js、Discord.js、Opus、FFmpegはインストーラーに含まれ、利用者のPCにNode.jsやAHKを別途導入する必要はありません。
 
 ## 導入と初回設定
 
-1. GitHub Actionsの **Desktop tests and Windows package** で成功した実行を開き、`nyan-talk-damare-windows-x64` 成果物を展開します。`NyanTalk-Damare-Setup-0.4.0-x64.exe` がインストーラー、ZIPが展開して利用する版です。Windows 10/11 x64を対象にしています。現在の配布物はコード署名を行っていません。
+1. GitHub Actionsの **Desktop tests and Windows package** で成功した実行を開き、`nyan-talk-damare-windows-x64` 成果物を展開します。`NyanTalk-Damare-Setup-0.4.1-x64.exe` がインストーラー、ZIPが展開して利用する版です。Windows 10/11 x64を対象にしています。現在の配布物はコード署名を行っていません。
 2. VOICEVOXを導入して起動するか、VOICEVOX Engineの `run.exe` を「声と読み上げ」で選択します。既定のAPIは `http://127.0.0.1:50021`。実行ファイルを選んだ場合はアプリがエンジンを起動・終了します。エンジンとモデルの同梱はこの版では未実施です。
 3. Discord Developer PortalでBotを作成し、**MESSAGE CONTENT INTENT** を有効にします。Botをサーバーへ招待し、対象チャンネルで「チャンネルを見る」「メッセージ履歴を読む」「メッセージを送信」「接続」「発言」を許可します。管理者権限を与える必要はありません。
 4. 「Discord接続」でBotトークンを保存して「Botを開始」。トークンはWindowsのDPAPIで暗号化して保存し、画面・設定のエクスポートには戻しません。
@@ -101,7 +101,7 @@ X Developer PortalのAPI2利用権限が必要です。公開アカウントはA
 
 ## テーマと棒読みちゃんの移行
 
-ヘッダーの「ダークへ / ライトへ」で切り替え、次回起動にも保存します。Microsoft VS Codeの公式CSSとModernテーマの定義を固定バージョンで取得しています。装飾用の英語字幕・バナーはありません。
+ヘッダーの月／太陽アイコン、または Ctrl＋Shift＋L でライト／ダークを切り替え、次回起動にも保存します。アイコンにマウスを重ねると操作名が表示され、TabとEnter／Spaceでも操作できます。再生・更新・削除などはアイコン、保存・取り込みなどはアイコンと操作名で表示します。CSV nyaan Viewerのコンパクトな操作部を参考にし、配色はMicrosoft VS Codeの公式CSSとModernテーマの定義を使用します。装飾用の英語字幕・バナーはありません。
 
 「読み方の辞書」で棒読みちゃんのZIPを取り込み、元アプリを起動します。原本の全設定・辞書を保持し、原文をネイティブ辞書処理へ送るモードを備えます。現在はローカル音声の経路です。[取得設定・長文加速等の移行一覧](BOUYOMI_IMPORT.md)をリリース前の指定確認に使用してください。棒読みちゃん本体でのWindows実行比較は未完了です。
 
