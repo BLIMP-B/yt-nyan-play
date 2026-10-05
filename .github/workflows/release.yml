@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - releases/current.json
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -131,6 +132,18 @@ jobs:
           JS
           cd release-assets
           sha256sum *.exe *.zip > SHA256SUMS.txt
+      - name: Register the tag for the verified source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+          RELEASE_SOURCE_SHA: ${{ steps.selection.outputs.sha }}
+        run: |
+          if EXISTING_TAG_SHA=$(gh api "repos/$RELEASE_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null); then
+            test "$EXISTING_TAG_SHA" = "$RELEASE_SOURCE_SHA"
+          else
+            gh api --method POST "repos/$RELEASE_REPOSITORY/git/refs" --field ref="refs/tags/$RELEASE_TAG" --field sha="$RELEASE_SOURCE_SHA" > /dev/null
+          fi
       - name: Publish the combined prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -150,7 +163,7 @@ jobs:
             gh release upload "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --clobber
             gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft=false --latest=false
           else
-            gh release create "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --target "$RELEASE_SOURCE_SHA" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft
+            gh release create "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --verify-tag --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft
             gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --draft=false --latest=false
           fi
           gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json url,assets
