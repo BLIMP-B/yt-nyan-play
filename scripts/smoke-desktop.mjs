@@ -1,11 +1,11 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const directory = mkdtempSync(join(tmpdir(), 'nyan-smoke-'));
-const environment = { ...process.env, NYAN_DATA_DIR: directory };
+const environment = { ...process.env, NYAN_DATA_DIR: directory, NYAN_SMOKE_CATALOG: readFileSync(join(import.meta.dirname, 'fixtures/discord-servers.json'), 'utf8') };
 delete environment.ELECTRON_RUN_AS_NODE;
 // This test loads only local fixtures. Hosted Linux runners cannot use Electron's SUID helper.
 const child = spawn(require('electron'), [resolve(import.meta.dirname, '..'), '--smoke', ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], {

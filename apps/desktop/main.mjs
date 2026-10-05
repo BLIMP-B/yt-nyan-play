@@ -9,6 +9,7 @@ import { SpeechPool } from './core/speech-pool.mjs';
 import { Voicevox } from './core/voicevox.mjs';
 import { parseMediaCommand, mediaAnnouncement } from './core/protocol.mjs';
 import { DiscordBot } from './runtime/bot.mjs';
+import { APP_ICON, APP_ID } from './runtime/app-icon.mjs';
 import { VoiceOutput } from './runtime/voice-output.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
 import { Vault } from './runtime/vault.mjs';
@@ -24,7 +25,9 @@ import { speechTargets, applyDictionary } from './core/text.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const smoke = process.argv.includes('--smoke');
+const smokeCatalog = smoke && process.env.NYAN_SMOKE_CATALOG ? JSON.parse(process.env.NYAN_SMOKE_CATALOG) : [];
 app.setName('にゃんとーく〜Damare〜');
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 app.setPath('userData', join(app.getPath('appData'), 'nyan-talk-damare'));
 if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR);
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -39,7 +42,7 @@ else {
     stateTimer = setTimeout(() => { stateTimer = null; if (!window.isDestroyed()) window.webContents.send('nyan:state', snapshot()); }, 80);
   };
   const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
-    bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: bot.catalog() },
+    bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
     voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs,
     paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot() });
   const audioCommand = (type, data, signal, timeout = 180000) => new Promise((resolve, reject) => {
@@ -233,7 +236,7 @@ else {
       log: (level, text) => store.log(level, text), logout: () => { for (const job of speechRunner.activeJobs) if (job.payload.privateOwnerId) speechRunner.forJob(job).skip(); for (const job of store.jobs) if (job.payload.privateOwnerId) { job.payload.text = '[非公開投稿]'; if (job.status === 'waiting') job.status = 'cancelled'; } store.saveState(); },
     }, (url, options) => net.fetch(url, options)); twitter.on('change', emitState);
     window = new BrowserWindow({ width: 1260, height: 850, minWidth: 900, minHeight: 680, title: 'にゃんとーく〜Damare〜',
-      icon: join(directory, '../../extension/furoneko70furoneko70.png'), backgroundColor: '#f6f7fb', show: false,
+      icon: APP_ICON, backgroundColor: '#f6f7fb', show: false,
       webPreferences: { preload: join(directory, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); window.webContents.on('will-navigate', event => event.preventDefault());
     const uiSession = window.webContents.session;
@@ -254,7 +257,7 @@ else {
     store.on('change', () => { const entry = store.logs[0]; if (entry?.level === 'error' && entry !== notifiedEntry && getConfig().desktop.notifications && Date.now() - notificationAt > 15000 && Notification.isSupported()) { notificationAt = Date.now(); notifiedEntry = entry; new Notification({ title: 'にゃんとーく〜Damare〜', body: entry.text }).show(); } });
     await window.loadFile(join(directory, 'renderer/index.html'));
     if (!smoke) await twitter.restore();
-    tray = new Tray(join(directory, '../../extension/furoneko70furoneko70.png')); tray.setToolTip('にゃんとーく〜Damare〜');
+    tray = new Tray(APP_ICON); tray.setToolTip('にゃんとーく〜Damare〜');
     tray.setContextMenu(Menu.buildFromTemplate([{ label: 'にゃんとーく〜Damare〜を開く', click: () => window.show() }, { label: 'Botを開始', click: () => startBot().catch(e => store.log('error', e.message)) }, { label: 'Botを停止', click: stopBot }, { type: 'separator' }, { label: '終了', click: () => app.quit() }]));
     tray.on('double-click', () => window.show());
     if (!getConfig().desktop.startMinimized && !process.argv.includes('--minimized')) window.show();
@@ -295,18 +298,46 @@ else {
         await new Promise(resolve => setTimeout(resolve, 150));
         if ((await window.nyan.invoke('state')).value.config.dictionary.length !== 0) return false;
         document.querySelector('[data-view="connections"]').click();
-        for (const [id, value] of Object.entries({ 'binding-guild': '100000000000000001', 'binding-label': '操作確認', 'binding-voice': '100000000000000002', 'binding-text': '100000000000000003' })) document.getElementById(id).value = value;
-        document.querySelector('#binding-form').requestSubmit();
+        const guild = '100000000000000001';
+        const card = () => document.querySelector('[data-guild="' + guild + '"]');
+        const picker = card().querySelector('select'); picker.value = '100000000000000002'; picker.dispatchEvent(new Event('change'));
         await new Promise(resolve => setTimeout(resolve, 150));
-        const channelToggle = document.querySelector('#binding-list .channel-controls button');
-        if (channelToggle?.getAttribute('aria-pressed') !== 'true') return false;
-        channelToggle.click();
+        const channel = () => card().querySelector('[data-channel="100000000000000003"]');
+        if (channel().disabled || channel().checked || !card().querySelector('[data-channel="100000000000000005"]').disabled) return false;
+        channel().click();
         await new Promise(resolve => setTimeout(resolve, 150));
-        const binding = (await window.nyan.invoke('state')).value.config.bot.bindings[0];
-        if (binding.disabledTextChannelIds.join(',') !== '100000000000000003' || document.querySelector('#binding-list .channel-controls button')?.getAttribute('aria-pressed') !== 'false') return false;
-        document.querySelector('#binding-list .row-actions [data-icon="trash-2"]').click();
+        if (!(await window.nyan.invoke('state')).value.config.bot.bindings[0].textChannelIds.includes('100000000000000003') || !channel().checked) return false;
+        channel().click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        let binding = (await window.nyan.invoke('state')).value.config.bot.bindings[0];
+        if (binding.disabledTextChannelIds.join(',') !== '100000000000000003' || channel().checked || !binding.textChannelIds.includes('100000000000000003')) return false;
+        const all = () => card().querySelector('[data-focus-key="' + guild + ':all"]');
+        if (!all().indeterminate) return false;
+        all().click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        binding = (await window.nyan.invoke('state')).value.config.bot.bindings[0];
+        if (!all().checked || binding.textChannelIds.length !== 3 || binding.disabledTextChannelIds.length || binding.textChannelIds.includes('100000000000000005')) return false;
+        const read = () => card().querySelector('[data-focus-key="' + guild + ':read"]');
+        read().click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        if ((await window.nyan.invoke('state')).value.config.bot.bindings[0].readEnabled !== false || read().checked || !channel().checked) return false;
+        card().querySelector('[data-focus-key="' + guild + ':notify"]').click();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        if ((await window.nyan.invoke('state')).value.config.bot.bindings[0].announceJoinLeave !== true) return false;
+        card().querySelector('select').value = '100000000000000006'; card().querySelector('select').dispatchEvent(new Event('change'));
+        await new Promise(resolve => setTimeout(resolve, 150));
+        binding = (await window.nyan.invoke('state')).value.config.bot.bindings[0];
+        if (binding.voiceChannelId !== '100000000000000006' || !binding.textChannelIds.includes('100000000000000002') || !card().querySelector('[data-channel="100000000000000002"]').checked) return false;
+        card().querySelector('[data-icon="trash-2"]').click();
         await new Promise(resolve => setTimeout(resolve, 150));
         if ((await window.nyan.invoke('state')).value.config.bot.bindings.length !== 0) return false;
+        document.querySelector('#binding-manual').open = true;
+        for (const [id, value] of Object.entries({ 'binding-guild': guild, 'binding-label': 'にゃんとーく', 'binding-voice': '100000000000000002', 'binding-text': '100000000000000003,100000000000000004' })) document.getElementById(id).value = value;
+        document.querySelector('#binding-form').requestSubmit();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        binding = (await window.nyan.invoke('state')).value.config.bot.bindings[0];
+        if (!binding.readEnabled || binding.textChannelIds.length !== 2 || !channel().checked) return false;
+        document.querySelector('#binding-manual').open = false;
         document.querySelector('#theme-toggle').click();
         await new Promise(resolve => setTimeout(resolve, 300));
         const dark = await window.nyan.invoke('state');
@@ -319,7 +350,7 @@ else {
         return document.body.dataset.theme === 'light' && iconButton(themeButton, 'moon', 'ダークモードに切り替え');
       })()`, true);
       if (!verified) throw new Error('画面と設定保存のスモークテストが失敗しました');
-      if (process.env.NYAN_SCREENSHOT_PATH) { await window.webContents.executeJavaScript(`document.querySelector('[data-view="overview"]').click(); document.querySelector('#toast').hidden = true;`); await new Promise(resolve => setTimeout(resolve, 150)); const picture = await window.webContents.capturePage(); writeFileSync(process.env.NYAN_SCREENSHOT_PATH, picture.toPNG()); }
+      if (process.env.NYAN_SCREENSHOT_PATH) { const panel = process.env.NYAN_SCREENSHOT_PANEL === 'connections' ? 'connections' : 'overview'; await window.webContents.executeJavaScript(`document.querySelector('[data-view="${panel}"]').click(); document.querySelector('#toast').hidden = true;`); await new Promise(resolve => setTimeout(resolve, 150)); const picture = await window.webContents.capturePage(); writeFileSync(process.env.NYAN_SCREENSHOT_PATH, picture.toPNG()); }
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });

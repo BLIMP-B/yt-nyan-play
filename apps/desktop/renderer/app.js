@@ -1,10 +1,11 @@
 import { decorateButton } from './icons.js';
+import { ServerSettings } from './server-settings.js';
 
 (() => {
   const api = window.nyan;
   if (!api) return;
   const $ = id => document.getElementById(id);
-  let state, speakers = [], initialized = false, toastTimer;
+  let state, speakers = [], initialized = false, toastTimer, bindingUpdates = Promise.resolve();
   const labels = { waiting: '待機中', running: '処理中', completed: '完了', failed: '失敗', interrupted: '中断', cancelled: '取消' };
   const fallbackStyles = [{ name: 'ずんだもん', styles: [{ id: 3, name: 'ノーマル' }, { id: 1, name: 'あまあま' }, { id: 7, name: 'ツンツン' }, { id: 5, name: 'セクシー' }, { id: 22, name: 'ささやき' }, { id: 38, name: 'ヒソヒソ' }, { id: 75, name: 'ヘロヘロ' }, { id: 76, name: 'なみだめ' }] }];
   function toast(text, error = false) { $('toast').textContent = text; $('toast').className = error ? 'toast error' : 'toast'; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 12000 : 5000); }
@@ -28,7 +29,6 @@ import { decorateButton } from './icons.js';
       ['dictionary-list', c.dictionary, d => [d.source + ' → ' + d.replacement, `${d.scope}${d.scopeId ? ': ' + d.scopeId : ''}${d.regex ? ' · 正規表現' : ''}`], (config, d) => { config.dictionary = config.dictionary.filter(x => x.id !== d.id); }],
       ['profile-list', c.speech.profiles, p => [p.name || p.userId, `利用者 ${p.userId} · 声種 ${p.styleId} · 話速 ${p.speed}`], (config, p) => { config.speech.profiles = config.speech.profiles.filter(x => x.userId !== p.userId); }],
       ['clip-list', c.speech.soundClips, p => [p.trigger, p.path], (config, p) => { config.speech.soundClips = config.speech.soundClips.filter(x => x.trigger !== p.trigger); }],
-      ['binding-list', c.bot.bindings, b => [b.label || b.guildId, `受信 ${b.textChannelIds.join(', ')} → 音声 ${b.voiceChannelId}`], (config, b) => { config.bot.bindings = config.bot.bindings.filter(x => x.guildId !== b.guildId); }],
       ['forward-list', c.speech.forwarding, f => [`${f.fromGuildId} → ${f.toGuildId}`, { 'one-way': '片方向', 'two-way': '双方向', none: '転送なし' }[f.mode]], (config, f) => { config.speech.forwarding = config.speech.forwarding.filter(x => x.fromGuildId !== f.fromGuildId || x.toGuildId !== f.toGuildId); }],
     ];
     for (const [id, values, describe, remove] of collections) {
@@ -36,32 +36,39 @@ import { decorateButton } from './icons.js';
       for (const value of values) {
         const [title, detail] = describe(value);
         const controls = [button(`${title}を削除`, 'trash-2', async () => { const config = draft(); remove(config, value); await save(config); })];
-        if (id === 'binding-list') controls.unshift(
-          button(`${title}の音声チャンネルに参加`, 'log-in', async () => render(await invoke('voice:join', value.guildId))),
-          button(`${title}の音声チャンネルから退出`, 'log-out', async () => render(await invoke('voice:leave', value.guildId))),
-        );
         const item = row(title, detail, controls);
-        if (id === 'binding-list') {
-          const channels = node('div', undefined, 'channel-controls');
-          for (const channel of [...new Set([...value.textChannelIds, value.voiceChannelId])]) {
-            const enabled = !value.disabledTextChannelIds.includes(channel);
-            const toggle = button(`${channel}: 読み上げを${enabled ? '無効' : '有効'}にする`, enabled ? 'volume-2' : 'volume-x', async () => {
-              const config = draft(), binding = config.bot.bindings.find(b => b.guildId === value.guildId);
-              binding.disabledTextChannelIds = binding.disabledTextChannelIds.includes(channel) ? binding.disabledTextChannelIds.filter(id => id !== channel) : binding.disabledTextChannelIds.concat(channel);
-              await save(config);
-            });
-            toggle.setAttribute('aria-label', `チャンネル ${channel} の読み上げ`);
-            toggle.setAttribute('aria-pressed', String(enabled));
-            const control = node('div', undefined, 'channel-toggle');
-            control.append(node('span', channel), toggle); channels.append(control);
-          }
-          item.querySelector('.details').append(channels);
-        }
         target.append(item);
       }
       if (!values.length) empty(target, 'まだ登録されていません。');
     }
   }
+  function updateBinding(guild, change) {
+    const pending = bindingUpdates.catch(() => {}).then(async () => {
+      const config = draft();
+      let binding = config.bot.bindings.find(b => b.guildId === guild.id);
+      const previousVoice = binding?.voiceChannelId;
+      if (!binding) { binding = { guildId: guild.id, label: guild.name, voiceChannelId: '', textChannelIds: [], disabledTextChannelIds: [], readEnabled: true, announceJoinLeave: null }; config.bot.bindings.push(binding); }
+      change(binding);
+      if (previousVoice && previousVoice !== binding.voiceChannelId && !binding.textChannelIds.includes(previousVoice)) binding.textChannelIds.push(previousVoice);
+      await save(config);
+      if (previousVoice && previousVoice !== binding.voiceChannelId && state.bot.status === 'online' && state.voices.some(v => v.guildId === guild.id)) render(await invoke('voice:join', guild.id));
+    });
+    bindingUpdates = pending;
+    return pending;
+  }
+  const serverSettings = new ServerSettings($('binding-list'), {
+    update: updateBinding,
+    join: async guildId => render(await invoke('voice:join', guildId)),
+    leave: async guildId => render(await invoke('voice:leave', guildId)),
+    remove: guildId => {
+      const pending = bindingUpdates.catch(() => {}).then(async () => {
+        if (state.voices.some(v => v.guildId === guildId)) render(await invoke('voice:leave', guildId));
+        const config = draft(); config.bot.bindings = config.bot.bindings.filter(b => b.guildId !== guildId); await save(config);
+      });
+      bindingUpdates = pending; return pending;
+    },
+    error: error => toast(error.message, true),
+  });
   function render(next) {
     state = next;
     document.body.dataset.theme = state.config.desktop.theme; document.body.classList.toggle('vs-dark', state.config.desktop.theme === 'dark'); document.body.classList.toggle('vs', state.config.desktop.theme === 'light'); decorateButton($('theme-toggle'), state.config.desktop.theme === 'light' ? 'moon' : 'sun', state.config.desktop.theme === 'light' ? 'ダークモードに切り替え' : 'ライトモードに切り替え');
@@ -73,7 +80,7 @@ import { decorateButton } from './icons.js';
     decorateButton($('pause-toggle'), state.paused.media || state.paused.speech ? 'play' : 'pause', state.paused.media || state.paused.speech ? '再開' : '一時停止');
     const current = state.jobs.filter(j => j.status === 'running'); const now = $('now-playing'); now.replaceChildren(); if (current.length) { for (const j of current) { now.append(node('strong', j.payload.title || j.payload.text || j.payload.url)); now.append(node('small', j.payload.master ? 'マスタキュー: 全サーバー共通' : `サーバー: ${j.payload.guildId || 'ローカル'}`)); } } else now.append(node('p', '再生中の項目はありません'));
     document.querySelectorAll('.guild-picker').forEach(select => { const value = select.dataset.populated ? select.value : select.dataset.config ? getPath(state.config, select.dataset.config) : select.value; select.dataset.populated = 'true'; select.replaceChildren(node('option', 'サーバー未指定')); select.firstChild.value = ''; for (const b of state.config.bot.bindings) { const option = node('option', b.label || b.guildId); option.value = b.guildId; select.append(option); } select.value = value; });
-    const catalog = $('server-catalog'); catalog.replaceChildren(); for (const guild of state.bot.servers) { const detail = node('details'); detail.append(node('summary', `${guild.name} (${guild.id})`)); for (const channel of guild.channels) detail.append(node('p', `${channel.voice ? '音声' : 'テキスト'} #${channel.name} · ${channel.id}`)); catalog.append(detail); } if (!state.bot.servers.length) empty(catalog, 'Botを接続するとサーバー一覧を取得します。');
+    serverSettings.render(state);
     renderJobs(); renderCollections(); const logs = $('log-list'); logs.replaceChildren(); for (const entry of state.logs) logs.append(row(entry.text, `${new Date(entry.time).toLocaleTimeString('ja-JP')} · ${entry.level}`)); if (!state.logs.length) empty(logs, 'イベントはまだありません。');
     if (state.bouyomi) {
       const legacy = state.bouyomi; $('bouyomi-state').textContent = legacy.imported ? `${legacy.version} / ${legacy.running ? '起動中' : '停止中'} / 配信者向け機能 ${legacy.broadcasterMode ? 'ON' : 'OFF'}${legacy.error ? ' / ' + legacy.error : ''}` : '未取り込み';
@@ -96,7 +103,12 @@ import { decorateButton } from './icons.js';
   $('skip-media').addEventListener('click', task(async () => render(await invoke('control', 'skip')))); $('stop-all').addEventListener('click', task(async () => render(await invoke('control', 'stop'))));
   $('token-form').addEventListener('submit', task(async () => { await invoke('token:save', $('bot-token').value); $('bot-token').value = ''; render(await invoke('state')); toast('Botトークンを暗号化して保存しました'); }));
   $('clear-token').addEventListener('click', task(async () => { await invoke('token:clear'); render(await invoke('state')); toast('Botトークンを削除しました'); }));
-  $('binding-form').addEventListener('submit', task(async () => { const c = draft(), b = { guildId: $('binding-guild').value.trim(), label: $('binding-label').value.trim(), voiceChannelId: $('binding-voice').value.trim(), textChannelIds: $('binding-text').value.split(/[,\n、]/).map(s => s.trim()).filter(Boolean) }; b.disabledTextChannelIds = c.bot.bindings.find(x => x.guildId === b.guildId)?.disabledTextChannelIds || []; c.bot.bindings = c.bot.bindings.filter(x => x.guildId !== b.guildId); c.bot.bindings.push(b); await save(c); $('binding-form').reset(); }));
+  $('binding-form').addEventListener('submit', task(async () => {
+    const guildId = $('binding-guild').value.trim(), label = $('binding-label').value.trim(), voiceChannelId = $('binding-voice').value.trim();
+    const textChannelIds = $('binding-text').value.split(/[,\n、]/).map(s => s.trim()).filter(Boolean);
+    await updateBinding({ id: guildId, name: label }, b => { b.label = label; b.voiceChannelId = voiceChannelId; b.textChannelIds = textChannelIds; });
+    $('binding-form').reset();
+  }));
   $('dictionary-form').addEventListener('submit', task(async () => { const c = draft(); c.dictionary.push({ source: $('dict-source').value, replacement: $('dict-replacement').value, scope: $('dict-scope').value, scopeId: $('dict-scope-id').value.trim(), regex: $('dict-regex').checked, caseSensitive: false }); await save(c); $('dictionary-form').reset(); }));
   $('profile-form').addEventListener('submit', task(async () => { const c = draft(), p = { userId: $('profile-id').value.trim(), name: $('profile-name').value, styleId: Number($('profile-style').value), speed: Number($('profile-speed').value) }; c.speech.profiles = c.speech.profiles.filter(x => x.userId !== p.userId); c.speech.profiles.push(p); await save(c); $('profile-form').reset(); }));
   $('choose-clip').addEventListener('click', task(async () => { const path = await invoke('clip:choose'); if (path) $('clip-path').value = path; }));

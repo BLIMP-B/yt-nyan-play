@@ -17,6 +17,12 @@ test('configuration rejects invalid IDs, speeds and unknown fields without mutat
   assert.throws(() => normalizeConfig({ bot: { bindings: [{ guildId: 'bad', textChannelIds: [], voiceChannelId: '33333' }] } }));
   assert.throws(() => normalizeConfig({ speech: { engineUrl: 'file:///tmp/run' } }));
 });
+
+test('legacy server bindings keep speech and inherit VC notifications, invalid switches are rejected', () => {
+  const binding = config().bot.bindings[0];
+  assert.equal(binding.readEnabled, true); assert.equal(binding.announceJoinLeave, null);
+  for (const fields of [{ readEnabled: 'false' }, { readEnabled: null }, { announceJoinLeave: 'true' }]) assert.throws(() => normalizeConfig({ bot: { bindings: [{ ...binding, ...fields }] } }));
+});
 test('media allowlist blocks local, credentials, non-HTTP and deceptive domains', () => {
   const allowed = config().media.allowedHosts;
   for (const url of ['http://127.0.0.1/', 'http://[::1]/', 'file:///tmp/file', 'https://youtube.com.evil.test/', 'https://user:pass@youtube.com', 'https://youtube.com:8443/']) assert.throws(() => validateMediaUrl(url, allowed));

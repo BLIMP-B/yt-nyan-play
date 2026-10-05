@@ -17,7 +17,7 @@ export function shouldReceive(message, config) {
   return config.bot.bindings.some(b => b.guildId === message.guildId && (b.voiceChannelId === message.channelId || b.textChannelIds.includes(message.channelId)));
 }
 export function shouldRead(message, config) {
-  return shouldReceive(message, config) && (!message.guildId || config.bot.masterTextChannelId === message.channelId || config.bot.bindings.some(b => b.guildId === message.guildId && (b.voiceChannelId === message.channelId || b.textChannelIds.includes(message.channelId)) && !b.disabledTextChannelIds?.includes(message.channelId)));
+  return shouldReceive(message, config) && (!message.guildId || config.bot.masterTextChannelId === message.channelId || config.bot.bindings.some(b => b.guildId === message.guildId && b.readEnabled !== false && (b.voiceChannelId === message.channelId || b.textChannelIds.includes(message.channelId)) && !b.disabledTextChannelIds?.includes(message.channelId)));
 }
 export function speechTargets(guildId, forwarding) { const targets = new Set(guildId ? [guildId] : []); for (const f of forwarding) { if (f.mode !== 'none' && f.fromGuildId === guildId) targets.add(f.toGuildId); if (f.mode === 'two-way' && f.toGuildId === guildId) targets.add(f.fromGuildId); } return [...targets]; }
 export function applyDictionary(text, entries, context) {

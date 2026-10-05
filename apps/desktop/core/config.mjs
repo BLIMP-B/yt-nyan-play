@@ -98,7 +98,10 @@ export function normalizeConfig(patch) {
     if (!b || !/^\d{5,22}$/.test(b.guildId) || !/^\d{5,22}$/.test(b.voiceChannelId)) fail('サーバー・音声チャンネルID');
     strings(b.textChannelIds, 'テキストチャンネルID', true);
     const disabledTextChannelIds = b.disabledTextChannelIds || []; strings(disabledTextChannelIds, '無効チャンネルID', true);
-    return { guildId: b.guildId, voiceChannelId: b.voiceChannelId, textChannelIds: b.textChannelIds, disabledTextChannelIds, label: String(b.label || '').slice(0, 100) };
+    const readEnabled = b.readEnabled === undefined ? true : b.readEnabled;
+    const announceJoinLeave = b.announceJoinLeave ?? null;
+    if (typeof readEnabled !== 'boolean' || announceJoinLeave !== null && typeof announceJoinLeave !== 'boolean') fail('サーバーの読み上げ・入退室通知');
+    return { guildId: b.guildId, voiceChannelId: b.voiceChannelId, textChannelIds: [...new Set(b.textChannelIds)], disabledTextChannelIds: [...new Set(disabledTextChannelIds)], readEnabled, announceJoinLeave, label: String(b.label || '').slice(0, 100) };
   });
   if (new Set(c.bot.bindings.map(b => b.guildId)).size !== c.bot.bindings.length) fail('1サーバーにつき1接続先を設定してください');
   if (!Array.isArray(c.speech.forwarding) || c.speech.forwarding.length > 100) fail('読み上げ転送');

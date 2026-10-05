@@ -23,6 +23,7 @@ export class DiscordBot {
     }));
     client.on(Events.MessageCreate, safe(message => this.message(message)));
     client.on(Events.VoiceStateUpdate, safe((previous, next) => this.voiceState(previous, next)));
+    for (const event of [Events.GuildCreate, Events.GuildDelete, Events.GuildUpdate, Events.ChannelCreate, Events.ChannelDelete, Events.ChannelUpdate, Events.ThreadCreate, Events.ThreadDelete, Events.ThreadUpdate, Events.GuildRoleUpdate, Events.GuildRoleDelete, Events.GuildMemberUpdate]) client.on(event, () => this.store.emit('change'));
     client.on(Events.ShardReconnecting, () => { this.status = 'reconnecting'; this.store.emit('change'); });
     client.on(Events.ShardResume, () => { this.status = 'online'; this.store.emit('change'); });
     client.on(Events.ShardDisconnect, () => { this.status = 'reconnecting'; this.store.emit('change'); });
@@ -104,7 +105,7 @@ export class DiscordBot {
     if (previous.channelId === next.channelId || next.member?.user.bot) return;
     const c = this.store.config; const binding = c.bot.bindings.find(b => b.guildId === next.guild.id); if (!binding) return;
     if (c.bot.autoJoin && next.channelId === binding.voiceChannelId) await this.handlers.join(binding.guildId);
-    if (c.speech.enabled && c.bot.announceJoinLeave && next.member && !c.speech.ignoredUserIds.includes(next.id) && [previous.channelId, next.channelId].includes(binding.voiceChannelId)) {
+    if (c.speech.enabled && (binding.announceJoinLeave ?? c.bot.announceJoinLeave) && next.member && !c.speech.ignoredUserIds.includes(next.id) && [previous.channelId, next.channelId].includes(binding.voiceChannelId)) {
       const template = !previous.channelId ? c.speech.joinTemplate : !next.channelId ? c.speech.leaveTemplate : c.speech.moveTemplate;
       const text = formatTemplate(template, { nickname: next.member.displayName, username: next.member.user.username, server: next.guild.name,
         channel: next.channel?.name || previous.channel?.name || '', 'channel-prev': previous.channel?.name || '', 'channel-next': next.channel?.name || '' });
@@ -116,7 +117,14 @@ export class DiscordBot {
   catalog() {
     if (!this.client?.isReady()) return [];
     return [...this.client.guilds.cache.values()].map(g => ({ id: g.id, name: g.name,
-      channels: [...g.channels.cache.values()].filter(ch => ch.isTextBased() || ch.isVoiceBased()).map(ch => ({ id: ch.id, name: ch.name, voice: ch.isVoiceBased() })) }));
+      channels: [...g.channels.cache.values()].filter(ch => ch.isTextBased() || ch.isVoiceBased()).map(ch => {
+        const permission = ch.permissionsFor(this.client.user);
+        const visible = Boolean(permission?.has(PermissionFlagsBits.ViewChannel));
+        return { id: ch.id, name: ch.name, voice: ch.isVoiceBased(), text: ch.isTextBased(),
+          parentId: ch.parentId || '', parentName: ch.parent?.name || '', position: ch.rawPosition ?? ch.position ?? 0,
+          parentPosition: ch.parent?.rawPosition ?? ch.parent?.position ?? 0,
+          canRead: visible && ch.isTextBased(), canConnect: visible && ch.isVoiceBased() && Boolean(permission?.has(PermissionFlagsBits.Connect | PermissionFlagsBits.Speak)) };
+      }).sort((a, b) => a.parentPosition - b.parentPosition || a.position - b.position || a.name.localeCompare(b.name, 'ja')) }));
   }
   updateMediaActivity(items) {
     this.mediaActivity = items;

@@ -37,3 +37,27 @@ nav button .icon{width:16px;height:16px}
 .channel-toggle{display:inline-flex;align-items:center;gap:6px;padding:2px 2px 2px 8px;border:1px solid var(--line);border-radius:4px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 .channel-toggle button[aria-pressed=true]{color:var(--vscode-textLink-foreground,var(--accent));background:var(--vscode-toolbar-hoverBackground,var(--vscode-list-hoverBackground))}
 @media(max-width:760px){.list-row{flex-wrap:wrap}.list-row .details{flex-basis:100%}.row-actions{margin-left:auto}.card-heading{flex-wrap:wrap}.inline-form{gap:10px}}
+
+.server-settings{display:flex;flex-direction:column;gap:12px;margin-top:16px}
+.server-setting{margin:0;border:1px solid var(--line);border-radius:4px}
+.server-setting>summary{padding:12px;background:var(--vscode-sideBar-background);font-size:12px}
+.server-setting>summary strong{font-weight:600;margin-left:6px;overflow-wrap:anywhere}
+.server-setting>summary .subtle{margin-left:12px}
+.server-setting-body{padding:14px}
+.server-output{display:flex;align-items:flex-end;gap:12px}
+.server-output>label{flex:1;max-width:520px}
+.server-switches{display:flex;flex-wrap:wrap;gap:8px 24px;margin:12px 0}
+.channel-selection{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 8px;font-size:12px}
+.channel-group{border:1px solid var(--line);border-radius:4px;padding:8px 10px 10px;margin:10px 0;min-width:0}
+.channel-group legend{color:var(--muted);font-size:11px;padding:0 5px}
+.channel-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 16px}
+.channel-choice{padding:5px;min-width:0;border-radius:3px;cursor:pointer}
+.channel-choice:hover{background:var(--vscode-list-hoverBackground)}
+.channel-choice:focus-within{outline:1px solid var(--vscode-focusBorder)}
+.channel-choice input{flex-shrink:0;margin:0}
+.channel-choice>span{overflow-wrap:anywhere;min-width:0}
+.channel-choice>small{margin-left:auto;white-space:nowrap;font-size:10px}
+.channel-choice:has(input:disabled){color:var(--muted);cursor:default}
+.channel-choice .icon{width:14px;height:14px;color:var(--muted)}
+#binding-manual{margin-top:18px}
+@media(max-width:1000px){.channel-grid{grid-template-columns:1fr}.server-switches{flex-direction:column;gap:4px}}

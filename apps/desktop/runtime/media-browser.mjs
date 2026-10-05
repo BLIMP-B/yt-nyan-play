@@ -3,6 +3,7 @@ import { validateMediaUrl } from '../core/config.mjs';
 import { mediaServiceName } from '../core/protocol.mjs';
 
 import { mediaScript } from '../core/media-script.mjs';
+import { APP_ICON } from './app-icon.mjs';
 
 export class MediaBrowser {
   constructor(getConfig, bridge, log) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.window = null; this.paused = false; this.ducked = false; this.status = null; }
@@ -13,7 +14,7 @@ export class MediaBrowser {
     ses.setPermissionRequestHandler((_web, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
     const window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
-      autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
+      icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     this.window = window; let captureStarted = false;
     const checkNavigation = (event, destination) => { try { validateMediaUrl(destination, this.getConfig().media.allowedHosts); } catch { event.preventDefault(); } };
     window.webContents.on('will-navigate', checkNavigation); window.webContents.on('will-redirect', checkNavigation);

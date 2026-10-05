@@ -1,6 +1,6 @@
 {
   "name": "nyan-talk-damare",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "にゃんとーく〜Damare〜 Windows Discord.js統合アプリと送信側Chrome拡張",
   "engines": {
@@ -14,7 +14,8 @@
     "check:desktop": "node scripts/check-desktop.mjs",
     "dist:win": "electron-builder --win --x64",
     "dist:dir": "electron-builder --dir",
-    "smoke:desktop": "node scripts/smoke-desktop.mjs"
+    "smoke:desktop": "node scripts/smoke-desktop.mjs",
+    "icon:build": "electron scripts/build-app-icon.cjs"
   },
   "type": "module",
   "main": "apps/desktop/main.mjs",
@@ -69,19 +70,23 @@
         "nsis",
         "zip"
       ],
-      "artifactName": "NyanTalk-Damare-${version}-${arch}.${ext}"
+      "artifactName": "NyanTalk-Damare-${version}-${arch}.${ext}",
+      "icon": "apps/desktop/assets/app.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
-      "artifactName": "NyanTalk-Damare-Setup-${version}-${arch}.${ext}"
+      "artifactName": "NyanTalk-Damare-Setup-${version}-${arch}.${ext}",
+      "installerIcon": "apps/desktop/assets/app.ico",
+      "uninstallerIcon": "apps/desktop/assets/app.ico"
     },
     "linux": {
       "target": [
         "dir"
-      ]
+      ],
+      "icon": "extension/furoneko70furoneko70.png"
     },
     "executableName": "NyanTalk-Damare"
   }
