@@ -5,6 +5,7 @@ import { mediaServiceName } from '../core/protocol.mjs';
 import { mediaScript } from '../core/media-script.mjs';
 import { APP_ICON } from './app-icon.mjs';
 import { browserUserAgent } from '../core/browser-user-agent.mjs';
+import { validateMediaNavigation } from '../core/media-navigation.mjs';
 
 export class MediaBrowser {
   constructor(getConfig, bridge, log) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.window = null; this.paused = false; this.ducked = false; this.status = null; }
@@ -18,9 +19,14 @@ export class MediaBrowser {
     const window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
       icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     this.window = window; let captureStarted = false;
-    const checkNavigation = (event, destination) => { try { validateMediaUrl(destination, this.getConfig().media.allowedHosts); } catch { event.preventDefault(); } };
+    const checkNavigation = (event, destination) => { try { validateMediaNavigation(destination, this.getConfig().media.allowedHosts, url); } catch { event.preventDefault(); } };
     window.webContents.on('will-navigate', checkNavigation); window.webContents.on('will-redirect', checkNavigation);
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.webContents.setWindowOpenHandler(({ url: destination }) => {
+      try { validateMediaNavigation(destination, this.getConfig().media.allowedHosts, url); } catch { return { action: 'deny' }; }
+      if (!['accounts.google.com', 'consent.google.com', 'consent.youtube.com'].includes(new URL(destination).hostname)) return { action: 'deny' };
+      return { action: 'allow', outlivesOpener: true, overrideBrowserWindowOptions: { title: 'YouTubeにログイン', icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } } };
+    });
+    window.webContents.on('did-create-window', child => { child.webContents.on('will-navigate', checkNavigation); child.webContents.on('will-redirect', checkNavigation); child.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); });
     window.webContents.on('will-prevent-unload', event => event.preventDefault());
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
@@ -32,7 +38,7 @@ export class MediaBrowser {
         if (!payload.guildId && !payload.master) throw new Error('Discord送信にはサーバーと音声チャンネルを指定してください');
         captureStarted = true; await this.bridge.startCapture(job.id, payload.guildId, signal);
       }
-      const startedAt = Date.now(); let seen = false, playbackStartedAt = null;
+      const startedAt = Date.now(); let seen = false, playbackStartedAt = null, reportedBlock = '';
       while (!signal.aborted && !window.isDestroyed()) {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
@@ -46,9 +52,14 @@ export class MediaBrowser {
         if (state.found && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
         this.status = { ...state, title, service: mediaServiceName(url), startedAt: playbackStartedAt, paused: this.paused }; this.bridge.changed();
+        if (state.blockedReason && state.blockedReason !== reportedBlock) {
+          reportedBlock = state.blockedReason; this.log('warn', `${mediaServiceName(url)}の再生条件: ${state.blockedReason}${state.loginRequired ? '。再生画面からログインしてください（Chromeとは別のCookie領域です）' : ''}`);
+          if (state.loginRequired && !window.isVisible()) window.show();
+        }
         if (state.error) throw new Error(`メディアを再生できません: ${state.error}`);
         if (state.previewFinished || state.ended) return;
-        if (!seen && Date.now() - startedAt > 90000) throw new Error('再生できる動画・音声を見つけられません。ログインやサイトの再生条件を確認してください');
+        const authenticating = state.loginRequired || ['accounts.google.com', 'consent.google.com', 'consent.youtube.com'].includes(new URL(window.webContents.getURL()).hostname);
+        if (!seen && Date.now() - startedAt > (authenticating ? 300000 : 90000)) throw new Error(state.blockedReason || '再生できる動画・音声を見つけられません。ログインやサイトの再生条件を確認してください');
         await new Promise(resolve => { const t = setTimeout(resolve, 500); const stop = () => { clearTimeout(t); resolve(); }; signal.addEventListener('abort', stop, { once: true }); setTimeout(() => signal.removeEventListener('abort', stop), 550).unref(); });
       }
       signal.throwIfAborted(); throw new Error('再生ウィンドウが閉じられました');

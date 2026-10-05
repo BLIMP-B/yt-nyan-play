@@ -149,10 +149,15 @@ try {
         }
         throw new Error('Playback window did not open');
       }, url);
-      const until = Date.now() + 55000;
+      const until = Date.now() + 55000; let adSamples = 0;
       while (Date.now() < until) {
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
-        if (metrics?.nonSilentSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
+        const adPlaying = await application.evaluate(async () => {
+          const target = globalThis.nyanAudioProbe.target; if (target.isDestroyed()) return false;
+          return target.webContents.executeJavaScript(`(() => Boolean(document.querySelector('.ad-showing,.ad-interrupting')) || (location.hostname.endsWith('nicovideo.jp') && [...document.querySelectorAll('video')].some(v => !v.paused && !v.ended && v.duration > 0 && v.duration <= 30)))()`, true);
+        });
+        if (adPlaying) adSamples = metrics?.nonSilentSamples || 0;
+        if (!adPlaying && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
         const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
         if (current.status === 'failed') throw new Error(current.error);
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -163,7 +168,7 @@ try {
         if (target.isDestroyed()) return {};
         const diagnostics = await target.webContents.executeJavaScript(`(() => ({
           text: document.body.innerText.slice(0, 2500),
-          playability: window.ytInitialPlayerResponse?.playabilityStatus || document.querySelector('#movie_player')?.getPlayerResponse?.()?.playabilityStatus || null,
+          playability: (() => { const s = window.ytInitialPlayerResponse?.playabilityStatus || document.querySelector('#movie_player')?.getPlayerResponse?.()?.playabilityStatus; return s ? { status: s.status, reason: s.reason } : null; })(),
           media: [...document.querySelectorAll('video,audio')].map(v => ({ ready: v.readyState, paused: v.paused, ended: v.ended, muted: v.muted, volume: v.volume, currentTime: v.currentTime, audioBytes: v.webkitAudioDecodedByteCount, error: v.error?.message })),
           mp4: document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028, mp4a.40.2\"')
         }))()`, true);

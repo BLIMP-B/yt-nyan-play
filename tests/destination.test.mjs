@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveDestination } from '../apps/desktop/core/destination.mjs';
 import { browserUserAgent } from '../apps/desktop/core/browser-user-agent.mjs';
+import { validateMediaNavigation } from '../apps/desktop/core/media-navigation.mjs';
 const bindings = [{ guildId: '11111' }, { guildId: '22222' }];
+test('YouTube playback permits official sign-in and consent while blocking unrelated and local destinations', () => {
+  const hosts = ['youtube.com', 'youtu.be'];
+  assert.equal(validateMediaNavigation('https://accounts.google.com/ServiceLogin', hosts, 'https://youtu.be/a'), 'https://accounts.google.com/ServiceLogin');
+  assert.equal(validateMediaNavigation('https://consent.google.com/', hosts, 'https://www.youtube.com/watch?v=a'), 'https://consent.google.com/');
+  for (const url of ['https://accounts.google.com.evil.test', 'http://accounts.google.com', 'https://user:pass@accounts.google.com', 'https://127.0.0.1', 'file:///C:/test']) assert.throws(() => validateMediaNavigation(url, hosts, 'https://youtu.be/a'));
+  assert.throws(() => validateMediaNavigation('https://accounts.google.com', ['nicovideo.jp'], 'https://www.nicovideo.jp/watch/sm9'));
+});
 test('Japanese desktop product names do not leak into HTTP playback headers', () => {
   const ua = browserUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 にゃんとーく〜Damare〜/0.4.2 Chrome/148.0.0.0 Electron/44.5.1 Safari/537.36');
   assert.doesNotThrow(() => new Headers({ 'User-Agent': ua }));

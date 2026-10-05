@@ -1,9 +1,12 @@
 export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, paused = false }) {
   return `(() => {
     const options = ${JSON.stringify({ startSeconds, mode, volume, paused })};
+    const playability = window.ytInitialPlayerResponse?.playabilityStatus || document.querySelector('#movie_player')?.getPlayerResponse?.()?.playabilityStatus;
+    const blockedReason = playability && !['OK', 'LIVE_STREAM_OFFLINE'].includes(playability.status) ? String(playability.reason || playability.status).slice(0, 300) : '';
+    const loginRequired = playability?.status === 'LOGIN_REQUIRED';
     const videos = [...document.querySelectorAll('video,audio')];
     const chosen = videos.find(v => !v.paused && !v.ended) || videos.sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0];
-    if (!chosen) return { found: false };
+    if (!chosen) return { found: false, blockedReason, loginRequired };
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
     chosen.muted = false; chosen.volume = options.volume; chosen.loop = false; chosen.playbackRate = 1;
@@ -33,6 +36,6 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
     }
     return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: chosen.ended,
       currentTime: chosen.currentTime, duration: Number.isFinite(chosen.duration) ? chosen.duration : null,
-      previewFinished: chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', pageTitle: document.title || '', error: chosen.__nyanPlayError || chosen.error?.code || null };
+      previewFinished: chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', pageTitle: document.title || '', blockedReason, loginRequired, error: chosen.__nyanPlayError || chosen.error?.code || null };
   })()`;
 }

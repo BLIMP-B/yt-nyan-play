@@ -40,7 +40,7 @@ function player(mode, startSeconds = 80) {
   const events = new Map(), timers = new Map(); let timerId = 0;
   const video = { tagName: 'VIDEO', paused: true, ended: false, currentTime: 0, duration: 300, readyState: 4, clientWidth: 500, clientHeight: 300, loop: true,
     play() { this.paused = false; return Promise.resolve(); }, pause() { this.paused = true; }, addEventListener(type, cb) { events.set(type, cb); } };
-  const context = { document: { querySelectorAll: () => [video] }, window: {}, setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id) };
+  const context = { document: { querySelectorAll: () => [video], querySelector: () => null }, window: {}, setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id) };
   const read = (paused = false) => runInNewContext(mediaScript({ mode, startSeconds, paused }), context);
   return { video, read, fire: name => events.get(name)?.(), timers };
 }
