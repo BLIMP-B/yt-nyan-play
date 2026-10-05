@@ -63,9 +63,36 @@ jobs:
           assert.equal(run.status, 'completed');
           assert.equal(run.event, 'push');
           const { jobs } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-jobs.json')));
-          for (const name of ['tests', 'windows']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
-          // Android boot on hosted Windows remains a documented prerelease limitation.
-          assert.ok(jobs.filter(job => job.conclusion === 'failure').every(job => job.name === 'android-install'));
+          for (const name of ['tests', 'windows', 'android-install', 'hourly-model']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
+          assert.equal(run.conclusion, 'success');
+          JS
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-verification-windows
+          path: verification/android
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: hourly-model-verification-windows
+          path: verification/model
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - name: Check real Android startup and local SLM generation reports
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          const android = JSON.parse(readFileSync('verification/android/android-report.json'));
+          assert.equal(android.platform, 'win32');
+          assert.equal(android.bootVerified, true);
+          assert.equal(android.playForeground, true);
+          assert.match(android.playWindow.focus, /com\.android\.vending\//);
+          const model = JSON.parse(readFileSync('verification/model/model-report.json'));
+          assert.equal(model.platform, 'win32');
+          assert.equal(model.passed, true);
+          assert.equal(model.samples.length, 3);
+          for (const sample of model.samples) assert.ok(sample.text && sample.nouns.length === 2);
           JS
       - uses: actions/download-artifact@v4
         with:
