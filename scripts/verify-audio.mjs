@@ -157,9 +157,17 @@ try {
         if (current.status === 'failed') throw new Error(current.error);
         await new Promise(resolve => setTimeout(resolve, 500));
       }
-      outcome.page = await application.evaluate(() => {
+      outcome.playback = (await call(page, 'state')).media;
+      outcome.page = await application.evaluate(async () => {
         const target = globalThis.nyanAudioProbe.target;
-        return target.isDestroyed() ? {} : { url: target.webContents.getURL(), title: target.webContents.getTitle() };
+        if (target.isDestroyed()) return {};
+        const diagnostics = await target.webContents.executeJavaScript(`(() => ({
+          text: document.body.innerText.slice(0, 2500),
+          playability: window.ytInitialPlayerResponse?.playabilityStatus || document.querySelector('#movie_player')?.getPlayerResponse?.()?.playabilityStatus || null,
+          media: [...document.querySelectorAll('video,audio')].map(v => ({ ready: v.readyState, paused: v.paused, ended: v.ended, muted: v.muted, volume: v.volume, currentTime: v.currentTime, audioBytes: v.webkitAudioDecodedByteCount, error: v.error?.message })),
+          mp4: document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028, mp4a.40.2\"')
+        }))()`, true);
+        return { url: target.webContents.getURL(), title: target.webContents.getTitle(), diagnostics };
       });
       if (!outcome.verifiedAudio) outcome.error = 'No audible media samples within 55 seconds; site playback remains unverified';
     } catch (error) { outcome.error = error.message; }
