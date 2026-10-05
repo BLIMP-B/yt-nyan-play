@@ -1,19 +1,21 @@
 import { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, Notification, powerMonitor, net } from 'electron';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve, isAbsolute } from 'node:path';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { Store } from './core/store.mjs';
 import { normalizeConfig } from './core/config.mjs';
 import { RE2 } from 're2-wasm';
-import { JobRunner } from './core/queue.mjs';
+import { SpeechPool } from './core/speech-pool.mjs';
 import { Voicevox } from './core/voicevox.mjs';
-import { parseMediaCommand } from './core/protocol.mjs';
+import { parseMediaCommand, mediaAnnouncement } from './core/protocol.mjs';
 import { DiscordBot } from './runtime/bot.mjs';
 import { VoiceOutput } from './runtime/voice-output.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
 import { Vault } from './runtime/vault.mjs';
 import { EngineProcess } from './runtime/engine-process.mjs';
-import { BouyomiImport } from './runtime/bouyomi-import.mjs';
+import { BouyomiImport, inspectBouyomi } from './runtime/bouyomi-import.mjs';
+import { BouyomiProcessor } from './runtime/bouyomi-processor.mjs';
+import { runNativeSpeech } from './core/bouyomi-pipeline.mjs';
 import { bouyomiSpeak } from './runtime/bouyomi.mjs';
 import { AndroidRuntime } from './runtime/android.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
@@ -28,10 +30,11 @@ if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  let window, tray, store, vault, bot, voice, media, speechRunner, engine, android, twitter, twitterAppVault, bouyomi;
+  let window, tray, store, vault, bot, voice, media, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor;
   let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const pendingAudio = new Map(); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
   const emitState = () => {
+    if (bot && media) bot.updateMediaActivity(media.status);
     if (stateTimer || !window || window.isDestroyed()) return;
     stateTimer = setTimeout(() => { stateTimer = null; if (!window.isDestroyed()) window.webContents.send('nyan:state', snapshot()); }, 80);
   };
@@ -53,13 +56,21 @@ else {
     if (name === 'skip') media.skip(guildId);
     if (name === 'stop') { speechRunner.clear(guildId); media.clear(guildId); }
   };
+  async function stopRequested({ guildId, master }) {
+    const scope = master ? 'master' : guildId || 'local';
+    const targets = master ? [...voice.connections.keys()] : [guildId];
+    for (const id of targets) { voice.holdSpeech(id, true); voice.interruptSpeech(id); }
+    media.clear(scope);
+    try { await speechRunner.speak({ text: 'さいせいをていししました', guildId, master, system: true, priority: 100, output: getConfig().media.output }, { interrupt: true }); }
+    finally { for (const id of targets) voice.holdSpeech(id, false); }
+  }
   async function startBot() {
     if (bot.status !== 'offline') return;
     if (getConfig().speech.engineExecutable && !engine.child) engine.start(getConfig().speech.engineExecutable, getConfig().speech.engineUrl);
     await bot.start(vault.read());
-    speechRunner.pause(false); media.pause(false); media.drain();
+    speechRunner.halt(false); speechRunner.pause(false); media.pause(false); media.drain();
   }
-  function stopBot() { speechRunner.pause(true); media.pause(true); speechRunner.skip(); media.skip(); bot.stop(); }
+  function stopBot() { speechRunner?.pause(true); speechRunner?.halt(true); media?.pause(true); media?.skip(); bot?.stop(); }
   async function action(name, data) {
     if (name === 'state') return snapshot();
     if (name === 'config:save') {
@@ -91,7 +102,7 @@ else {
       const job = store.enqueue('speech', { text: data.text, guildId: String(data.guildId || ''), userId: '', styleId: Number(data.styleId ?? getConfig().speech.styleId) }); void speechRunner.drain(); return job;
     }
     if (name === 'media:add') {
-      const command = parseMediaCommand(`${String(data?.url || '')}${data?.loop ? '無限' : '再生'}`, getConfig());
+      const command = parseMediaCommand(`${String(data?.url || '')}${{ preview: '再生', full: '無限', direct: '直接' }[data?.mode] || (data?.loop ? '無限' : '再生')}`, getConfig());
       if (!command) throw new Error('再生URLを入力してください');
       return media.enqueue({ ...command, master: data?.master === true, guildId: String(data.guildId || ''), startSeconds: Math.max(0, Math.min(86400, Number(data.startSeconds) || command.startSeconds)), title: command.title });
     }
@@ -117,7 +128,7 @@ else {
     if (name === 'open:voicevox') { await shell.openExternal('https://voicevox.hiroshiba.jp/'); return null; }
     if (name === 'bouyomi:import') {
       const selected = await dialog.showOpenDialog(window, { properties: ['openFile'], filters: [{ name: '棒読みちゃんのZIP', extensions: ['zip'] }] }); if (selected.canceled) return null;
-      const info = bouyomi.import(selected.filePaths[0]); const c = store.exportConfig(); c.speech.provider = 'bouyomi'; c.speech.output = 'local'; c.speech.bouyomiHost = '127.0.0.1'; c.speech.bouyomiPort = info.port; c.speech.bouyomiHttpPort = info.httpPort; c.speech.bouyomiNativeRules = true; c.speech.bouyomiUseDefaults = true; return action('config:save', c);
+      const info = bouyomi.import(selected.filePaths[0]); const c = store.exportConfig(); c.speech.provider = 'voicevox'; c.speech.output = 'discord'; c.speech.bouyomiHost = '127.0.0.1'; c.speech.bouyomiPort = info.port; c.speech.bouyomiHttpPort = info.httpPort; c.speech.bouyomiNativeRules = true; c.speech.bouyomiUseDefaults = true; c.speech.bouyomiPreprocess = true; return action('config:save', c);
     }
     if (name === 'bouyomi:start') { bouyomi.start(); return snapshot(); }
     if (name === 'bouyomi:stop') { await bouyomi.stop(); return snapshot(); }
@@ -144,11 +155,12 @@ else {
   app.whenReady().then(async () => {
     store = new Store(app.getPath('userData')); vault = new Vault(store.directory); engine = new EngineProcess((l, t) => store.log(l, t));
     bouyomi = new BouyomiImport(store.directory); bouyomi.on('change', emitState);
+    bouyomiProcessor = new BouyomiProcessor(store.directory);
     android = new AndroidRuntime(store.directory, getConfig, (l, t) => store.log(l, t), (url, options) => net.fetch(url, options));
     android.on('change', emitState); android.on('frame', bytes => { if (window && !window.isDestroyed()) window.webContents.send('nyan:android-frame', bytes); });
     bot = new DiscordBot(store, {
       speech: payload => { store.enqueue('speech', payload); void speechRunner.drain(); },
-      media: payload => media.enqueue(payload),
+      media: payload => media.enqueue(payload), stopRequested,
       join: guildId => voice.connect(guildId), leave: guildId => voice.disconnect(guildId), disconnect: () => voice.close(), control,
       speakers: () => new Voicevox(getConfig().speech.engineUrl).speakers(),
     });
@@ -157,41 +169,63 @@ else {
       let browser;
       browser = new MediaBrowser(getConfig, {
         changed: emitState,
-        startCapture: (id, guildId) => {
+        startCapture: (id, guildId, signal) => {
           const master = scope === 'master';
           captureChain = captureChain.catch(() => {}).then(async () => {
+            signal.throwIfAborted();
             if (master) { for (const key of [...voice.connections.keys()]) { voice.endMedia(key); await voice.beginMedia(key); } } else await voice.beginMedia(guildId);
+            signal.throwIfAborted();
             captures.set(id, { guildId, master, window: browser.window }); captureRequest = id;
-            try { await audioCommand('capture:start', { id }, null, 20000); }
+            try { await audioCommand('capture:start', { id }, signal, 20000); }
             catch (e) { captures.delete(id); window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (master) for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); throw e; }
             finally { captureRequest = null; }
           }); return captureChain;
         },
-        stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); captures.delete(id); if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
+        stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
       }, (l, t) => store.log(l, t)); return browser;
+    }, async (job, signal) => {
+      if (job.payload.mode === 'direct') return;
+      await speechRunner.speak({ text: mediaAnnouncement(job.payload.url), guildId: job.payload.guildId, master: job.payload.master, system: true, priority: 50, output: getConfig().media.output }, { signal });
     });
-    speechRunner = new JobRunner(store, 'speech', async (job, signal) => {
+    speechRunner = new SpeechPool(store, async (job, signal) => {
       const c = getConfig(); const profile = c.speech.profiles.find(p => p.userId === job.payload.userId);
-      const settings = { ...c.speech, ...profile, ...(job.payload.styleId !== undefined ? { styleId: job.payload.styleId } : {}) };
+      const settings = { ...c.speech, ...(!job.payload.system ? profile : {}), ...(job.payload.styleId !== undefined ? { styleId: job.payload.styleId } : {}), ...(job.payload.system ? { provider: 'voicevox', output: job.payload.output || c.speech.output } : {}) };
       if (job.payload.privateOwnerId) { await twitter.userSession(); if (twitter.owner()?.id !== job.payload.privateOwnerId) throw new Error('非公開投稿は本人のXログイン中だけ読み上げます'); }
-      const targets = speechTargets(job.payload.guildId, c.speech.forwarding);
-      if (settings.output !== 'local' && !job.payload.guildId) throw new Error('Discordへの読み上げにはサーバーを選択してください');
+      const targets = job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
+      if (settings.output !== 'local' && !targets.length) throw new Error('Discordへの読み上げにはサーバーを選択し、マスタ再生にはVCへ接続してください');
       if (settings.output !== 'local') await Promise.all(targets.map(id => voice.connect(id)));
       if (settings.provider === 'bouyomi') { if (settings.output !== 'local') throw new Error('棒読みちゃん出力はローカル再生です。Discord音声にはVOICEVOXを選んでください'); await bouyomiSpeak(job.payload.text, settings, signal); return; }
-      const audio = job.payload.clipPath ? readFileSync(job.payload.clipPath) : await new Voicevox(settings.engineUrl).synthesize([...job.payload.text].slice(0, settings.maxChars).join(''), settings, signal);
+      const output = async (text, outputSettings, outputJobSignal, clipPath) => {
+      const audio = clipPath ? readFileSync(clipPath) : await new Voicevox(outputSettings.engineUrl).synthesize(text, outputSettings, outputJobSignal);
       if (audio.length > 30 * 1024 * 1024) throw new Error('音声クリップが大きすぎます');
       for (const target of targets.length ? targets : ['']) media.setDucked(true, target);
-      const outputController = new AbortController(); const outputSignal = AbortSignal.any([signal, outputController.signal]); const outputs = [];
+      const outputController = new AbortController(); const outputSignal = AbortSignal.any([outputJobSignal, outputController.signal]); const outputs = [];
       try {
-        if (settings.output !== 'discord') outputs.push(audioCommand('play', { bytes: audio, volume: settings.volume, device: settings.outputDevice }, outputSignal));
-        if (settings.output !== 'local') for (const target of targets) outputs.push(voice.speech(target, audio, settings.volume, outputSignal));
+        if (outputSettings.output !== 'discord') outputs.push(audioCommand('play', { bytes: audio, volume: outputSettings.volume, device: outputSettings.outputDevice }, outputSignal));
+        if (outputSettings.output !== 'local') for (const target of targets) outputs.push(voice.speech(target, audio, outputSettings.volume, outputSignal, job.payload.priority || 0));
         await Promise.all(outputs);
       } catch (e) { outputController.abort(); await Promise.allSettled(outputs); throw e; } finally { for (const target of targets.length ? targets : ['']) media.setDucked(false, target); }
+      };
+      if (settings.bouyomiPreprocess && !job.payload.system && !job.payload.clipPath) {
+        if (bouyomi.child) throw new Error('辞書への同時書き込みを防ぐため元アプリを終了してください');
+        const { settings: original } = inspectBouyomi(bouyomi.directory);
+        const pendingCharacters = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
+        const pipelineController = new AbortController(); const pipelineSignal = AbortSignal.any([signal, pipelineController.signal]);
+        try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: bouyomiProcessor, output, log: (l, text) => store.log(l, text),
+          sound: async (name, options, original, soundSignal) => {
+            if (original.SoundDisablePath === 'true' && (isAbsolute(name) || name.split(/[\\/]/).includes('..'))) throw new Error('Soundタグの外部パスは無効です');
+            const base = resolve(bouyomi.directory, original.SoundPath || 'Sound'); let file = resolve(base, name);
+            if (!existsSync(file)) file = ['wav', 'mp3', 'wma', 'ogg'].map(ext => `${file}.${ext}`).find(existsSync);
+            if (!file) throw new Error('Soundタグの音声素材が見つかりません');
+            await output('', { ...options, volume: Number(original.SoundVolume || 100) / 100 }, soundSignal, file);
+          },
+        }, pipelineSignal); } catch (error) { pipelineController.abort(); throw error; }
+      } else await output(job.payload.system ? job.payload.text : [...job.payload.text].slice(0, settings.maxChars).join(''), settings, signal, job.payload.clipPath);
     });
     twitterAppVault = new Vault(store.directory, 'twitter-app-token.bin');
     twitter = new TwitterSource(store.directory, getConfig, new Vault(store.directory, 'twitter-login.bin'), twitterAppVault, {
       speech: payload => { if (!store.seen.includes(`twitter:${payload.twitterId}`)) { store.enqueue('speech', payload); store.remember(`twitter:${payload.twitterId}`); void speechRunner.drain(); } },
-      log: (level, text) => store.log(level, text), logout: () => { if (speechRunner.active?.job.payload.privateOwnerId) speechRunner.skip(); for (const job of store.jobs) if (job.payload.privateOwnerId) { job.payload.text = '[非公開投稿]'; if (job.status === 'waiting') job.status = 'cancelled'; } store.saveState(); },
+      log: (level, text) => store.log(level, text), logout: () => { for (const job of speechRunner.activeJobs) if (job.payload.privateOwnerId) speechRunner.forJob(job).skip(); for (const job of store.jobs) if (job.payload.privateOwnerId) { job.payload.text = '[非公開投稿]'; if (job.status === 'waiting') job.status = 'cancelled'; } store.saveState(); },
     }, (url, options) => net.fetch(url, options)); twitter.on('change', emitState);
     window = new BrowserWindow({ width: 1260, height: 850, minWidth: 900, minHeight: 680, title: 'にゃんとーく〜Damare〜',
       icon: join(directory, '../../extension/furoneko70furoneko70.png'), backgroundColor: '#f6f7fb', show: false,
@@ -226,6 +260,7 @@ else {
       const verified = await window.webContents.executeJavaScript(`(async () => {
         const initial = await window.nyan.invoke('state');
         if (!initial.ok || document.querySelector('#style-id').options.length !== 8) return false;
+        if ([...document.querySelector('#media-mode').options].map(o => o.value).join(',') !== 'preview,full,direct' || document.querySelector('#media-loop')) return false;
         document.querySelector('[data-view="dictionary"]').click();
         document.querySelector('#dict-source').value = '<img src=x onerror=alert(1)>';
         document.querySelector('#dict-replacement').value = 'ねこ';

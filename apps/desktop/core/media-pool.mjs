@@ -1,14 +1,14 @@
 import { JobRunner } from './queue.mjs';
 export function mediaScope(payload) { return payload.master ? 'master' : payload.guildId || 'local'; }
 export class MediaPool {
-  constructor(store, browserFactory) { this.store = store; this.browserFactory = browserFactory; this.lanes = new Map(); this.masterActive = false; this.paused = false; this.pausedScopes = new Set(); }
+  constructor(store, browserFactory, beforePlay) { this.store = store; this.browserFactory = browserFactory; this.beforePlay = beforePlay; this.lanes = new Map(); this.masterActive = false; this.paused = false; this.pausedScopes = new Set(); this.duckDepth = new Map(); }
   masterPending() { return this.masterActive || this.store.jobs.some(j => j.kind === 'media' && j.status === 'waiting' && mediaScope(j.payload) === 'master'); }
   lane(scope) {
     if (this.lanes.has(scope)) return this.lanes.get(scope);
     const browser = this.browserFactory(scope);
     const runner = new JobRunner(this.store, 'media', async (job, signal) => {
       const master = scope === 'master'; if (master) { this.masterActive = true; for (const [key, lane] of this.lanes) if (key !== 'master') lane.browser.setPaused(true); }
-      try { await browser.play(job, signal); }
+      try { if (this.beforePlay) await this.beforePlay(job, signal); signal.throwIfAborted(); await browser.play(job, signal); }
       finally { if (master) this.masterActive = false; for (const [key, lane] of this.lanes) { lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); queueMicrotask(() => lane.runner.drain()); } }
     }, job => mediaScope(job.payload) === scope && (scope === 'master' || !this.masterPending()));
     runner.paused = this.paused || this.pausedScopes.has(scope); const lane = { browser, runner }; this.lanes.set(scope, lane); return lane;
@@ -19,7 +19,7 @@ export class MediaPool {
   pause(value, scope) { if (scope) { if (value) this.pausedScopes.add(scope); else this.pausedScopes.delete(scope); } else this.paused = value; for (const [key, lane] of this.lanes) if (!scope || scope === key) { lane.runner.pause(this.paused || this.pausedScopes.has(key)); lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); } this.store.emit('change'); }
   skip(scope) { if (scope) this.lanes.get(scope)?.runner.skip(); else if (this.masterActive) this.lanes.get('master')?.runner.skip(); else for (const lane of this.lanes.values()) lane.runner.skip(); }
   clear(scope) { const scopes = scope ? [scope] : [...new Set(this.store.jobs.filter(j => j.kind === 'media').map(j => mediaScope(j.payload)))]; for (const key of scopes) { const lane = this.lane(key); for (const job of this.store.jobs) if (job.kind === 'media' && job.status === 'waiting' && mediaScope(job.payload) === key) job.status = 'cancelled'; lane.runner.skip(); } this.store.saveState(); for (const [key, lane] of this.lanes) lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); this.drain(); }
-  setDucked(value, guildId) { for (const [key, lane] of this.lanes) if (!guildId || key === 'master' || key === guildId || key === 'local') lane.browser.setDucked(value); }
+  setDucked(value, guildId) { for (const [key, lane] of this.lanes) if (!guildId || key === 'master' || key === guildId || key === 'local') { const depth = Math.max(0, (this.duckDepth.get(key) || 0) + (value ? 1 : -1)); this.duckDepth.set(key, depth); lane.browser.setDucked(depth > 0); } }
   show() { for (const lane of this.lanes.values()) lane.browser.show(); }
   get status() { return [...this.lanes].filter(([, l]) => l.runner.active).map(([scope, lane]) => ({ scope, ...lane.browser.status })); }
   close() { for (const lane of this.lanes.values()) { lane.runner.pause(true); lane.runner.skip(); lane.browser.close(); } }

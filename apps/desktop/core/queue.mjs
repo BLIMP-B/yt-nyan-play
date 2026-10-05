@@ -3,8 +3,9 @@ import { EventEmitter } from 'node:events';
 export class JobRunner extends EventEmitter {
   constructor(store, kind, execute, predicate = () => true) { super(); this.store = store; this.kind = kind; this.execute = execute; this.predicate = predicate; this.paused = false; this.pausedGuilds = new Set(); this.active = null; }
   async drain() {
-    if (this.active || this.paused) return;
-    const job = this.store.jobs.find(j => j.kind === this.kind && j.status === 'waiting' && !this.pausedGuilds.has(j.payload.guildId) && this.predicate(j));
+    if (this.active || this.halted) return;
+    const job = this.store.jobs.filter(j => j.kind === this.kind && j.status === 'waiting' && (j.payload.priority > 0 || !this.paused && !this.pausedGuilds.has(j.payload.guildId)) && this.predicate(j))
+      .sort((a, b) => (b.payload.priority || 0) - (a.payload.priority || 0))[0];
     if (!job) return;
     const controller = new AbortController(); this.active = { job, controller };
     this.store.changeJob(job.id, { status: 'running', startedAt: new Date().toISOString(), error: '' });

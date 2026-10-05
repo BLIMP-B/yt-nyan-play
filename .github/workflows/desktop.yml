@@ -29,6 +29,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: ./scripts/check-bouyomi-helper.ps1
       - run: npm test
       - run: npm run smoke:desktop
       - run: npm run dist:win

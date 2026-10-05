@@ -1,21 +1,44 @@
 import { validateMediaUrl } from './config.mjs';
 
+const SERVICES = [
+  [['youtube.com', 'youtu.be'], 'ゆーちゅーぶ', 'YouTube'],
+  [['nicovideo.jp', 'niconico.com'], 'にこにこどうが', 'ニコニコ動画'],
+  [['x.com'], 'えっくす', 'X'], [['twitter.com'], 'ついったー', 'Twitter'],
+  [['instagram.com'], 'いんすたぐらむ', 'Instagram'], [['tiktok.com'], 'てぃっくとっく', 'TikTok'],
+  [['facebook.com', 'fb.watch'], 'ふぇいすぶっく', 'Facebook'],
+  [['threads.net', 'threads.com'], 'すれっず', 'Threads'], [['bsky.app'], 'ぶるーすかい', 'Bluesky'],
+  [['cdn.discordapp.com', 'media.discordapp.net'], 'でぃすこーどのメディア', 'Discord'],
+];
+export function mediaServiceName(url) {
+  const host = new URL(url).hostname.toLowerCase();
+  return SERVICES.find(([hosts]) => hosts.some(h => host === h || host.endsWith(`.${h}`)))?.[2] || 'メディア';
+}
+export function mediaAnnouncement(url) {
+  const host = new URL(url).hostname.toLowerCase();
+  const service = SERVICES.find(([hosts]) => hosts.some(h => host === h || host.endsWith(`.${h}`)))?.[1] || 'メディア';
+  return `${service}を再生します`;
+}
+export function urlStartSeconds(url) {
+  const u = new URL(url); const hash = new URLSearchParams(u.hash.slice(1));
+  const time = u.searchParams.get('t') || u.searchParams.get('start') || u.searchParams.get('from') || u.searchParams.get('time_continue') || hash.get('t') || hash.get('start') || '0';
+  return /^\d+(?:\.\d+)?$/.test(time) ? Number(time) : durationSeconds(time);
+}
+
 export function parseMediaCommand(content, config) {
   const text = String(content || '').trim();
   let command;
   if (text.startsWith('NYANPLAY/1 ')) {
     let data; try { data = JSON.parse(text.slice(11)); } catch { throw new Error('にゃんぷれい命令のJSONを確認してください'); }
     if (data.version !== 1 || data.type !== 'play') throw new Error('未対応のにゃんぷれい命令です');
-    command = { url: data.mediaUrl || data.pageUrl, title: data.title, loop: data.loop === true, startSeconds: data.startSeconds ?? 0 };
+    const url = data.mediaUrl || data.pageUrl;
+    command = { url, title: data.title, mode: data.mode || (data.loop === true ? 'full' : 'preview'), startSeconds: data.startSeconds ?? urlStartSeconds(url) };
   } else {
-    const m = text.match(/^(https?:\/\/\S+?)(再生|無限)(?:\r?\n\*\*【([\s\S]*?)】\*\*)?$/);
+    const m = text.match(/^(https?:\/\/\S+?)(再生|無限|直接)(?:\r?\n\*\*【([\s\S]*?)】\*\*)?$/);
     if (!m) return null;
     const u = new URL(m[1]);
-    const time = u.searchParams.get('t') || u.searchParams.get('start') || '0';
-    const seconds = /^\d+$/.test(time) ? Number(time) : durationSeconds(time);
-    command = { url: m[1], title: m[3] || u.hostname, loop: m[2] === '無限', startSeconds: seconds };
+    command = { url: m[1], title: m[3] || u.hostname, mode: { 再生: 'preview', 無限: 'full', 直接: 'direct' }[m[2]], startSeconds: urlStartSeconds(m[1]) };
   }
-  if (typeof command.url !== 'string' || !Number.isFinite(command.startSeconds) || command.startSeconds < 0 || command.startSeconds > 86400) throw new Error('再生URL・開始位置を確認してください');
+  if (!['preview', 'full', 'direct'].includes(command.mode) || typeof command.url !== 'string' || !Number.isFinite(command.startSeconds) || command.startSeconds < 0 || command.startSeconds > 86400) throw new Error('再生URL・開始位置・方式を確認してください');
   return { ...command, url: validateMediaUrl(command.url, config.media.allowedHosts), title: String(command.title || '').slice(0, 250) };
 }
 function durationSeconds(text) {

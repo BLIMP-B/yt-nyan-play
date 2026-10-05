@@ -65,7 +65,7 @@ export function decodeAudio(buffer, signal, executable = ffmpegPath) {
 }
 
 export class VoiceOutput {
-  constructor(getClient, getConfig, log) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.connections = new Map(); this.connecting = new Map(); }
+  constructor(getClient, getConfig, log) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.connections = new Map(); this.connecting = new Map(); this.speechControllers = new Map(); this.heldSpeech = new Map(); }
   async connect(guildId, overrideChannel) {
     if (this.connecting.has(guildId)) return this.connecting.get(guildId);
     const pending = this.establish(guildId, overrideChannel); this.connecting.set(guildId, pending);
@@ -95,9 +95,27 @@ export class VoiceOutput {
     catch { this.disconnect(guildId); throw new Error('Discord音声接続を確立できません。接続・発言権限と回線を確認してください'); }
     connection.subscribe(player); player.play(createAudioResource(mixer, { inputType: StreamType.Raw })); return entry;
   }
-  async speech(guildId, buffer, volume, signal) {
-    const entry = await this.connect(guildId); signal?.throwIfAborted();
-    const pcm = await decodeAudio(buffer, signal); await entry.mixer.addSpeech(pcm, volume, signal);
+  async speech(guildId, buffer, volume, signal, priority = 0) {
+    const controller = new AbortController(); const playbackSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    if (!this.speechControllers.has(guildId)) this.speechControllers.set(guildId, new Set());
+    const controllers = this.speechControllers.get(guildId); controllers.add(controller);
+    try {
+      const hold = this.heldSpeech.get(guildId);
+      if (hold && priority < 100) await new Promise((resolve, reject) => {
+        playbackSignal.throwIfAborted();
+        const resume = () => { playbackSignal.removeEventListener('abort', abort); resolve(); };
+        const abort = () => { hold.waiters.delete(resume); reject(playbackSignal.reason); };
+        hold.waiters.add(resume); playbackSignal.addEventListener('abort', abort, { once: true });
+      });
+      const entry = await this.connect(guildId); playbackSignal.throwIfAborted();
+      const pcm = await decodeAudio(buffer, playbackSignal); await entry.mixer.addSpeech(pcm, volume, playbackSignal);
+    } catch (error) { if (!controller.signal.aborted || signal?.aborted) throw error; }
+    finally { controllers.delete(controller); if (!controllers.size) this.speechControllers.delete(guildId); }
+  }
+  interruptSpeech(guildId) { for (const controller of this.speechControllers.get(guildId) || []) controller.abort(); }
+  holdSpeech(guildId, value) {
+    if (value) { const hold = this.heldSpeech.get(guildId) || { count: 0, waiters: new Set() }; hold.count++; this.heldSpeech.set(guildId, hold); }
+    else { const hold = this.heldSpeech.get(guildId); if (hold && --hold.count === 0) { this.heldSpeech.delete(guildId); for (const resume of hold.waiters) resume(); } }
   }
   async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; return entry; }
   media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; entry.mixer.addMedia(chunk); }

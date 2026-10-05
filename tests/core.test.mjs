@@ -22,9 +22,9 @@ test('media allowlist blocks local, credentials, non-HTTP and deceptive domains'
   for (const url of ['http://127.0.0.1/', 'http://[::1]/', 'file:///tmp/file', 'https://youtube.com.evil.test/', 'https://user:pass@youtube.com', 'https://youtube.com:8443/']) assert.throws(() => validateMediaUrl(url, allowed));
   assert.equal(validateMediaUrl('https://www.nicovideo.jp/watch/sm1', allowed), 'https://www.nicovideo.jp/watch/sm1');
 });
-test('existing extension commands preserve titles, loop and time offsets', () => {
-  assert.deepEqual(parseMediaCommand('https://www.youtube.com/watch?v=abc&t=1h2m3s再生\n**【ねこ】**', config()), { url: 'https://www.youtube.com/watch?v=abc&t=1h2m3s', title: 'ねこ', loop: false, startSeconds: 3723 });
-  assert.equal(parseMediaCommand('https://youtu.be/abc無限', config()).loop, true);
+test('existing extension commands preserve titles, playback mode and time offsets', () => {
+  assert.deepEqual(parseMediaCommand('https://www.youtube.com/watch?v=abc&t=1h2m3s再生\n**【ねこ】**', config()), { url: 'https://www.youtube.com/watch?v=abc&t=1h2m3s', title: 'ねこ', mode: 'preview', startSeconds: 3723 });
+  assert.equal(parseMediaCommand('https://youtu.be/abc無限', config()).mode, 'full');
   assert.equal(parseMediaCommand('普通の会話 https://youtu.be/abc', config()), null);
 });
 test('versioned commands validate type and offsets', () => {

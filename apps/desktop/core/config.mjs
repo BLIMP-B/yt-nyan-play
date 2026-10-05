@@ -13,7 +13,7 @@ export const DEFAULT_CONFIG = {
   speech: {
     enabled: true, provider: 'voicevox', engineUrl: 'http://127.0.0.1:50021',
     engineExecutable: '', styleId: 3, speed: 1, pitch: 0, intonation: 1,
-    volume: 0.8, output: 'local', outputDevice: '', maxChars: 500,
+    volume: 0.8, output: 'discord', outputDevice: '', maxChars: 500,
     readNames: true, readUrls: false, readEmoji: false, readAttachments: true,
     readSpoilers: false, spoilerText: 'ネタバレ', readCode: false,
     messageTemplate: '$nickname$、$text$', joinTemplate: '$nickname$が$channel$に参加しました',
@@ -22,10 +22,11 @@ export const DEFAULT_CONFIG = {
     ignoredUserIds: [], allowedUserIds: [], ignoredRoleIds: [], blockedWords: [],
     profiles: [], emojiReadings: [], soundClips: [], forwarding: [],
     bouyomiNativeRules: true, bouyomiUseDefaults: true, bouyomiHost: '127.0.0.1', bouyomiPort: 50001, bouyomiHttpPort: 50080, bouyomiCommunication: 'tcp', bouyomiVoice: 0, bouyomiTone: -1,
+    bouyomiPreprocess: false, bouyomiTagMode: 'original', bouyomiVoiceMap: [],
   },
   media: {
     enabled: true, volume: 0.7, ducking: 0.35, showWindow: true,
-    output: 'local', maxMinutes: 120,
+    output: 'discord', maxMinutes: 120,
     allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'x.com',
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
       'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
@@ -71,6 +72,9 @@ export function normalizeConfig(patch) {
   if (c.twitter.guildId && !/^\d{5,22}$/.test(c.twitter.guildId)) fail('X読み上げ先');
   if (c.bot.masterTextChannelId && !/^\d{5,22}$/.test(c.bot.masterTextChannelId)) fail('マスタチャンネルID');
   if (!['voicevox', 'bouyomi'].includes(c.speech.provider)) fail('音声エンジン');
+  if (!['original', 'on', 'off'].includes(c.speech.bouyomiTagMode)) fail('棒読みちゃんの配信者向け機能');
+  if (!Array.isArray(c.speech.bouyomiVoiceMap) || c.speech.bouyomiVoiceMap.length > 500) fail('棒読みちゃんの声対応');
+  c.speech.bouyomiVoiceMap = c.speech.bouyomiVoiceMap.map(p => { number(p.voiceId, 0, 32767, '元の声ID', true); number(p.styleId, 0, 65535, '対応する声種', true); return { voiceId: p.voiceId, styleId: p.styleId }; });
   for (const g of ['speech', 'media']) if (!['local', 'discord', 'both'].includes(c[g].output)) fail('音声出力先');
   number(c.speech.styleId, 0, 65535, '声種', true);
   number(c.speech.speed, 0.5, 2, '話速'); number(c.speech.pitch, -0.15, 0.15, '音程');

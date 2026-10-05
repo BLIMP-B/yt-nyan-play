@@ -41,3 +41,34 @@ test('master media routing and failed enqueue do not lose retryable incoming req
   s.bot.handlers.media = handler; await s.bot.message(m);
   assert.equal(s.media.length, 1); assert.equal(s.media[0].master, true);
 });
+test('plain ていし is scoped, deduplicated and received with speech disabled without admin permission', async t => {
+  const s = setup(t), stopped = []; s.bot.handlers.stopRequested = payload => stopped.push(payload);
+  s.store.config.speech.enabled = false; s.store.config.bot.bindings[0].disabledTextChannelIds = ['22222'];
+  const m = s.message(' ていし '); await s.bot.message(m); await s.bot.message(m);
+  assert.deepEqual(stopped, [{ guildId: '11111', master: false }]); assert.equal(s.speech.length, 0);
+  s.store.config.bot.masterTextChannelId = '22222'; await s.bot.message(s.message('ていし', '2')); assert.equal(stopped[1].master, true);
+  const unregistered = s.message('ていし', '3'); unregistered.channelId = '77777'; await s.bot.message(unregistered); assert.equal(stopped.length, 2);
+});
+test('VC text is read and can be disabled through read-channel', async t => {
+  const s = setup(t), m = s.message('VC内の会話'); m.channelId = '33333'; await s.bot.message(m); assert.equal(s.speech.length, 1);
+  const control = s.message('!nyan read-channel 33333 off', '2', true); control.channelId = '33333'; await s.bot.message(control);
+  const disabled = s.message('読まない', '3'); disabled.channelId = '33333'; await s.bot.message(disabled); assert.equal(s.speech.length, 1);
+});
+test('VC join, move and leave are announced for the configured channel only', async t => {
+  const s = setup(t); s.store.config.bot.announceJoinLeave = true; s.store.config.bot.autoLeave = false;
+  const guild = { id: '11111', name: 'サーバー', channels: { cache: new Map() } }, member = { displayName: 'ねこ', user: { username: '猫', bot: false } };
+  const state = (id, name) => ({ channelId: id, channel: id ? { name } : null, guild, member, id: '44444' });
+  await s.bot.voiceState(state(null), state('33333', 'VC')); await s.bot.voiceState(state('33333', 'VC'), state('55555', '別VC')); await s.bot.voiceState(state('33333', 'VC'), state(null));
+  await s.bot.voiceState(state('55555', '別VC'), state('66666', '無関係'));
+  assert.deepEqual(s.speech.map(p => p.text), ['ねこがVCに参加しました', 'ねこがVCから別VCへ移動しました', 'ねこがVCから退出しました']);
+});
+test('Bot activity prioritizes master then newest media, reverts on end and clears on stop', t => {
+  const s = setup(t), presence = []; s.bot.status = 'online'; s.bot.client.user.setPresence = p => presence.push(p);
+  const a = { scope: '11111', startedAt: 1, title: '猫', service: 'YouTube' }, b = { scope: '22222', startedAt: 2, title: '音楽', service: 'ニコニコ動画', audioOnly: true }, master = { scope: 'master', startedAt: 1, title: '共通', service: 'X' };
+  s.bot.updateMediaActivity([a, b]); assert.equal(presence.at(-1).activities[0].name, 'ニコニコ動画：音楽'); assert.equal(presence.at(-1).activities[0].type, 2);
+  s.bot.updateMediaActivity([a, b]); assert.equal(presence.length, 1);
+  s.bot.updateMediaActivity([a, b, master]); assert.equal(presence.at(-1).activities[0].name, 'X：共通');
+  s.bot.updateMediaActivity([a]); assert.equal(presence.at(-1).activities[0].name, 'YouTube：猫'); assert.equal(presence.at(-1).activities[0].type, 3);
+  s.bot.updateMediaActivity([{ ...a, paused: true }]); assert.match(presence.at(-1).activities[0].name, /一時停止/);
+  s.bot.updateMediaActivity([]); assert.deepEqual(presence.at(-1).activities, []);
+});

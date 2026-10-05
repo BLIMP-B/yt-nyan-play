@@ -40,7 +40,8 @@ export class Store extends EventEmitter {
     this.emit('change');
   }
   enqueue(kind, payload) {
-    if (this.jobs.filter(j => ['waiting', 'running'].includes(j.status)).length >= 1000) throw new Error('待機キューが上限です。不要な項目を削除してください');
+    const pending = this.jobs.filter(j => ['waiting', 'running'].includes(j.status)).length;
+    if (pending >= (kind === 'speech' && payload.priority === 100 ? 1100 : 1000)) throw new Error('待機キューが上限です。不要な項目を削除してください');
     const job = { id: crypto.randomUUID(), kind, payload, status: 'waiting', createdAt: new Date().toISOString() };
     this.jobs.push(job); this.jobs = this.jobs.filter(j => ['waiting', 'running', 'interrupted'].includes(j.status)).concat(this.jobs.filter(j => !['waiting', 'running', 'interrupted'].includes(j.status)).slice(-1000));
     this.saveState(); return job;

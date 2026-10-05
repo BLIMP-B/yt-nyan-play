@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits, ActivityType } from 'discord.js';
 import { parseBotCommand, parseMediaCommand } from '../core/protocol.mjs';
 import { shouldRead, shouldReceive, prepareSpeech, formatTemplate } from '../core/text.mjs';
 
@@ -8,7 +8,7 @@ export class DiscordBot {
       intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.DirectMessages], partials: [Partials.Channel],
     }));
-    this.client = null; this.status = 'offline'; this.startedAt = null; this.receiving = new Set();
+    this.client = null; this.status = 'offline'; this.startedAt = null; this.receiving = new Set(); this.mediaActivity = []; this.presenceKey = null;
   }
   async start(token) {
     if (this.client) throw new Error('Botは接続中です');
@@ -18,6 +18,7 @@ export class DiscordBot {
     const safe = callback => (...args) => { Promise.resolve().then(() => callback(...args)).catch(e => this.store.log('error', e.message)); };
     client.on(Events.ClientReady, safe(async () => {
       this.status = 'online'; this.startedAt = new Date().toISOString(); this.store.log('info', 'Discord Botに接続しました');
+      this.presenceKey = null; this.updateMediaActivity(this.mediaActivity);
       if (this.store.config.bot.autoJoin) for (const b of this.store.config.bot.bindings) await this.handlers.join(b.guildId);
     }));
     client.on(Events.MessageCreate, safe(message => this.message(message)));
@@ -46,7 +47,7 @@ export class DiscordBot {
   async message(message) {
     if (message.author.id === this.client?.user?.id || message.system) return;
     const c = this.store.config; const normalized = this.normalize(message);
-    const inBinding = c.bot.bindings.some(b => b.guildId === normalized.guildId && b.textChannelIds.includes(normalized.channelId));
+    const inBinding = c.bot.bindings.some(b => b.guildId === normalized.guildId && (b.voiceChannelId === normalized.channelId || b.textChannelIds.includes(normalized.channelId)));
     if (!inBinding && normalized.channelId !== c.bot.masterTextChannelId && !(c.bot.readDMs && !normalized.guildId)) return;
     const control = parseBotCommand(normalized.content, c.bot.prefix);
     if (control) {
@@ -58,6 +59,10 @@ export class DiscordBot {
     if (!shouldReceive(normalized, c) || this.receiving.has(message.id) || this.store.seen.includes(`message:${message.id}`)) return;
     this.receiving.add(message.id);
     try {
+    if (normalized.content.trim() === 'ていし') {
+      await this.handlers.stopRequested({ guildId: normalized.guildId, master: normalized.channelId === c.bot.masterTextChannelId });
+      this.store.remember(`message:${message.id}`); return;
+    }
     const media = parseMediaCommand(normalized.content, c);
     if (media) { if (c.media.enabled) { await this.handlers.media({ ...media, master: normalized.channelId === c.bot.masterTextChannelId, guildId: normalized.guildId, source: normalized.displayName }); this.store.remember(`message:${message.id}`); } return; }
     if (!c.speech.enabled || !shouldRead(normalized, c)) return;
@@ -70,7 +75,7 @@ export class DiscordBot {
   async reply(message, text) { await message.reply({ content: String(text).slice(0, 1900), allowedMentions: { parse: [], repliedUser: false } }); }
   async command(cmd, message, info, admin) {
     const c = this.store.exportConfig(); const arg = cmd.args;
-    if (cmd.name === 'help') return this.reply(message, `${c.bot.prefix} help / status / speakers / voice <ID> / speed <0.5〜2> / join / leave / pause / resume / skip / stop / play <URL> / loop <URL> / read-channel <ID> on/off / dict <単語> <読み> / dict-list / dict-remove <単語>\n管理操作はサーバー管理権限または設定した操作ユーザーが利用できます。`);
+    if (cmd.name === 'help') return this.reply(message, `${c.bot.prefix} help / status / speakers / voice <ID> / speed <0.5〜2> / join / leave / pause / resume / skip / stop / play <URL> / loop <URL> / direct <URL> / read-channel <ID> on/off / dict <単語> <読み> / dict-list / dict-remove <単語>\nURL再生＝告知後45秒、URL無限＝告知後1回全編、URL直接＝告知なし1回全編。ていし＝優先停止。\n管理操作はサーバー管理権限または設定した操作ユーザーが利用できます。`);
     if (cmd.name === 'status') return this.reply(message, `Bot: ${this.status} / 待機: ${this.store.jobs.filter(j => j.status === 'waiting').length}`);
     if (cmd.name === 'speakers') { const speakers = await this.handlers.speakers(); return this.reply(message, speakers.flatMap(s => s.styles.map(v => `${v.id}: ${s.name}・${v.name}`)).join('\n')); }
     if (['voice', 'speed'].includes(cmd.name)) {
@@ -83,9 +88,9 @@ export class DiscordBot {
     if (!admin) return this.reply(message, 'この操作にはサーバー管理権限または設定済みの操作ユーザー権限が必要です');
     if (cmd.name === 'join') { await this.handlers.join(info.guildId); return this.reply(message, '設定された音声チャンネルに接続しました'); }
     if (cmd.name === 'leave') { this.handlers.leave(info.guildId); return this.reply(message, '音声チャンネルから退出しました'); }
-    if (cmd.name === 'read-channel') { const id = String(arg[0] || info.channelId).replace(/[<#>]/g, ''); const binding = c.bot.bindings.find(b => b.guildId === info.guildId); if (!binding || !binding.textChannelIds.includes(id) || !['on', 'off'].includes(arg[1])) throw new Error('read-channel <登録したチャンネルID> on/off を指定してください'); binding.disabledTextChannelIds = binding.disabledTextChannelIds.filter(x => x !== id); if (arg[1] === 'off') binding.disabledTextChannelIds.push(id); this.store.updateConfig(c); return this.reply(message, `チャンネル ${id} の読み上げを ${arg[1]} にしました`); }
+    if (cmd.name === 'read-channel') { const id = String(arg[0] || info.channelId).replace(/[<#>]/g, ''); const binding = c.bot.bindings.find(b => b.guildId === info.guildId); if (!binding || !(binding.voiceChannelId === id || binding.textChannelIds.includes(id)) || !['on', 'off'].includes(arg[1])) throw new Error('read-channel <登録したチャンネルID> on/off を指定してください'); binding.disabledTextChannelIds = binding.disabledTextChannelIds.filter(x => x !== id); if (arg[1] === 'off') binding.disabledTextChannelIds.push(id); this.store.updateConfig(c); return this.reply(message, `チャンネル ${id} の読み上げを ${arg[1]} にしました`); }
     if (['pause', 'resume', 'skip', 'stop'].includes(cmd.name)) { this.handlers.control(cmd.name, info.channelId === c.bot.masterTextChannelId ? 'master' : info.guildId); return this.reply(message, `再生操作: ${cmd.name}`); }
-    if (['play', 'loop'].includes(cmd.name)) { if (!c.media.enabled) throw new Error('メディアの受信を無効にしています'); const media = parseMediaCommand(`${arg.join(' ')}${cmd.name === 'loop' ? '無限' : '再生'}`, c); if (!media) throw new Error('URLを指定してください'); this.handlers.media({ ...media, master: info.channelId === c.bot.masterTextChannelId, guildId: info.guildId, source: info.displayName }); return this.reply(message, '再生キューに追加しました'); }
+    if (['play', 'loop', 'direct'].includes(cmd.name)) { if (!c.media.enabled) throw new Error('メディアの受信を無効にしています'); const media = parseMediaCommand(`${arg.join(' ')}${{ play: '再生', loop: '無限', direct: '直接' }[cmd.name]}`, c); if (!media) throw new Error('URLを指定してください'); this.handlers.media({ ...media, master: info.channelId === c.bot.masterTextChannelId, guildId: info.guildId, source: info.displayName }); return this.reply(message, '再生キューに追加しました'); }
     if (cmd.name === 'dict-list') return this.reply(message, c.dictionary.filter(d => d.scope === 'global' || d.scopeId === info.guildId).map(d => `${d.source} → ${d.replacement}`).join('\n') || '辞書は空です');
     if (cmd.name === 'dict' || cmd.name === 'dict-remove') {
       if (!arg[0] || cmd.name === 'dict' && !arg[1]) throw new Error('単語と読み方を指定してください');
@@ -112,5 +117,13 @@ export class DiscordBot {
     if (!this.client?.isReady()) return [];
     return [...this.client.guilds.cache.values()].map(g => ({ id: g.id, name: g.name,
       channels: [...g.channels.cache.values()].filter(ch => ch.isTextBased() || ch.isVoiceBased()).map(ch => ({ id: ch.id, name: ch.name, voice: ch.isVoiceBased() })) }));
+  }
+  updateMediaActivity(items) {
+    this.mediaActivity = items;
+    if (!this.client?.user?.setPresence || this.status !== 'online') return;
+    const active = items.filter(i => i.startedAt && i.title).sort((a, b) => Number(b.scope === 'master') - Number(a.scope === 'master') || b.startedAt - a.startedAt)[0];
+    const name = active ? [...`${active.paused ? '一時停止：' : ''}${active.service}：${active.title}`].slice(0, 128).join('') : '';
+    const key = `${name}:${active?.audioOnly || false}`; if (this.presenceKey === key) return;
+    this.client.user.setPresence({ status: 'online', activities: active ? [{ name, type: active.audioOnly ? ActivityType.Listening : ActivityType.Watching }] : [] }); this.presenceKey = key;
   }
 }
