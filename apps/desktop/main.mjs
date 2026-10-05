@@ -133,7 +133,7 @@ else {
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
     if (name === 'media:show') { media.show(); return null; }
     if (name === 'media:login') { await accounts.open(data); return null; }
-    if (name === 'hourly:test') { await hourly.test(String(data?.guildId || '')); return snapshot(); }
+    if (name === 'hourly:test') { try { await hourly.test(String(data?.guildId || '')); } catch (error) { if (error.name !== 'AbortError') throw error; } return snapshot(); }
     if (name === 'hourly:cancel') { hourly.cancel(); return snapshot(); }
     if (name === 'hourly:sync') { historyController ||= new AbortController(); await hourlyHistory.sync(historyController.signal); return snapshot(); }
     if (name === 'hourly:sync-cancel') { historyController?.abort(); historyController = null; return snapshot(); }
@@ -286,7 +286,7 @@ else {
     hourlyModel = new HourlyModel(store.directory, getConfig, (url, options) => net.fetch(url, options)); hourlyModel.on('change', emitState);
     hourly = new HourlyRuntime(store.directory, getConfig, {
       history: hourlyHistory, model: hourlyModel, fetcher: (url, options) => net.fetch(url, options),
-      log: (level, text) => store.log(level, text), targets: () => [...voice.connections.keys()], reserve: scopes => speechRunner.reserve(scopes),
+      log: (level, text) => store.log(level, text), targets: () => voice.snapshot().filter(v => v.status === 'ready').map(v => v.guildId), reserve: scopes => speechRunner.reserve(scopes),
       hold: (id, value) => { voice.holdSpeech(id, value); if (value) voice.interruptSpeech(id); },
       synthesize: async (text, signal) => decodeAudio(await new Voicevox(getConfig().speech.engineUrl).synthesize(text, getConfig().speech, signal), signal),
       fadeMedia: (gain, ms, scope) => { media.fadeOverlay(gain, ms, scope); for (const id of voice.connections.keys()) voice.fadeMedia(id, Math.min(media.overlayGains.get('*') ?? 1, media.overlayGains.get(id) ?? 1), ms); },
@@ -304,7 +304,7 @@ else {
         try {
           const until = Date.now() + 15000;
           while (Date.now() < until) { signal.throwIfAborted(); if (error) throw error; if (browser.status?.loginRequired) throw new Error(browser.status.blockedReason || 'YouTubeへのログインが必要です'); if (browser.status?.startedAt && browser.status.currentTime > 0) break; if (done) throw new Error('BGMが開始前に終了しました'); await new Promise(resolve => setTimeout(resolve, 100)); }
-          if (!browser.status?.startedAt) throw new Error('BGMの再生開始を確認できません');
+          if (!browser.status?.startedAt || !(browser.status.currentTime > 0)) throw new Error('BGMの再生開始を確認できません');
           return { stop, fade: async (ms, fadeSignal) => { browser.setOverlayGain(0, ms); voice.fadeBackground(guildId, 0, ms); await new Promise((resolve, reject) => { const timer = setTimeout(finished, ms); const abort = () => { clearTimeout(timer); fadeSignal?.removeEventListener('abort', abort); reject(fadeSignal.reason); }; function finished() { fadeSignal?.removeEventListener('abort', abort); resolve(); } fadeSignal?.addEventListener('abort', abort, { once: true }); }); } };
         } catch (e) { await stop(); throw e; }
       },

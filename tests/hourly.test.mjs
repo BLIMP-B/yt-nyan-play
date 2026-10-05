@@ -63,14 +63,16 @@ test('browser fade changes volume smoothly without pausing or replaying naturall
   const state = runInNewContext(mediaScript({ mode: 'direct', volume: 1, volumeRampMs: 1000 }), context); assert.equal(state.ended, true); assert.equal(video.paused, true);
 });
 test('all selected channel history is paginated, persisted, updated, deleted and cut off at generation time', async t => {
-  const directory = temp(t); const c = normalizeConfig({ hourly: { servers: [{ guildId: '11111', enabled: true, bgm: false, channelIds: ['22222', '33333'] }] } });
+  const directory = mkdtempSync(join(tmpdir(), 'nyan-hourly-history-')); let history;
+  t.after(() => { history?.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  const c = normalizeConfig({ hourly: { servers: [{ guildId: '11111', enabled: true, bgm: false, channelIds: ['22222', '33333'] }] } });
   const messages = Array.from({ length: 230 }, (_, i) => ({ id: String(10000 + i), channelId: '22222', guildId: '11111', content: i === 0 ? '猫 時計' : '森 太陽', createdTimestamp: i + 1 }));
   let calls = 0, denied = false;
   const channel = id => ({ guildId: '11111', name: id, permissionsFor: () => ({ has: () => !denied }), messages: { fetch: async options => { calls++; return new Map(messages.filter(m => m.channelId === id && (!options.before || BigInt(m.id) < BigInt(options.before))).reverse().slice(0, options.limit).map(m => [m.id, m])); } } });
   const client = { isReady: () => true, user: { id: '99999' }, channels: { fetch: async id => channel(id) } };
-  let history = new HourlyHistory(directory, () => client, () => c); await history.sync(); assert.equal(history.snapshot().messages, 230); assert.ok(calls >= 4);
+  history = new HourlyHistory(directory, () => client, () => c); await history.sync(); assert.equal(history.snapshot().messages, 230); assert.ok(calls >= 4);
   const model = await history.model(c.hourly.servers[0], 1); assert.equal(model.vocabulary('名詞').length, 2); history.close();
-  history = new HourlyHistory(directory, () => client, () => c); t.after(() => history.close());
+  history = new HourlyHistory(directory, () => client, () => c);
   const before = calls; await history.sync(); assert.equal(calls - before, 2); assert.equal(history.snapshot().messages, 230);
   await history.record({ ...messages[0], content: '月 料理' }); history.deleted(messages[1].id); assert.equal(history.snapshot().messages, 229);
   denied = true; await assert.rejects(history.model(c.hourly.servers[0], 999), /現在の履歴閲覧権限/);
@@ -78,8 +80,8 @@ test('all selected channel history is paginated, persisted, updated, deleted and
 test('the local SLM receives words, produces a subject and predicate, and supplies two nouns actually present in its output', async () => {
   const analyzer = await tokenizer(), model = new SmallWordModel(() => 0); model.train(lexicalTokens('猫が時計を眺める。', analyzer));
   let body;
-  const result = await generateSlm(model, normalizeConfig().hourly, undefined, async (url, options) => { assert.equal(url.hostname, '127.0.0.1'); body = JSON.parse(options.body); return new Response(JSON.stringify({ response: JSON.stringify({ text: '猫は時計を眺めます。', nouns: ['猫', '時計'] }) })); });
-  assert.equal(body.model, 'qwen3:0.6b'); assert.equal(body.think, false); assert.deepEqual(result.nouns, ['猫', '時計']);
+  const result = await generateSlm(model, normalizeConfig().hourly, undefined, async (url, options) => { assert.equal(url.hostname, '127.0.0.1'); body = JSON.parse(options.body); return new Response(JSON.stringify({ response: JSON.stringify({ subject: '猫', object: '時計', verb: '眺める', adjective: '' }) })); });
+  assert.equal(body.model, 'qwen3:0.6b'); assert.equal(body.think, false); assert.deepEqual(result.nouns, ['猫', '時計']); assert.equal(result.text, '猫は、時計を眺める。');
   await assert.rejects(generateSlm(model, normalizeConfig().hourly, undefined, async () => new Response(JSON.stringify({ response: '{"text":"猫と時計。"}' }))), /主語・述語/);
   assert.throws(() => normalizeConfig({ hourly: { slmUrl: 'https://example.com' } }), /PC内/);
 });
@@ -108,4 +110,9 @@ test('late common chimes are rejected before reserving or interrupting any audio
   let interrupted = false; const at = 100000;
   const runtime = new HourlyRuntime(temp(t), () => normalizeConfig(), { reserve: () => { interrupted = true; }, log() {} }, { now: () => at });
   await assert.rejects(runtime.execute({ ...hourlyProgram(Buffer.alloc(700 * 192), at), text: '時報' }), /間に合いません/); assert.equal(interrupted, false); runtime.close();
+});
+test('cancelling a pending automatic hour also cancels its slot, so polling cannot recreate it', async t => {
+  const at = new Date(2026, 9, 5, 12, 0).getTime(), c = normalizeConfig({ hourly: { enabled: true, output: 'local' } }); let prepared = 0;
+  const runtime = new HourlyRuntime(temp(t), () => c, { synthesize: async () => { prepared++; return Buffer.alloc(700 * 192); }, log() {} }, { now: () => at - 50000 });
+  runtime.tick(); await turn(); assert.equal(runtime.snapshot().busy, true); runtime.cancel(); runtime.tick(); await turn(); assert.equal(prepared, 1); assert.equal(runtime.snapshot().busy, false); runtime.close();
 });

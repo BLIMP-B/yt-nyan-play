@@ -155,7 +155,7 @@ export class VoiceOutput {
     finally { controllers.delete(controller); if (!controllers.size) this.speechControllers.delete(guildId); }
   }
   interruptSpeech(guildId) { for (const controller of this.speechControllers.get(guildId) || []) controller.abort(); }
-  async pcm(guildId, pcm, volume, signal, startAt = 0) { const entry = await this.connect(guildId); signal?.throwIfAborted(); await entry.mixer.addSpeech(pcm, volume, signal, startAt); }
+  async pcm(guildId, pcm, volume, signal, startAt = 0) { const entry = await this.connect(guildId); signal?.throwIfAborted(); if (startAt && Date.now() > startAt + 250) throw new Error('時報の音声接続準備が予約時刻に間に合いませんでした'); await entry.mixer.addSpeech(pcm, volume, signal, startAt); }
   holdSpeech(guildId, value) {
     if (value) { const hold = this.heldSpeech.get(guildId) || { count: 0, waiters: new Set() }; hold.count++; this.heldSpeech.set(guildId, hold); }
     else { const hold = this.heldSpeech.get(guildId); if (hold && --hold.count === 0) { this.heldSpeech.delete(guildId); for (const resume of hold.waiters) resume(); } }

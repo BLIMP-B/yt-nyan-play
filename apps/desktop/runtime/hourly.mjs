@@ -16,7 +16,7 @@ export class HourlyRuntime extends EventEmitter {
   save() { const cutoff = this.now() - 2 * 86400000; for (const [key, plan] of Object.entries(this.saved.plans)) if (plan.at < cutoff) delete this.saved.plans[key]; writeAtomic(this.file, this.saved); this.changed(); }
   key(server, at) { return `${server.guildId}:${at}:${JSON.stringify([server.channelIds, this.getConfig().hourly.slmModel])}`; }
   mode(server, budgetMs = 7000) { const c = this.getConfig().hourly; return c.generationMode === 'auto' ? (this.saved.measurements[server.guildId]?.daily || this.saved.measurements[server.guildId]?.elapsedMs > budgetMs ? 'daily' : 'live') : c.generationMode; }
-  snapshot() { return { phase: this.phase, active: this.active, busy: Boolean(this.active || this.preparing || this.testing), nextAt: this.nextAt, error: this.error, measurements: this.saved.measurements, batches: [...this.batches.keys()] }; }
+  snapshot() { return { phase: this.phase, active: this.active, busy: Boolean(this.active || this.preparing || this.prepared || this.testing), nextAt: this.nextAt, error: this.error, measurements: this.saved.measurements, batches: [...this.batches.keys()] }; }
   start() { if (!this.timer) { this.timer = setInterval(() => this.tick(), 500); this.timer.unref(); } this.tick(); }
   tick() {
     if (!this.getConfig().hourly.enabled || this.active || this.testing) { if (!this.getConfig().hourly.enabled && !this.active && !this.testing) this.phase = '停止中'; return; }
@@ -134,7 +134,11 @@ export class HourlyRuntime extends EventEmitter {
     try { const at = this.now() + 15000; const program = await this.prepare(at, controller.signal); await this.until(program.startAt - this.getConfig().hourly.fadeMs, controller.signal); return await this.execute(program, { test: true, guildId }); }
     finally { this.testing = false; this.changed(); }
   }
-  cancel() { this.controller?.abort(new DOMException('時報を中止しました', 'AbortError')); this.controller = null; this.prepared = null; }
+  cancel() {
+    this.attempted = this.preparing || this.prepared?.thirdAt || this.active?.thirdAt || this.attempted;
+    this.controller?.abort(new DOMException('時報を中止しました', 'AbortError')); this.controller = null; this.prepared = null;
+    this.phase = this.getConfig().hourly.enabled ? '次の正時を待機' : '停止中'; this.changed();
+  }
   update() { if (!this.getConfig().hourly.enabled) this.cancel(); this.nextAt = nextHour(this.now()); this.changed(); }
   close() { clearInterval(this.timer); this.cancel(); }
 }
