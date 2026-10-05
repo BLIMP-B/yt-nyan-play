@@ -9,7 +9,7 @@ const extension = resolve(root, 'extension');
 const manifest = JSON.parse(readFileSync(resolve(extension, 'manifest.json'), 'utf8'));
 const metadata = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, metadata.version, 'Versions must agree');
+assert.equal(manifest.version, metadata.extensionVersion ?? metadata.version, 'Extension versions must agree');
 assert.ok(!manifest.update_url, 'Do not bundle Chrome Web Store update metadata');
 
 function checkReference(path) {

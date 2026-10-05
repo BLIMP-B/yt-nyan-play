@@ -1,4 +1,4 @@
-# YTにゃんぷれい
+# にゃんぷれい — Chrome拡張とWindowsアプリ
 
 YouTubeの動画ページに「再生」ボタンを追加し、動画のURL・再生指定・タイトルを、選択したDiscordのWebhookへ送信するChrome拡張機能です。
 
@@ -10,9 +10,19 @@ YouTubeの動画ページに「再生」ボタンを追加し、動画のURL・�
 
 デスクトップ側は**常時稼働Windows PC上のDiscord.js Bot**とします。VOICEVOX以外の統合元は全機能の移植を対象とし、[機能対応表の方針](docs/FEATURE_PARITY.md)で確認状況と完了条件を管理します。
 
-拡張側のSNS・ニコニコ動画対応と「再生可能なメディアのボタンから送信画面を開く」仕様は[送信側の拡張仕様](docs/EXTENSION_SPEC.md)に整理しています。今回の実装・配布ZIPはYouTube向けChrome拡張v0.1.2です。デスクトップ統合とSNS対応は今後の実装です。
+拡張側のSNS・ニコニコ動画対応と「再生可能なメディアのボタンから送信画面を開く」仕様は[送信側の拡張仕様](docs/EXTENSION_SPEC.md)に整理しています。PC側 v0.2.0を実装しました。Electronの日本語設定画面、常駐Discord.js Bot、VOICEVOX読み上げ、辞書・利用者ごとの声、専用ブラウザ再生、PC / Discord音声出力、永続キューをまとめています。Chrome拡張はYouTube向けv0.1.2を維持し、SNS向けの検出UIと統合元全機能の照合は残っています。
 
-## 機能
+## Windowsアプリを使う
+
+[導入と操作](docs/DESKTOP.md) · [PC側の設計](docs/INTEGRATION_PLAN.md) · [機能対応と未解決点](docs/FEATURE_PARITY.md) · [第三者ソフトウェア](THIRD_PARTY.md)
+
+GitHub Actionsの **Desktop tests and Windows package** の成功した実行から `nyan-play-windows-x64` をダウンロードし、セットアップEXEで導入できます。Botトークン、受信チャンネルと音声チャンネル、VOICEVOX Engineを設定してください。エンジン・モデルはこの版に同梱していません。
+
+ソースからはNode.js 22.12以上で `npm ci`、`npm start`。Windows上で `npm run dist:win` を実行するとインストーラーとZIPを作成します。Node.js / Discord.js / FFmpegとChrome拡張を同梱します。Chrome拡張の導入はChrome側で行います。
+
+`npm test` は受信・権限・復旧・辞書・合成API・音声混合、`npm run smoke:desktop` はElectron画面と辞書保存を確認します。実Discord接続、実音声モデル、サイト別再生、長時間Windows稼働は利用環境での検証が必要です。統合元の全機能移植が完了した版ではありません。
+
+## Chrome拡張の機能
 
 - YouTubeの動画ページ・Shortsの操作領域に「再生」ボタンを追加。
 - 複数のDiscord送信先を登録し、チェックした宛先へ送信。
@@ -21,7 +31,7 @@ YouTubeの動画ページに「再生」ボタンを追加し、動画のURL・�
 - 送信履歴を最大50件保存し、設定画面から宛先を選んで再送・削除。
 - Webhookの表示切り替えと一覧でのマスク表示。
 
-この拡張機能が行うのはメッセージ送信です。Discord側で音楽などを再生するには、送信形式に対応するBotなどの仕組みが必要です。
+Chrome拡張はWebhookへ送信し、Windowsアプリが受信して再生します。
 
 ## Chromeで読み込む
 
