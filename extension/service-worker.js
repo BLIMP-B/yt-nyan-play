@@ -1,115 +1,41 @@
-// service-worker.js
-// - Receives SEND_TO_DISCORD_WEBHOOKS
-// - POSTs to each Discord webhook
-// - Seeds default destinations into chrome.storage.sync
-// - Always responds (prevents UI from getting stuck)
-
-//DEFAULT DESTINATION
-const DEFAULT_DESTINATION_LABEL = "公式鯖聞き専チャット";
-// Repository edition: configure destinations in the options page.
-const DEFAULT_WEBHOOK_URL = "";
-
-function getSync(defaults) {
-  return new Promise((resolve) => {
-    try {
-      chrome.storage.sync.get(defaults, (res) => resolve(res || defaults));
-    } catch {
-      resolve(defaults);
+function validWebhook(value) {
+  try {
+    const u = new URL(String(value || '').trim().replace(/^<|>$/g, ''));
+    return u.protocol === 'https:' && !u.username && !u.password && ['discord.com','discordapp.com'].includes(u.hostname) && /^\/api\/webhooks\/\d+\/[\w-]+$/.test(u.pathname) ? u.href : null;
+  } catch { return null; }
+}
+async function send(url, content) {
+  const target = validWebhook(url); if (!target) throw new Error('DiscordのWebhook URLを設定してください。');
+  const response = await fetch(target, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,allowed_mentions:{parse:[]}}),signal:AbortSignal.timeout(12000)});
+  if(!response.ok)throw new Error(`送信失敗（HTTP ${response.status}）`);
+}
+async function registerAdditionalSites() {
+  const origins=(await chrome.permissions.getAll()).origins||[];
+  const fixed=new Set(chrome.runtime.getManifest().host_permissions);
+  const extra=origins.filter(x=>!fixed.has(x)&&/^https:\/\//.test(x)&&x!=='https://*/*');
+  const registered=await chrome.scripting.getRegisteredContentScripts();
+  const old=registered.filter(x=>x.id.startsWith('nyan-extra-')).map(x=>x.id);
+  if(old.length)await chrome.scripting.unregisterContentScripts({ids:old});
+  if(extra.length)await chrome.scripting.registerContentScripts(extra.map((origin,i)=>({id:`nyan-extra-${i}`,matches:[origin],js:['media-adapters.js','content-script.js'],runAt:'document_idle',persistAcrossSessions:true})));
+}
+chrome.runtime.onInstalled.addListener(()=>{registerAdditionalSites().catch(()=>{});});
+chrome.runtime.onStartup.addListener(()=>{registerAdditionalSites().catch(()=>{});});
+chrome.permissions.onAdded.addListener(()=>{registerAdditionalSites().catch(()=>{});});
+chrome.permissions.onRemoved.addListener(()=>{registerAdditionalSites().catch(()=>{});});
+chrome.action.onClicked.addListener(()=>chrome.runtime.openOptionsPage());
+chrome.runtime.onMessage.addListener((msg,_sender,reply)=>{
+  (async()=>{
+    if(msg?.type==='OPEN_OPTIONS'){await chrome.runtime.openOptionsPage();return {ok:true};}
+    if(msg?.type==='REGISTER_ADDITIONAL_SITES'){await registerAdditionalSites();return {ok:true};}
+    if(msg?.type==='ENSURE_DEFAULT_DESTINATIONS')return {ok:true,seeded:false};
+    if(msg?.type!=='SEND_TO_DISCORD_WEBHOOKS')return {ok:false,ignored:true};
+    if(!Array.isArray(msg.webhookUrls)||!msg.webhookUrls.length||msg.webhookUrls.length>25||typeof msg.content!=='string'||!msg.content.trim()||msg.content.length>2000)return {ok:false,error:'宛先と送信内容を確認してください。'};
+    const results=[];
+    for(const url of [...new Set(msg.webhookUrls)]){
+      try{await send(url,msg.content);results.push({url,ok:true});}
+      catch(e){results.push({url,ok:false,error:e.name==='TimeoutError'?'送信がタイムアウトしました。':e.name==='TypeError'?'接続できませんでした。':e.message});}
     }
-  });
-}
-
-function setSync(obj) {
-  return new Promise((resolve) => {
-    try {
-      chrome.storage.sync.set(obj, () => resolve());
-    } catch {
-      resolve();
-    }
-  });
-}
-
-async function ensureDefaultDestinations() {
-  if (!DEFAULT_WEBHOOK_URL) return { ok: true, seeded: false };
-  const res = await getSync({ destinations: [] });
-  const list = Array.isArray(res.destinations) ? res.destinations : [];
-
-  if (list.length > 0) return { ok: true, seeded: false };
-
-  const seededList = [{
-    label: DEFAULT_DESTINATION_LABEL,
-    webhookUrl: DEFAULT_WEBHOOK_URL,
-    isDefault: true
-  }];
-
-  await setSync({ destinations: seededList });
-  return { ok: true, seeded: true };
-}
-
-async function postToDiscordWebhook(webhookUrl, content) {
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content: String(content ?? "") })
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Webhook POST failed: ${res.status} ${res.statusText} ${text}`);
-  }
-}
-
-// on install/update: seed default if empty
-chrome.runtime.onInstalled.addListener(() => {
-  ensureDefaultDestinations().catch(() => {});
-});
-
-// Messages
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  (async () => {
-    try {
-      if (!msg || !msg.type) {
-        sendResponse({ ok: false, ignored: true });
-        return;
-      }
-
-      if (msg.type === "ENSURE_DEFAULT_DESTINATIONS") {
-        const r = await ensureDefaultDestinations();
-        sendResponse({ ok: true, seeded: !!r.seeded });
-        return;
-      }
-
-      if (msg.type !== "SEND_TO_DISCORD_WEBHOOKS") {
-        sendResponse({ ok: false, ignored: true });
-        return;
-      }
-
-      const { webhookUrls, content } = msg;
-      if (!Array.isArray(webhookUrls) || webhookUrls.length === 0) {
-        sendResponse({ ok: false, error: "No destinations selected." });
-        return;
-      }
-
-      const results = [];
-      for (const url of webhookUrls) {
-        try {
-          await postToDiscordWebhook(url, content);
-          results.push({ url, ok: true });
-        } catch (e) {
-          results.push({ url, ok: false, error: String(e?.message ?? e) });
-        }
-      }
-
-      sendResponse({ ok: true, results });
-    } catch (e) {
-      sendResponse({ ok: false, error: String(e?.message ?? e) });
-    }
-  })();
-
-  return true; // async sendResponse
-});
-
-// Open options when extension icon is clicked
-chrome.action.onClicked.addListener(() => {
-  chrome.runtime.openOptionsPage();
+    return {ok:results.every(r=>r.ok),results};
+  })().then(reply,()=>reply({ok:false,error:'処理に失敗しました。'}));
+  return true;
 });

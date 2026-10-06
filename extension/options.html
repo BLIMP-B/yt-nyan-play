@@ -13,7 +13,7 @@
 
     <h1 class="title">
       <img class="titleIcon" src="furoneko70furoneko70.png" alt="再生" />
-      <span>YTにゃんぷれい - 設定</span>
+      <span>にゃんぷれい - 設定</span>
     </h1>
 
     <div class="form">
@@ -31,6 +31,11 @@
 
     <h2>送信先</h2>
     <div id="list" class="list"></div>
+
+    <h2>追加のメディアサイト</h2>
+    <p>Mastodonの別インスタンスや一般サイトを、指定したサイトだけ許可します。</p>
+    <div class="urlRow"><input id="extraOrigin" class="input" type="url" placeholder="https://example.social"><button id="allowOrigin" type="button">許可</button></div>
+    <p id="originStatus" role="status"></p><div id="originList" class="list"></div>
 
     <h2 style="margin-top:30px;">送信履歴</h2>
     <div id="historyList" class="list"></div>

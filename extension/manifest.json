@@ -1,14 +1,30 @@
 {
   "manifest_version": 3,
-  "name": "YTにゃんぷれい",
-  "version": "0.1.2",
-  "description": "YouTubeの高評価ボタン左に「再生」ボタンを追加し、選択したDiscord宛先にURL+再生+タイトルを送信します。",
+  "name": "にゃんぷれい",
+  "version": "0.2.1",
+  "description": "YouTube・ニコニコ・SNSの動画や音声から、再生指定と開始位置を選んでDiscordへ送信します。",
   "permissions": [
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
-    "https://www.youtube.com/*",
-    "https://m.youtube.com/*",
+    "https://*.youtube.com/*",
+    "https://youtu.be/*",
+    "https://*.nicovideo.jp/*",
+    "https://nico.ms/*",
+    "https://*.x.com/*",
+    "https://*.twitter.com/*",
+    "https://*.instagram.com/*",
+    "https://*.tiktok.com/*",
+    "https://*.facebook.com/*",
+    "https://fb.watch/*",
+    "https://*.threads.net/*",
+    "https://*.threads.com/*",
+    "https://bsky.app/*",
+    "https://*.mastodon.social/*",
+    "https://*.mastodon.online/*",
+    "https://mstdn.jp/*",
+    "https://pawoo.net/*",
     "https://discord.com/api/webhooks/*",
     "https://discordapp.com/api/webhooks/*"
   ],
@@ -32,8 +48,7 @@
         "furoneko70furoneko70.png"
       ],
       "matches": [
-        "https://www.youtube.com/*",
-        "https://m.youtube.com/*"
+        "https://*/*"
       ]
     }
   ],
@@ -44,13 +59,32 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.youtube.com/*",
-        "https://m.youtube.com/*"
+        "https://*.youtube.com/*",
+        "https://youtu.be/*",
+        "https://*.nicovideo.jp/*",
+        "https://nico.ms/*",
+        "https://*.x.com/*",
+        "https://*.twitter.com/*",
+        "https://*.instagram.com/*",
+        "https://*.tiktok.com/*",
+        "https://*.facebook.com/*",
+        "https://fb.watch/*",
+        "https://*.threads.net/*",
+        "https://*.threads.com/*",
+        "https://bsky.app/*",
+        "https://*.mastodon.social/*",
+        "https://*.mastodon.online/*",
+        "https://mstdn.jp/*",
+        "https://pawoo.net/*"
       ],
       "js": [
+        "media-adapters.js",
         "content-script.js"
       ],
-      "run_at": "document_end"
+      "run_at": "document_idle"
     }
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
   ]
 }
