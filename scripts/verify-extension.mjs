@@ -21,6 +21,7 @@ try {
   let currentSite=sites[0],settings={},rejectSecond=false;
   await context.route('**/*',async route=>{
     const u=new URL(route.request().url());
+    if(u.protocol==='chrome-extension:'){await route.continue();return;}
     if(u.hostname==='discord.com') {received.push({url:route.request().url(),body:route.request().postDataJSON()});await route.fulfill({status:rejectSecond&&u.pathname.includes('00000000000000000001')?500:204,body:''});return;}
     if(u.pathname==='/nyan-fixture.mp4'){await route.fulfill({status:200,headers:{'Content-Type':'video/mp4','Accept-Ranges':'bytes'},body:video});return;}
     if(route.request().resourceType()==='document'){await route.fulfill({status:200,contentType:'text/html',body:html(currentSite,settings)});return;}
@@ -31,7 +32,7 @@ try {
   const open=async(index=0)=>{await trigger().nth(index).click();await page.getByRole('dialog').waitFor();};
   for(const site of sites){
     currentSite=site;settings={theme:['youtube','x','tiktok','mastodon'].includes(site.id)?'dark':'light'};
-    await page.goto(site.url);await trigger().first().waitFor();assert.equal(await trigger().count(),1,site.id+' duplicate buttons');
+    await page.goto(site.url);await trigger().first().waitFor();await page.waitForFunction(()=>[...document.querySelectorAll('[data-nyan-play-button]')].every(h=>{const i=h.shadowRoot.querySelector('img');return i.complete&&i.naturalWidth>0;}));await page.waitForFunction(()=>document.querySelector('#fixture-media').readyState>=2);assert.equal(await trigger().count(),1,site.id+' duplicate buttons');
     await page.screenshot({path:join(output,site.id+'-button.png')});
     await open();assert.match(await page.locator('#preview').textContent(),new RegExp((site.post||site.url).split('?')[0].replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
     assert.equal(received.length,0,'Detection must not send any message');
