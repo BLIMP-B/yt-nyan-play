@@ -83,3 +83,13 @@ test('automatic audio cannot reopen an empty VC; other guild listeners cannot sa
   const c = normalizeConfig({ bot: { bindings: [{ guildId: '11111', voiceChannelId: '33333', textChannelIds: [] }] } }), output = new VoiceOutput(() => client, () => c, () => {});
   await assert.rejects(output.connect('11111'), /人がいる/); assert.equal(output.connections.size, 0);
 });
+test('leaving one VC detaches its scheduled chime while the other guild continues; global cancellation still propagates', async () => {
+  const output = new VoiceOutput(() => null, () => normalizeConfig(), () => {}), finished = new Map();
+  output.connect = async guildId => ({ mixer: { addSpeech: (_pcm, _volume, signal) => new Promise((resolve, reject) => { finished.set(guildId, resolve); signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }) } });
+  const a = output.pcm('11111', Buffer.alloc(3840), 1), b = output.pcm('22222', Buffer.alloc(3840), 1);
+  await new Promise(resolve => setImmediate(resolve)); output.disconnect('11111'); await a;
+  assert.equal(output.pcmControllers.has('11111'), false); assert.equal(output.pcmControllers.has('22222'), true);
+  finished.get('22222')(); await b;
+  const controller = new AbortController(), c = output.pcm('33333', Buffer.alloc(3840), 1, controller.signal);
+  await new Promise(resolve => setImmediate(resolve)); controller.abort(); await assert.rejects(c, { name: 'AbortError' }); assert.equal(output.pcmControllers.size, 0);
+});

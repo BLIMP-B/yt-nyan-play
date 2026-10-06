@@ -8,6 +8,6 @@
 
 Windowsセットアップ: `NyanTalk-Damare-Setup-0.5.4-x64.exe`。展開用: `NyanTalk-Damare-0.5.4-x64.zip`。同じReleaseに拡張`yt-nyan-play-0.2.2.zip`とチェックサムを同梱します。拡張自体の変更はありません。
 
-検証: 143件の自動試験。EQの帯域応答、圧縮と左右バランス、無音・低音量のOpus送信、読み上げ減衰とBGMフェード、設定保存・再読み込み、VC在室・入退室・接続失敗・接続待ちの取り消しを確認します。Windows／Linuxの実Electronで履歴取り込みと連続音声を検証し、Windows配布パッケージ、Android／Google Play、ローカルSLMも公開前に検証します。VCイベントは模したデータを使用し、実Discordサーバーでの通話は未検証です。
+検証: 144件の自動試験。EQの帯域応答、圧縮と左右バランス、無音・低音量のOpus送信、読み上げ減衰とBGMフェード、設定保存・再読み込み、VC在室・入退室・接続失敗・接続待ちの取り消しを確認します。Windows／Linuxの実Electronで履歴取り込みと連続音声を検証し、Windows配布パッケージ、Android／Google Play、ローカルSLMも公開前に検証します。VCイベントは模したデータを使用し、実Discordサーバーでの通話は未検証です。
 
 [設定・動作の詳細](https://github.com/BLIMP-B/yt-nyan-play/blob/codex/windows-desktop-bot/docs/MEDIA_AUDIO_EFFECTS.md)

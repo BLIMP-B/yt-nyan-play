@@ -106,7 +106,7 @@ export function decodeAudio(buffer, signal, executable = ffmpegPath) {
 }
 
 export class VoiceOutput {
-  constructor(getClient, getConfig, log) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.connections = new Map(); this.connecting = new Map(); this.connectionEpochs = new Map(); this.speechControllers = new Map(); this.heldSpeech = new Map(); }
+  constructor(getClient, getConfig, log) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.connections = new Map(); this.connecting = new Map(); this.connectionEpochs = new Map(); this.speechControllers = new Map(); this.pcmControllers = new Map(); this.heldSpeech = new Map(); }
   async connect(guildId, overrideChannel, allowEmpty = false) {
     if (this.connecting.has(guildId)) return this.connecting.get(guildId);
     const epoch = this.connectionEpochs.get(guildId) || 0;
@@ -170,7 +170,19 @@ export class VoiceOutput {
     finally { controllers.delete(controller); if (!controllers.size) this.speechControllers.delete(guildId); }
   }
   interruptSpeech(guildId) { for (const controller of this.speechControllers.get(guildId) || []) controller.abort(); }
-  async pcm(guildId, pcm, volume, signal, startAt = 0) { const entry = await this.connect(guildId); signal?.throwIfAborted(); if (startAt && Date.now() > startAt + 250) throw new Error('時報の音声接続準備が予約時刻に間に合いませんでした'); await entry.mixer.addSpeech(pcm, volume, signal, startAt); }
+  async pcm(guildId, pcm, volume, signal, startAt = 0) {
+    const controller = new AbortController(), playbackSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    if (!this.pcmControllers.has(guildId)) this.pcmControllers.set(guildId, new Set());
+    const controllers = this.pcmControllers.get(guildId); controllers.add(controller);
+    try {
+      const entry = await this.connect(guildId); playbackSignal.throwIfAborted();
+      if (startAt && Date.now() > startAt + 250) throw new Error('時報の音声接続準備が予約時刻に間に合いませんでした');
+      await entry.mixer.addSpeech(pcm, volume, playbackSignal, startAt);
+    } catch (error) {
+      // Leaving one empty VC must not abort the common chime in the other guilds.
+      if (!controller.signal.aborted || signal?.aborted) throw error;
+    } finally { controllers.delete(controller); if (!controllers.size) this.pcmControllers.delete(guildId); }
+  }
   holdSpeech(guildId, value) {
     if (value) { const hold = this.heldSpeech.get(guildId) || { count: 0, waiters: new Set() }; hold.count++; this.heldSpeech.set(guildId, hold); }
     else { const hold = this.heldSpeech.get(guildId); if (hold && --hold.count === 0) { this.heldSpeech.delete(guildId); for (const resume of hold.waiters) resume(); } }
@@ -185,7 +197,7 @@ export class VoiceOutput {
   background(guildId, bytes) { this.connections.get(guildId)?.mixer.addBackground(bytes); }
   fadeBackground(guildId, gain, ms) { this.connections.get(guildId)?.mixer.backgroundGain.fade(gain, ms); }
   endBackground(guildId) { this.connections.get(guildId)?.mixer.clearBackground(); }
-  disconnect(guildId, cancelPending = true) { if (cancelPending) { this.connectionEpochs.set(guildId, (this.connectionEpochs.get(guildId) || 0) + 1); this.connecting.delete(guildId); } const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); }
+  disconnect(guildId, cancelPending = true) { if (cancelPending) { this.connectionEpochs.set(guildId, (this.connectionEpochs.get(guildId) || 0) + 1); this.connecting.delete(guildId); for (const controller of this.pcmControllers.get(guildId) || []) controller.abort(); } const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); }
   close() { for (const id of new Set([...this.connections.keys(), ...this.connecting.keys()])) this.disconnect(id); }
   snapshot() { return [...this.connections].map(([guildId, e]) => ({ guildId, channelId: e.channelId, status: e.connection.state.status })); }
 }
