@@ -51,7 +51,7 @@ try{
       result.button=await trigger.count()>0&&await trigger.first().isVisible();
       await page.screenshot({path:join(out,sample.id+'-page.png')});
       if(result.button){
-        await trigger.first().click({timeout:5000});await page.getByRole('dialog').waitFor({timeout:5000});result.dialog=true;result.preview=await page.locator('#preview').textContent();await page.screenshot({path:join(out,sample.id+'-dialog.png')});result.status='display-verified';
+        await trigger.first().click({timeout:5000});await page.locator('#nyan-play-share-modal').getByRole('dialog').waitFor({timeout:5000});result.dialog=true;result.preview=await page.locator('#preview').textContent();await page.screenshot({path:join(out,sample.id+'-dialog.png')});result.status='display-verified';
       }else{
         const text=(await page.locator('body').innerText()).slice(0,3000);
         result.status=/ログインして bot|Instagramにログイン|captcha|verify you|not a robot|ログインして続きを|アクセスを確認/i.test(text)||/\/accounts\/login|\/login\b/.test(page.url())?'login-or-access-check':result.http>=400?'http-blocked':result.mediaCount?'media-found-display-unverified':'no-playable-media';
