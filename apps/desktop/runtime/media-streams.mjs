@@ -5,6 +5,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, renameS
 import { join } from 'node:path';
 import ffmpeg from 'ffmpeg-static';
 import { MEDIA_EXTRACTOR, streamingService, selectStream } from '../core/media-streams.mjs';
+import { mediaPolicy } from '../core/media-policy.mjs';
 
 export class MediaStreamResolver {
   constructor(directory, log, fetcher, cookies) {
@@ -70,21 +71,39 @@ export class MediaStreamResolver {
 }
 
 // Source objects come only from selectStream; nothing here is exposed to a web page or IPC.
-export async function openAudioStream(source, startSeconds, mode, signal) {
+export async function openAudioStream(source, startSeconds, mode, signal, previewSeconds = 45) {
+  const policy = mediaPolicy({ mode, previewSeconds });
   signal.throwIfAborted(); const token = randomBytes(24).toString('hex'); let child, server, response;
-  const stream = { error: null, close: () => { signal.removeEventListener('abort', abort); child?.kill(); response?.destroy(); server?.close(); } };
+  const remaining = Number.isFinite(source.duration) && source.duration > 0 ? Math.max(0, source.duration - startSeconds) : null;
+  let closed = false, finish;
+  const stream = { error: null, finished: false, outputSeconds: 0, expectedSeconds: remaining == null ? null : policy.limitSeconds == null ? remaining : Math.min(remaining, policy.limitSeconds),
+    completion: new Promise(resolve => { finish = resolve; }),
+    close: () => { closed = true; signal.removeEventListener('abort', abort); child?.kill(); response?.destroy(); server?.close(); } };
   const abort = () => stream.close(); signal.addEventListener('abort', abort, { once: true });
   try {
     server = createServer((request, reply) => {
       if (request.method !== 'GET' || request.url !== '/' + token || request.headers.host !== `127.0.0.1:${server.address().port}` || response) { reply.writeHead(404).end(); return; }
       response = reply; reply.writeHead(200, { 'Content-Type': 'audio/ogg', 'Cache-Control': 'no-store', 'Accept-Ranges': 'none' }); child.stdout.pipe(reply);
-      reply.on('close', () => { child?.kill(); });
+      reply.on('close', () => { if (!reply.writableFinished) child?.kill(); });
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }); server.unref(); signal.throwIfAborted();
     const headers = Object.entries(source.headers || {}).map(([k,v]) => `${k}: ${v}\r\n`).join('');
-    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-readrate', '1', ...(source.url.startsWith('https:') ? ['-protocol_whitelist', 'http,https,tcp,tls,crypto'] : []), ...(startSeconds ? ['-ss', String(startSeconds)] : []), ...(headers ? ['-headers', headers] : []), '-i', source.url, ...(mode === 'preview' ? ['-t','45'] : []), '-vn', '-sn', '-dn', '-c:a', 'libopus', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-f', 'ogg', '-page_duration', '20000', '-flush_packets', '1', 'pipe:1'];
-    child = spawn(ffmpeg.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    child.once('close', code => { if (code && !signal.aborted) stream.error = '配信元の音声ストリームが終了しました'; });
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:2', '-readrate', '1', ...(source.url.startsWith('https:') ? ['-protocol_whitelist', 'http,https,tcp,tls,crypto', '-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '408,429,500,502,503,504', '-reconnect_delay_max', '5'] : []), ...(startSeconds ? ['-ss', String(startSeconds)] : []), ...(headers ? ['-headers', headers] : []), '-i', source.url, ...(policy.limitSeconds != null ? ['-t', String(policy.limitSeconds)] : []), '-vn', '-sn', '-dn', '-c:a', 'libopus', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-f', 'ogg', '-page_duration', '20000', '-flush_packets', '1', 'pipe:1'];
+    child = spawn(ffmpeg.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let tail = '';
+    child.stderr.on('data', bytes => {
+      // Retain only numeric progress, never CDN URLs, request headers or cookies.
+      const lines = (tail + bytes.toString()).split('\n'); tail = lines.pop().slice(-8192);
+      for (const line of lines) { const match = line.match(/^out_time_us=(\d+)\s*$/); if (match) stream.outputSeconds = Number(match[1]) / 1000000; }
+    });
+    child.once('close', code => {
+      stream.finished = true;
+      if (!closed && !signal.aborted) {
+        if (code !== 0) stream.error = '音声ストリームの変換・転送が途中で終了しました';
+        else if (stream.expectedSeconds != null && stream.outputSeconds + 0.5 < stream.expectedSeconds) stream.error = '音声ストリームが動画の終端より前に終了しました';
+      }
+      finish();
+    });
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => finish(new Error('音声ストリームの開始がタイムアウトしました')), 20000);
       const ready = () => { if (child.stdout.readableLength > 0) finish(); else child.stdout.once('readable', ready); }; const stopped = code => finish(new Error(`音声ストリームを開始できません（${code}）`)); const cancel = () => finish(signal.reason);

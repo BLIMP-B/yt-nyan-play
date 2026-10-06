@@ -39,7 +39,7 @@ test('announcements use URL service names including subdomains and shared links'
 function player(mode, startSeconds = 80) {
   const events = new Map(), timers = new Map(); let timerId = 0;
   const video = { tagName: 'VIDEO', paused: true, ended: false, currentTime: 0, duration: 300, readyState: 4, clientWidth: 500, clientHeight: 300, loop: true,
-    play() { this.paused = false; return Promise.resolve(); }, pause() { this.paused = true; }, addEventListener(type, cb) { events.set(type, cb); } };
+    play() { this.paused = false; return Promise.resolve(); }, pause() { this.paused = true; }, addEventListener(type, cb) { events.set(type, cb); }, removeEventListener(type, cb) { if (events.get(type) === cb) events.delete(type); } };
   const context = { document: { querySelectorAll: () => [video], querySelector: () => null }, window: {}, setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id), clearInterval: id => timers.delete(id) };
   const read = (paused = false) => runInNewContext(mediaScript({ mode, startSeconds, paused }), context);
   return { video, read, context, fire: name => events.get(name)?.(), timers };
@@ -69,6 +69,15 @@ test('無限 and 直接 play once to natural end without the 45-second cutoff', 
   for (const mode of ['full', 'direct']) {
     const p = player(mode); p.video.muted = true; p.read(); assert.equal(p.video.muted, false); p.video.currentTime = 200; assert.equal(p.read().previewFinished, false); assert.equal(p.video.loop, false);
     p.video.ended = true; p.video.paused = true; assert.equal(p.read().ended, true); assert.equal(p.video.paused, true);
+  }
+});
+test('a previous preview timer is removed when full or direct controls reach the same media element', () => {
+  for (const mode of ['full','direct']) {
+    const p = player('preview', 0); p.read(); p.fire('playing'); assert.equal(p.timers.size, 1);
+    runInNewContext(mediaScript({ mode, startSeconds: 0 }), p.context);
+    assert.equal(p.timers.size, 0); assert.equal(p.video.__nyanBudget, undefined);
+    p.video.currentTime = 60; const state = runInNewContext(mediaScript({ mode, startSeconds: 0 }), p.context);
+    assert.equal(state.previewFinished, false); assert.equal(p.video.paused, false);
   }
 });
 test('end events remain complete after autoplay replaces the original media; YouTube state and duration endpoints also complete', () => {

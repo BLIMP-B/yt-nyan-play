@@ -20,6 +20,7 @@ test('each service chooses audio-only first, then the smallest playable video wi
   ];
   for (const [source, host] of sources) {
     const formats = [{ url: `https://${host}/large`, acodec: 'aac', vcodec: 'h264', height: 720 }, { url: `https://${host}/small`, acodec: 'aac', vcodec: 'h264', height: 144 }, { url: `https://${host}/audio`, acodec: 'opus', vcodec: 'none', abr: 48 }];
+    assert.equal(selectStream({ formats, duration: 180 }, source).duration, 180);
     assert.equal(selectStream({ formats }, source).url, formats[2].url);
     assert.equal(selectStream({ formats: formats.slice(0,2) }, source).height, 144);
     assert.equal(selectStream({ formats: [{ ...formats[0], acodec: 'none' }] }, source), null);
@@ -59,4 +60,12 @@ test('speech ducking fades down and back without changing the independent BGM ga
   mixer.takeFrame(14500); assert.equal(mixer.duckGain.value(14500), 0.525);
   mixer.takeFrame(16000); assert.equal(mixer.duckGain.value(16000), 1);
   assert.equal(normalizeConfig({ media: { duckFadeOutMs: 0 }, hourly: { bgmFadeOutMs: 800 } }).hourly.bgmFadeOutMs, 800);
+});
+test('FFmpeg EOF is validated against the original duration instead of accepting a truncated input as a whole video', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nyan-short-stream-')); t.after(() => rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  const file = join(directory, 'short.ogg'); execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=2', '-c:a', 'libopus', file]);
+  const controller = new AbortController(), stream = await openAudioStream({ url: file, duration: 60 }, 0, 'full', controller.signal); t.after(() => stream.close());
+  await (await fetch(stream.url)).arrayBuffer(); await stream.completion;
+  assert.equal(stream.finished, true); assert.equal(stream.expectedSeconds, 60); assert.ok(stream.outputSeconds > 1.9 && stream.outputSeconds < 2.1);
+  assert.match(stream.error, /終端より前/);
 });

@@ -40,6 +40,12 @@ jobs:
         with:
           name: audio-verification-linux
           path: dist/audio-verification
+      - run: xvfb-run --auto-servernum npm run verify:playback-duration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-duration-verification-linux
+          path: dist/playback-duration-verification
   windows:
     needs: tests
     runs-on: windows-latest
@@ -68,6 +74,12 @@ jobs:
         with:
           name: audio-verification-windows
           path: dist/audio-verification
+      - run: npm run verify:playback-duration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-duration-verification-windows
+          path: dist/playback-duration-verification
       - run: npm run dist:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -129,7 +141,7 @@ jobs:
         continue-on-error: true
         run: npm run verify:audio
         env:
-          NYAN_LIVE_MEDIA_URLS: '["https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1","https://www.nicovideo.jp/watch/sm9"]'
+          NYAN_LIVE_MEDIA_URLS: '["https://youtu.be/h9c0gegwcM0?si=AWLiET3TiyqluSzc","https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1","https://www.nicovideo.jp/watch/sm9"]'
           NYAN_REQUIRE_LIVE_SERVICES: 'youtube,niconico'
       - uses: actions/upload-artifact@v4
         if: always()

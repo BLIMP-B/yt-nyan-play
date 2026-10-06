@@ -1,6 +1,6 @@
-export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false }) {
+export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, volume, paused, volumeRampMs, bandwidthSaving })};
+    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving })};
     let lowestQuality = false;
     if (options.bandwidthSaving) {
       // Use exposed player APIs. Hiding video does not save network bandwidth.
@@ -28,20 +28,20 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
     const blockedReason = playability && !['OK', 'LIVE_STREAM_OFFLINE'].includes(playability.status) ? String(playability.reason || playability.status).slice(0, 300) : '';
     const loginRequired = playability?.status === 'LOGIN_REQUIRED';
     const videos = [...document.querySelectorAll('video,audio')];
-    if (playback.finished) { for (const video of videos) video.pause(); return { found: true, ended: true, advertisement: false, endedReason: playback.reason }; }
+    if (playback.finished) { for (const video of videos) video.pause(); return { found: true, ended: true, advertisement: false, endedReason: playback.reason, currentTime: playback.endedTime, duration: playback.endedDuration }; }
     const chosen = document.querySelector('#movie_player video') || videos.find(v => !v.paused && !v.ended) || videos.sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0];
     if (!chosen) return { found: false, blockedReason, loginRequired };
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
     const finish = reason => {
       if (!playback.observed || advertisement || isAdvertisement() || playback.afterAd) return false;
-      playback.finished = true; playback.reason = reason; chosen.pause(); return true;
+      playback.finished = true; playback.reason = reason; playback.endedTime = chosen.currentTime; playback.endedDuration = Number.isFinite(chosen.duration) ? chosen.duration : null; chosen.pause(); return true;
     };
     if (!chosen.__nyanEndWatched) {
       chosen.__nyanEndWatched = true;
       chosen.addEventListener('ended', () => {
         // Latch the original content's end even if the site replaces it before the next poll.
-        if (playback.observed && !isAdvertisement() && !playback.afterAd) { playback.finished = true; playback.reason = 'ended-event'; chosen.pause(); }
+        if (playback.observed && !isAdvertisement() && !playback.afterAd) { playback.finished = true; playback.reason = 'ended-event'; playback.endedTime = chosen.currentTime; playback.endedDuration = Number.isFinite(chosen.duration) ? chosen.duration : null; chosen.pause(); }
       });
     }
     chosen.muted = false; chosen.loop = false; chosen.playbackRate = 1;
@@ -64,18 +64,23 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
     const atEnd = Number.isFinite(chosen.duration) && chosen.duration > 0 && chosen.currentTime >= chosen.duration - 0.01 && chosen.paused;
     if (chosen.ended || youtubeEnded || atEnd) finish(chosen.ended ? 'ended' : youtubeEnded ? 'youtube-player' : 'duration');
     if (playback.finished) return { found: true, ended: true, advertisement: false, endedReason: playback.reason, currentTime: chosen.currentTime, duration: chosen.duration };
+    if (options.mode !== 'preview' && chosen.__nyanBudget) {
+      const budget = chosen.__nyanBudget; clearTimeout(budget.timer);
+      for (const [event, handler] of budget.listeners) chosen.removeEventListener(event, handler);
+      delete chosen.__nyanBudget;
+    }
     if (!advertisement && !chosen.__nyanBudget && options.mode === 'preview') {
-      const budget = chosen.__nyanBudget = { timer: null, finished: false };
+      const budget = chosen.__nyanBudget = { timer: null, finished: false, listeners: [] };
       const stopTimer = () => { clearTimeout(budget.timer); budget.timer = null; };
       const check = () => {
         stopTimer();
         if (!window.__nyanStarted || budget.finished || isAdvertisement()) return;
-        const remaining = options.startSeconds + 45 - chosen.currentTime;
+        const remaining = options.startSeconds + options.previewSeconds - chosen.currentTime;
         if (remaining <= 0.02) { budget.finished = true; chosen.pause(); return; }
         if (!chosen.paused && chosen.readyState >= 3) budget.timer = setTimeout(check, Math.max(10, remaining * 1000));
       };
-      for (const event of ['playing', 'timeupdate', 'seeked']) chosen.addEventListener(event, check);
-      for (const event of ['pause', 'waiting', 'stalled', 'ended']) chosen.addEventListener(event, stopTimer);
+      for (const event of ['playing', 'timeupdate', 'seeked']) { chosen.addEventListener(event, check); budget.listeners.push([event, check]); }
+      for (const event of ['pause', 'waiting', 'stalled', 'ended']) { chosen.addEventListener(event, stopTimer); budget.listeners.push([event, stopTimer]); }
       check();
     }
     if (advertisement && chosen.__nyanBudget) { clearTimeout(chosen.__nyanBudget.timer); chosen.__nyanBudget.timer = null; }

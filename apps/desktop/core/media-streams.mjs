@@ -29,5 +29,5 @@ export function selectStream(info, source) {
   const format = audio[0] || muxed[0]; if (!format) return null;
   const headers = {};
   for (const [key, value] of Object.entries(format.http_headers || info.http_headers || {})) if (/^(User-Agent|Referer|Origin|Cookie|Authorization)$/i.test(key) && typeof value === 'string' && value.length <= 32768 && !/[\r\n\x00]/.test(value)) headers[key] = value;
-  return { url: format.url, headers, audioOnly: Boolean(audio.length), service: service[0], height: format.height || null, bitrate: format.abr || format.tbr || null, title: info.title || '', format: String(format.format_id || '') };
+  return { url: format.url, headers, audioOnly: Boolean(audio.length), service: service[0], height: format.height || null, bitrate: format.abr || format.tbr || null, title: info.title || '', format: String(format.format_id || ''), duration: Number.isFinite(info.duration) && info.duration > 0 ? info.duration : null };
 }
