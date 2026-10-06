@@ -28,9 +28,10 @@ try {
     config.android.gpu = 'software'; report.gpu = config.android.gpu;
     config.android.audioEnabled = false;
     await android.start(); report.bootVerified = true;
-    report.playInstalled = (await android.adb(['shell', 'pm', 'list', 'packages', 'com.android.vending'])).includes('com.android.vending');
+    report.stage = 'verify-installed-play';
+    report.playInstalled = /^package:/m.test(await android.adb(['shell', 'pm', 'path', 'com.android.vending'], { timeout: 60000 }));
     assert.equal(report.playInstalled, true, 'Google Play was not installed in the AVD');
-    report.playWindow = await android.openPlay();
+    report.stage = 'open-play'; report.playWindow = await android.openPlay();
     report.playForeground = /com\.android\.vending\//.test(report.playWindow.focus);
     assert.equal(report.playForeground, true, 'Google Play did not become the focused, unobstructed window');
     await new Promise(resolve => setTimeout(resolve, 3000));

@@ -11,7 +11,7 @@ import {
 export class PcmMixer extends Readable {
   constructor() {
     super({ highWaterMark: 3840 }); this.media = Buffer.alloc(0); this.speech = []; this.mediaPrimed = false;
-    this.ducking = 0.35; this.mediaVolume = 0.7;
+    this.ducking = 0.35; this.mediaVolume = 0.7; this.duckGain = new GainEnvelope(); this.duckFadeInMs = 0; this.duckFadeOutMs = 0;
     this.mediaGain = new GainEnvelope(); this.background = Buffer.alloc(0); this.backgroundPrimed = false; this.backgroundVolume = 0.18; this.backgroundGain = new GainEnvelope();
     this.watchdog = setInterval(() => {
       if (this.speech.some(track => Date.now() >= (track.startAt || 0) && Date.now() - Math.max(track.progressAt, track.startAt || 0) > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
@@ -42,7 +42,8 @@ export class PcmMixer extends Readable {
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
     const out = Buffer.alloc(3840); const duck = tracks.length ? this.ducking : 1;
-    const mediaGain = this.mediaVolume * duck * this.mediaGain.value(now), backgroundGain = this.backgroundVolume * this.backgroundGain.value(now);
+    if (this.duckGain.to !== duck) this.duckGain.fade(duck, duck < this.duckGain.to ? this.duckFadeOutMs : this.duckFadeInMs, now);
+    const mediaGain = this.mediaVolume * this.duckGain.value(now) * this.mediaGain.value(now), backgroundGain = this.backgroundVolume * this.backgroundGain.value(now);
     for (let i = 0; i < 3840; i += 2) {
       let sample = mediaReady ? this.media.readInt16LE(i) * mediaGain : 0;
       if (this.backgroundPrimed) sample += this.background.readInt16LE(i) * backgroundGain;
@@ -160,11 +161,12 @@ export class VoiceOutput {
     if (value) { const hold = this.heldSpeech.get(guildId) || { count: 0, waiters: new Set() }; hold.count++; this.heldSpeech.set(guildId, hold); }
     else { const hold = this.heldSpeech.get(guildId); if (hold && --hold.count === 0) { this.heldSpeech.delete(guildId); for (const resume of hold.waiters) resume(); } }
   }
-  async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; return entry; }
-  media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; const c = this.getConfig(); entry.mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; entry.mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; entry.mixer.addMedia(chunk); }
+  async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); this.mediaSettings(entry.mixer, c); return entry; }
+  mediaSettings(mixer, c) { mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; mixer.duckFadeInMs = c.media.duckFadeInMs; mixer.duckFadeOutMs = c.media.duckFadeOutMs; }
+  media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; this.mediaSettings(entry.mixer, this.getConfig()); entry.mixer.addMedia(chunk); }
   endMedia(guildId) { this.connections.get(guildId)?.mixer.clearMedia(); }
   fadeMedia(guildId, gain, ms) { this.connections.get(guildId)?.mixer.mediaGain.fade(gain, ms); }
-  async beginBackground(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.backgroundVolume = c.hourly.output === 'both' ? 1 : c.hourly.bgmVolume; entry.mixer.backgroundGain.fade(1); entry.mixer.clearBackground(); }
+  async beginBackground(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.backgroundVolume = c.hourly.output === 'both' ? 1 : c.hourly.bgmVolume; entry.mixer.backgroundGain.fade(0); entry.mixer.clearBackground(); }
   background(guildId, bytes) { this.connections.get(guildId)?.mixer.addBackground(bytes); }
   fadeBackground(guildId, gain, ms) { this.connections.get(guildId)?.mixer.backgroundGain.fade(gain, ms); }
   endBackground(guildId) { this.connections.get(guildId)?.mixer.clearBackground(); }

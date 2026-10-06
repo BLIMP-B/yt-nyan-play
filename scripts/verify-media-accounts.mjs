@@ -7,7 +7,7 @@ import { _electron } from 'playwright-core';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const directory = mkdtempSync(join(tmpdir(), 'damare-accounts-'));
-writeFileSync(join(directory, 'config.json'), JSON.stringify(normalizeConfig({ desktop: { closeToTray: false, notifications: false }, media: { output: 'local' } })));
+writeFileSync(join(directory, 'config.json'), JSON.stringify(normalizeConfig({ desktop: { closeToTray: false, notifications: false }, media: { output: 'local', bandwidthSaving: false } })));
 let application;
 async function launch() {
   const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;

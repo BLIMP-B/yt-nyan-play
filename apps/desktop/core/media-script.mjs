@@ -1,18 +1,49 @@
-export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, paused = false, volumeRampMs = 0 }) {
+export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, volume, paused, volumeRampMs })};
+    const options = ${JSON.stringify({ startSeconds, mode, volume, paused, volumeRampMs, bandwidthSaving })};
+    let lowestQuality = false;
+    if (options.bandwidthSaving) {
+      // Use exposed player APIs. Hiding video does not save network bandwidth.
+      try {
+        const player = document.querySelector('#movie_player'), levels = player?.getAvailableQualityLevels?.();
+        const rank = ['tiny', 'small', 'medium', 'large', 'hd720', 'hd1080', 'hd1440', 'hd2160', 'highres'];
+        const lowest = levels?.filter(q => rank.includes(q)).sort((a,b) => rank.indexOf(a)-rank.indexOf(b))[0];
+        if (lowest && player.setPlaybackQualityRange) { player.setPlaybackQualityRange(lowest, lowest); player.setPlaybackQuality?.(lowest); lowestQuality = true; }
+      } catch {}
+      try {
+        for (const player of Object.values(window.videojs?.getPlayers?.() || {})) {
+          const levels = player.qualityLevels?.(); if (!levels?.length) continue;
+          const ordered = Array.from(levels).sort((a,b) => (a.height || Infinity)-(b.height || Infinity) || (a.bitrate || Infinity)-(b.bitrate || Infinity));
+          for (const level of ordered) level.enabled = level === ordered[0]; lowestQuality = true;
+        }
+      } catch {}
+    }
     let playability;
     try { playability = document.querySelector('#movie_player')?.getPlayerResponse?.()?.playabilityStatus; } catch {}
     playability ||= window.ytInitialPlayerResponse?.playabilityStatus;
     const isAdvertisement = () => Boolean(document.querySelector('#movie_player.ad-showing, #movie_player.ad-interrupting'));
     const advertisement = isAdvertisement();
+    const playback = window.__nyanPlayback ||= { finished: false, observed: false, afterAd: false, reason: '' };
+    if (advertisement) playback.afterAd = true;
     const blockedReason = playability && !['OK', 'LIVE_STREAM_OFFLINE'].includes(playability.status) ? String(playability.reason || playability.status).slice(0, 300) : '';
     const loginRequired = playability?.status === 'LOGIN_REQUIRED';
     const videos = [...document.querySelectorAll('video,audio')];
+    if (playback.finished) { for (const video of videos) video.pause(); return { found: true, ended: true, advertisement: false, endedReason: playback.reason }; }
     const chosen = document.querySelector('#movie_player video') || videos.find(v => !v.paused && !v.ended) || videos.sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0];
     if (!chosen) return { found: false, blockedReason, loginRequired };
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
+    const finish = reason => {
+      if (!playback.observed || advertisement || isAdvertisement() || playback.afterAd) return false;
+      playback.finished = true; playback.reason = reason; chosen.pause(); return true;
+    };
+    if (!chosen.__nyanEndWatched) {
+      chosen.__nyanEndWatched = true;
+      chosen.addEventListener('ended', () => {
+        // Latch the original content's end even if the site replaces it before the next poll.
+        if (playback.observed && !isAdvertisement() && !playback.afterAd) { playback.finished = true; playback.reason = 'ended-event'; chosen.pause(); }
+      });
+    }
     chosen.muted = false; chosen.loop = false; chosen.playbackRate = 1;
     if (!options.volumeRampMs) { clearInterval(chosen.__nyanVolumeTimer); chosen.volume = options.volume; chosen.__nyanVolumeTarget = options.volume; }
     else if (chosen.__nyanVolumeTarget !== options.volume) {
@@ -27,6 +58,12 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
     if (!advertisement && !window.__nyanStarted && chosen.readyState >= 1) {
       try { chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
+    if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
+    let youtubeEnded = false;
+    try { youtubeEnded = document.querySelector('#movie_player')?.getPlayerState?.() === 0; } catch {}
+    const atEnd = Number.isFinite(chosen.duration) && chosen.duration > 0 && chosen.currentTime >= chosen.duration - 0.01 && chosen.paused;
+    if (chosen.ended || youtubeEnded || atEnd) finish(chosen.ended ? 'ended' : youtubeEnded ? 'youtube-player' : 'duration');
+    if (playback.finished) return { found: true, ended: true, advertisement: false, endedReason: playback.reason, currentTime: chosen.currentTime, duration: chosen.duration };
     if (!advertisement && !chosen.__nyanBudget && options.mode === 'preview') {
       const budget = chosen.__nyanBudget = { timer: null, finished: false };
       const stopTimer = () => { clearTimeout(budget.timer); budget.timer = null; };
@@ -49,8 +86,9 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', volume = 0.7, 
         if (error.name !== 'AbortError') chosen.__nyanPlayError = error.message || error.name;
       }).finally(() => { chosen.__nyanPlayPending = false; });
     }
-    return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: !advertisement && chosen.ended, advertisement,
+    if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
+    return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: playback.finished, advertisement,
       currentTime: chosen.currentTime, duration: Number.isFinite(chosen.duration) ? chosen.duration : null,
-      previewFinished: !advertisement && chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', pageTitle: document.title || '', blockedReason, loginRequired, error: chosen.__nyanPlayError || chosen.error?.code || null };
+      previewFinished: !advertisement && chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', lowestQuality, pageTitle: document.title || '', blockedReason, loginRequired, error: chosen.__nyanPlayError || chosen.error?.code || null };
   })()`;
 }

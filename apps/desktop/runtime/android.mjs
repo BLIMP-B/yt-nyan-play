@@ -152,10 +152,12 @@ export class AndroidRuntime extends EventEmitter {
     if (this.playController) throw new Error('Google Playを準備中です');
     if (packageId && !/^[a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z][a-zA-Z0-9_]*)+$/.test(packageId)) throw new Error('アプリのパッケージIDを確認してください');
     const controller = this.playController = new AbortController(), signal = controller.signal;
-    const launch = () => packageId ? this.adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(`market://details?id=${packageId}`)], { signal }) : this.adb(['shell', 'monkey', '-p', 'com.android.vending', '-c', 'android.intent.category.LAUNCHER', '1'], { signal });
+    const launch = () => packageId ? this.adb(['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shellQuote(`market://details?id=${packageId}`)], { signal, timeout: 10000 }) : this.adb(['shell', 'am', 'start', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', '-p', 'com.android.vending'], { signal, timeout: 10000 });
     clearInterval(this.frameTimer); this.change('Google Playの画面を準備しています');
     try {
-      await launch();
+      // The launch request may time out while first-boot services are busy, even if
+      // the Activity starts. Verify focus and retry within the existing bounded wait.
+      await launch().catch(error => { signal.throwIfAborted(); this.change(`Google Playの起動状態を確認しています: ${error.message}`); });
       const state = await waitForPlayWindow((args, options) => this.adb(args, options), launch, { signal, changed: text => this.change(text) });
       this.change('Google Playを開きました'); return state;
     } finally {

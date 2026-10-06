@@ -110,7 +110,7 @@ export class HourlyRuntime extends EventEmitter {
           const spoken = await this.handlers.synthesize(sentence.text, signal);
           if (server.bgm) { try { background = await this.handlers.background(sentence.nouns, server.guildId, signal); } catch (error) { signal.throwIfAborted(); this.handlers.log('warn', `時報BGM (${server.guildId}): ${error.message}`); } }
           await this.handlers.play(spoken, c.output === 'local' ? [] : [server.guildId], signal);
-          if (background) { entry.phase = 'BGMの余韻・フェードアウト'; this.changed(); await this.delay(1500, signal); await background.fade(1500, signal); }
+          if (background) { entry.phase = 'BGMの余韻・フェードアウト'; this.changed(); await this.delay(1500, signal); await background.fade(c.bgmFadeOutMs, signal); }
         } finally { await background?.stop(); entry.phase = '完了'; this.changed(); }
       };
       const runCustom = async server => { try { await customBody(server); } finally {

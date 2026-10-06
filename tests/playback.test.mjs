@@ -71,6 +71,37 @@ test('無限 and 直接 play once to natural end without the 45-second cutoff', 
     p.video.ended = true; p.video.paused = true; assert.equal(p.read().ended, true); assert.equal(p.video.paused, true);
   }
 });
+test('end events remain complete after autoplay replaces the original media; YouTube state and duration endpoints also complete', () => {
+  for (const mode of ['full', 'direct']) {
+    const p = player(mode); p.read(); p.video.currentTime = 300; p.fire('ended');
+    const next = { ...p.video, currentTime: 0, paused: false, ended: false }; p.context.document.querySelectorAll = () => [next];
+    assert.equal(p.read().ended, true); assert.equal(next.paused, true);
+    const api = player(mode); let state = 1; api.context.document.querySelector = s => s === '#movie_player' ? { getPlayerState: () => state } : null;
+    api.read(); state = 0; assert.equal(api.read().ended, true);
+    const endpoint = player(mode); endpoint.read(); endpoint.video.currentTime = 300; endpoint.video.paused = true;
+    assert.equal(endpoint.read().ended, true); assert.equal(endpoint.video.paused, true);
+    const paused = player(mode); paused.read(); paused.video.currentTime = 290; paused.video.paused = true;
+    assert.equal(paused.read(true).ended, false, 'Pause and buffering are not completion');
+  }
+});
+test('new media requests cancel old playback and pending requests in the same scope without restarting either', async t => {
+  const store = new Store(temporary(t)), opened = [];
+  const pool = new MediaPool(store, scope => ({ setPaused() {}, close() {}, play: (job, signal) => new Promise((resolve, reject) => { opened.push(job); job.finish = resolve; signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }) }));
+  const old = pool.enqueue({ guildId: '11111', mode: 'full' }); await tick();
+  const waiting = pool.enqueue({ guildId: '11111', mode: 'preview' });
+  const other = pool.enqueue({ guildId: '22222', mode: 'direct' }); await tick();
+  const latest = pool.enqueue({ guildId: '11111', mode: 'direct' }, { interrupt: true }); await tick();
+  assert.equal(old.status, 'cancelled'); assert.equal(waiting.status, 'cancelled'); assert.equal(latest.status, 'running'); assert.equal(other.status, 'running');
+  assert.deepEqual(opened.map(j => j.id), [old.id, other.id, latest.id]);
+  latest.finish(); other.finish(); await tick(); assert.equal(latest.status, 'completed'); assert.equal(other.status, 'completed');
+  pool.close();
+});
+test('browser fallback requests the lowest exposed YouTube quality without muting or hiding playback', () => {
+  const p = player('direct'); const requests = [];
+  p.context.document.querySelector = selector => selector === '#movie_player' ? { getAvailableQualityLevels: () => ['hd1080', 'small', 'medium', 'tiny'], setPlaybackQualityRange: (...levels) => requests.push(levels), setPlaybackQuality() {} } : null;
+  const state = runInNewContext(mediaScript({ mode: 'direct', bandwidthSaving: true }), p.context);
+  assert.equal(state.lowestQuality, true); assert.deepEqual(requests, [['tiny','tiny']]); assert.equal(p.video.muted, false);
+});
 test('stop speech preempts its server even while paused and preserves waiting speech and other server', async t => {
   const store = new Store(temporary(t)), started = [];
   const pool = new SpeechPool(store, (job, signal) => new Promise((resolve, reject) => { started.push(job.payload.text); job.finish = resolve; signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));

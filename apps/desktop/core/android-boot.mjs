@@ -42,7 +42,7 @@ export async function waitForPlayWindow(adb, launch, {
   signal, maxMs = 120000, now = Date.now,
   delay = ms => wait(ms, undefined, { signal }), changed = () => {},
 } = {}) {
-  const began = now(); let stable = 0, recovered = false, focus = '', lastError = '';
+  const began = now(); let stable = 0, recovered = false, focus = '', lastError = '', lastLaunch = began;
   while (now() - began < maxMs) {
     signal?.throwIfAborted();
     try {
@@ -59,6 +59,10 @@ export async function waitForPlayWindow(adb, launch, {
         if (++stable >= 3) return { focus, launcherRecovered: recovered, elapsedMs: now() - began };
       } else stable = 0;
     } catch (error) { signal?.throwIfAborted(); lastError = error.message; stable = 0; }
+    if (!stable && now() - lastLaunch >= 15000) {
+      lastLaunch = now();
+      try { await launch(); } catch (error) { signal?.throwIfAborted(); lastError = error.message; }
+    }
     await delay(1000);
   }
   throw new AndroidBootError('Google Playの画面を準備できませんでした。Android画面とネットワーク接続を確認してください', { focus, lastError });

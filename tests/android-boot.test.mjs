@@ -53,3 +53,8 @@ test('Play readiness never dismisses another app error and remains cancellable',
   const controller = new AbortController();
   await assert.rejects(waitForPlayWindow(async () => '', async () => {}, { signal: controller.signal, delay: async () => controller.abort(new DOMException('stop', 'AbortError')) }), { name: 'AbortError' });
 });
+test('Play focus verification retries slow launch requests and succeeds when the Activity becomes ready', async () => {
+  let clock = 0, launches = 0;
+  const state = await waitForPlayWindow(async () => launches > 1 ? 'mCurrentFocus=Window{1 com.android.vending/MainActivity}' : 'mCurrentFocus=Window{1 com.google.android.apps.nexuslauncher/Main}', async () => { if (++launches === 1) throw new Error('initialization timeout'); }, { now: () => clock, maxMs: 60000, delay: async ms => { clock += ms; } });
+  assert.equal(launches, 2); assert.match(state.focus, /com.android.vending/);
+});

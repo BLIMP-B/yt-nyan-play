@@ -33,6 +33,8 @@ import { speechTargets, applyDictionary } from './core/text.mjs';
 import { resolveDestination } from './core/destination.mjs';
 import { AudioBridge } from './runtime/audio-bridge.mjs';
 import { browserUserAgent } from './core/browser-user-agent.mjs';
+import { MediaStreamResolver } from './runtime/media-streams.mjs';
+import { playbackSession } from './runtime/media-session.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const smoke = process.argv.includes('--smoke');
@@ -128,7 +130,7 @@ else {
       if (!command) throw new Error('再生URLを入力してください');
       const payload = resolveDestination({ ...command, master: data?.master === true, guildId: String(data.guildId || ''), startSeconds: Math.max(0, Math.min(86400, Number(data.startSeconds) || command.startSeconds)), title: command.title }, getConfig().media.output, getConfig().bot.bindings, voice.snapshot());
       if (getConfig().media.output !== 'local' && !payload.master) await voice.connect(payload.guildId);
-      return media.enqueue(payload);
+      return media.enqueue(payload, { interrupt: true });
     }
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
     if (name === 'media:show') { media.show(); return null; }
@@ -197,6 +199,7 @@ else {
     bouyomiProcessor = new BouyomiProcessor(store.directory);
     android = new AndroidRuntime(store.directory, getConfig, (l, t) => store.log(l, t), (url, options) => net.fetch(url, options));
     accounts = new MediaAccounts(getConfig, (l, t) => store.log(l, t), emitState);
+    const streamResolver = new MediaStreamResolver(store.directory, (l,t) => store.log(l,t), (url, options) => net.fetch(url, options), () => playbackSession().cookies.get({}));
     const education = new ChatEducation(store, () => {
       if (!getConfig().speech.bouyomiPreprocess || getConfig().speech.provider !== 'voicevox') return null;
       if (bouyomi.child) throw new Error('教育辞書を更新するには元の棒読みちゃんを終了してください');
@@ -206,7 +209,7 @@ else {
     bot = new DiscordBot(store, {
       speech: payload => { store.enqueue('speech', payload); void speechRunner.drain(); },
       education: command => education.apply(command),
-      media: payload => media.enqueue(payload), stopRequested,
+      media: payload => media.enqueue(payload, { interrupt: true }), stopRequested,
       join: guildId => voice.connect(guildId), leave: guildId => voice.disconnect(guildId), disconnect: () => voice.close(), control,
       speakers: () => new Voicevox(getConfig().speech.engineUrl).speakers(),
       ready: () => syncHourlyHistory(),
@@ -238,11 +241,12 @@ else {
           }); return captureChain;
         },
         stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (bed) voice.endBackground(guildId); else if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
-      }, (l, t) => store.log(l, t), accounts); return browser;
+      }, (l, t) => store.log(l, t), accounts, streamResolver); return browser;
     };
     media = new MediaPool(store, scope => createBrowser(scope), async (job, signal) => {
+      if (job.payload.master) speechRunner.skip(); else speechRunner.skip(job.payload.guildId || 'local');
       if (job.payload.mode === 'direct') return;
-      await speechRunner.speak({ text: mediaAnnouncement(job.payload.url), guildId: job.payload.guildId, master: job.payload.master, system: true, priority: 50, output: getConfig().media.output }, { signal });
+      await speechRunner.speak({ text: mediaAnnouncement(job.payload.url), guildId: job.payload.guildId, master: job.payload.master, system: true, priority: 50, output: getConfig().media.output }, { signal, interrupt: true });
     });
     speechRunner = new SpeechPool(store, async (job, signal) => {
       const c = getConfig(); const profile = c.speech.profiles.find(p => p.userId === job.payload.userId);
@@ -300,6 +304,7 @@ else {
       },
       background: async (nouns, guildId, signal) => {
         const found = await searchHourlyBgm(nouns, getConfig, signal); const browser = createBrowser(guildId, true), controller = new AbortController();
+        browser.setOverlayGain(0);
         const bgmSignal = AbortSignal.any([signal, controller.signal]); let error, done = false;
         const task = browser.play({ id: crypto.randomUUID(), payload: { ...found, mode: 'direct', guildId, background: true } }, bgmSignal).catch(e => { if (!bgmSignal.aborted) error = e; }).finally(() => { done = true; });
         const stop = async () => { controller.abort(); await task; browser.close(); };
@@ -307,6 +312,7 @@ else {
           const until = Date.now() + 15000;
           while (Date.now() < until) { signal.throwIfAborted(); if (error) throw error; if (browser.status?.loginRequired) throw new Error(browser.status.blockedReason || 'YouTubeへのログインが必要です'); if (browser.status?.startedAt && browser.status.currentTime > 0) break; if (done) throw new Error('BGMが開始前に終了しました'); await new Promise(resolve => setTimeout(resolve, 100)); }
           if (!browser.status?.startedAt || !(browser.status.currentTime > 0)) throw new Error('BGMの再生開始を確認できません');
+          browser.setOverlayGain(1, getConfig().hourly.bgmFadeInMs); voice.fadeBackground(guildId, 1, getConfig().hourly.bgmFadeInMs);
           return { stop, fade: async (ms, fadeSignal) => { browser.setOverlayGain(0, ms); voice.fadeBackground(guildId, 0, ms); await new Promise((resolve, reject) => { const timer = setTimeout(finished, ms); const abort = () => { clearTimeout(timer); fadeSignal?.removeEventListener('abort', abort); reject(fadeSignal.reason); }; function finished() { fadeSignal?.removeEventListener('abort', abort); resolve(); } fadeSignal?.addEventListener('abort', abort, { once: true }); }); } };
         } catch (e) { await stop(); throw e; }
       },

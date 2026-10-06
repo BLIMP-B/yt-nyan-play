@@ -4,7 +4,7 @@ export const DEFAULT_CONFIG = {
   schemaVersion: 1,
   desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light' },
   android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720 },
-  hourly: { enabled: false, output: 'discord', volume: 0.8, mediaGain: 0.15, fadeMs: 1000, bgmVolume: 0.18,
+  hourly: { enabled: false, output: 'discord', volume: 0.8, mediaGain: 0.15, fadeMs: 1000, bgmVolume: 0.18, bgmFadeInMs: 3000, bgmFadeOutMs: 3000,
     slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60, servers: [] },
   twitter: { accounts: [], clientId: '', callbackPort: 11488, pollSeconds: 60, readRetweets: true, readReplies: true, readExisting: false, guildId: '' },
   bot: {
@@ -27,7 +27,7 @@ export const DEFAULT_CONFIG = {
     bouyomiPreprocess: false, bouyomiTagMode: 'original', bouyomiVoiceMap: [], chatEducationEnabled: true,
   },
   media: {
-    enabled: true, volume: 0.7, ducking: 0.35, showWindow: true,
+    enabled: true, volume: 0.7, ducking: 0.35, duckFadeInMs: 3000, duckFadeOutMs: 3000, bandwidthSaving: true, showWindow: true,
     output: 'discord', maxMinutes: 120,
     allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'nico.ms', 'x.com',
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
@@ -71,6 +71,7 @@ export function normalizeConfig(patch) {
   number(c.android.bootTimeoutSeconds, 300, 1800, 'Android起動待ち上限', true);
   for (const key of ['volume', 'mediaGain', 'bgmVolume']) number(c.hourly[key], 0, 1, '時報音量');
   number(c.hourly.fadeMs, 100, 5000, '時報フェード時間', true); number(c.hourly.generationTimeoutSeconds, 5, 300, 'SLM生成上限', true);
+  for (const key of ['bgmFadeInMs', 'bgmFadeOutMs']) number(c.hourly[key], 0, 30000, 'BGMフェード時間', true);
   if (!['local', 'discord', 'both'].includes(c.hourly.output) || !['auto', 'live', 'daily'].includes(c.hourly.generationMode)) fail('時報出力・生成方法');
   const slm = new URL(c.hourly.slmUrl);
   if (slm.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(slm.hostname) || slm.username || slm.password || slm.search || slm.hash || slm.pathname !== '/') fail('PC内のSLM URL');
@@ -101,6 +102,7 @@ export function normalizeConfig(patch) {
   number(c.speech.bouyomiVoice, 0, 32767, '棒読みちゃんの声', true); number(c.speech.bouyomiTone, -1, 200, '棒読みちゃんの音程', true);
   if (!['tcp', 'http'].includes(c.speech.bouyomiCommunication)) fail('棒読みちゃん通信方式');
   number(c.media.volume, 0, 1, '動画音量'); number(c.media.ducking, 0, 1, '読み上げ中の動画音量');
+  for (const key of ['duckFadeInMs', 'duckFadeOutMs']) number(c.media[key], 0, 30000, '読み上げ中の動画フェード時間', true);
   number(c.media.maxMinutes, 1, 1440, '再生上限', true);
   if (!/^\S{1,20}$/.test(c.bot.prefix)) fail('コマンド接頭辞');
   for (const key of ['allowedWebhookIds', 'controlUserIds']) strings(c.bot[key], key, true);

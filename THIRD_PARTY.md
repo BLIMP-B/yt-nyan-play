@@ -25,3 +25,5 @@ fast-xml-parser (MIT) はSDK・棒読みちゃん設定のXML読み込み、ffla
 棒読みちゃんBeta21のユーザー共有ZIPに含まれるReadMeは無許可の再頒布を禁止しています。元本体・AquesTalk・個人設定は公開配布せず、利用者のZIPをローカルへ取り込む方式です。X API2の認証とGoogle Playログインは利用者自身のアカウントで行います。
 
 時報のローカルSLMは[Ollama](https://github.com/ollama/ollama)（MIT）の公式Windows配布と[Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B)（Apache-2.0）を必要に応じて管理取得します。Ollama同梱のLICENSE/NOTICEを保持し、モデルの利用許諾は配布元を参照してください。インストーラーへの事前同梱は行いません。
+
+音声形式の取得には[yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.08.19)の公式Windows実行ファイルを初回利用時に取得します（インストーラーには同梱しません）。バージョン2026.08.19とSHA256を固定し、実行前に照合します。ソースはUnlicense、公式PyInstaller実行ファイルにはGPLv3+の構成要素が含まれます。利用許諾・対応ソースは[公式ライセンス説明](https://github.com/yt-dlp/yt-dlp#license)と固定リリースを参照してください。

@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 import { _electron } from 'playwright-core';
 import ffmpeg from 'ffmpeg-static';
 import { PcmMixer, createDiscordAudioResource } from '../apps/desktop/runtime/voice-output.mjs';
@@ -67,6 +68,31 @@ try {
   application = await _electron.launch({ executablePath: require('electron'), args: [root, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
   application.on('console', message => console.log('Electron:', message.text()));
   const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
+  const fadeFields = ['media.duckFadeOutMs', 'media.duckFadeInMs', 'hourly.bgmFadeInMs', 'hourly.bgmFadeOutMs'];
+  for (const key of fadeFields) assert.equal(await page.locator(`[data-config="${key}"]`).inputValue(), '3');
+  await page.locator('[data-view="settings"]').click();
+  await page.screenshot({ path: join(reports, 'media-settings.png'), fullPage: true });
+  await page.locator('[data-view="hourly"]').click();
+  await page.screenshot({ path: join(reports, 'hourly-settings.png'), fullPage: true });
+  await page.locator('[data-view="settings"]').click();
+  for (const key of fadeFields) await page.locator(`[data-config="${key}"]`).evaluate(element => { element.value = '1.2'; });
+  await page.locator('[data-panel="settings"] .save-config').click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.duckFadeOutMs === 1200);
+  const saved = (await call(page, 'state')).config;
+  for (const key of fadeFields) { const [section, name] = key.split('.'); assert.equal(saved[section][name], 1200); }
+  for (const key of fadeFields) await page.locator(`[data-config="${key}"]`).evaluate(element => { element.value = '3'; });
+  await page.locator('[data-panel="settings"] .save-config').click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.duckFadeOutMs === 3000);
+  report.fadeSettings = { defaultsSeconds: 3, savedSeconds: 1.2, savedMilliseconds: 1200, passed: true };
+  await page.locator('[data-view="overview"]').click();
+  // Substitute only the remote metadata lookup; test the real FFmpeg-to-Electron audio path.
+  await application.evaluate(async (_electron, { moduleUrl, audioFile }) => {
+    const { MediaStreamResolver } = await import(moduleUrl), original = MediaStreamResolver.prototype.resolve;
+    MediaStreamResolver.prototype.resolve = function(url, signal) {
+      if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: audioFile, audioOnly: true, service: 'fixture', headers: {} });
+      return original.call(this, url, signal);
+    };
+  }, { moduleUrl: pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href, audioFile: join(directory, 'audio.ogg') });
   // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
   await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio }) => {
     const ui = BrowserWindow.getAllWindows()[0];
@@ -96,7 +122,8 @@ try {
       if (file === '/video.webm') return new Response(new Uint8Array(video), { headers: { 'Content-Type': 'video/webm' } });
       if (file === '/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
       const tag = file.includes('audio') ? 'audio' : 'video', source = tag === 'audio' ? '/audio.ogg' : '/video.webm';
-      return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>`, { headers: { 'Content-Type': 'text/html' } });
+      const replace = file.includes('replace') ? `<script>document.querySelector('${tag}').addEventListener('ended', () => { const next = document.createElement('video'); next.controls = true; next.autoplay = true; next.src = '/video.webm'; document.querySelector('${tag}').replaceWith(next); });</script>` : '';
+      return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>${replace}`, { headers: { 'Content-Type': 'text/html' } });
     });
     ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture'].includes(permission)));
   }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
@@ -113,8 +140,8 @@ try {
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   // Validate the full production MediaBrowser with both VIDEO and AUDIO HTML players.
-  for (const kind of ['video', 'audio']) {
-    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: kind === 'video' ? 'direct' : 'full' });
+  for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: kind.endsWith('full') || kind === 'audio' ? 'full' : 'direct' });
     await application.evaluate(async ({ BrowserWindow }, kind) => {
       const probe = globalThis.nyanAudioProbe;
       const until = Date.now() + 8000;
@@ -131,6 +158,12 @@ try {
     report.media.push({ kind, status: 'completed', ...metrics });
     await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   }
+  const interrupted = await call(page, 'media:add', { url: 'http://media-fixture.test/video', mode: 'direct' });
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.some(m => m.startedAt));
+  const replacement = await call(page, 'media:add', { url: 'http://media-fixture.test/audio', mode: 'full' });
+  const replacedState = await waitForJob(page, replacement.id);
+  assert.equal(replacedState.jobs.find(j => j.id === interrupted.id).status, 'cancelled');
+  report.latestRequest = { previousStatus: 'cancelled', latestStatus: 'completed', passed: true };
   // Confirm captured media passes through the same mixer and Opus resource used for Discord.
   const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks.video)]));
   const mixer = new PcmMixer(); mixer.mediaVolume = 1;

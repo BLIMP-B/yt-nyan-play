@@ -56,7 +56,7 @@ test('media and BGM use independent buffers and fades; a media ending during a f
   const media = pool.enqueue({ guildId: '11111', url: 'https://youtu.be/jNQXAC9IVRw' }); await turn(); pool.fadeOverlay(0.15, 1000); finish(); await turn(); pool.fadeOverlay(1, 1000); await turn(); assert.equal(media.status, 'completed'); assert.equal(played, 1); pool.close();
 });
 test('browser fade changes volume smoothly without pausing or replaying naturally ended media', () => {
-  let clock = 0, timer; const video = { tagName: 'VIDEO', currentTime: 10, duration: 20, readyState: 4, paused: false, ended: false, volume: 1, play() { throw new Error('must not restart'); }, pause() { this.paused = true; } };
+  let clock = 0, timer; const video = { tagName: 'VIDEO', currentTime: 10, duration: 20, readyState: 4, paused: false, ended: false, volume: 1, addEventListener() {}, play() { throw new Error('must not restart'); }, pause() { this.paused = true; } };
   const context = { document: { querySelectorAll: () => [video], querySelector: () => null }, window: { __nyanMedia: video, __nyanStarted: true }, Date: { now: () => clock }, setInterval: fn => { timer = fn; return 1; }, clearInterval() {} };
   runInNewContext(mediaScript({ mode: 'direct', volume: 0, volumeRampMs: 1500 }), context); clock = 750; timer(); assert.equal(video.volume, 0.5); assert.equal(video.paused, false);
   clock = 1500; timer(); assert.equal(video.volume, 0); video.ended = video.paused = true;
@@ -85,7 +85,7 @@ test('the local SLM receives words, produces a subject and predicate, and suppli
   await assert.rejects(generateSlm(model, normalizeConfig().hourly, undefined, async () => new Response(JSON.stringify({ response: '{"text":"猫と時計。"}' }))), /主語・述語/);
   assert.throws(() => normalizeConfig({ hourly: { slmUrl: 'https://example.com' } }), /PC内/);
 });
-test('common chime and custom speech enforce the 1.5-second tail then 1.5-second fade and restore every reservation on cancellation', async t => {
+test('common chime and custom speech enforce the 1.5-second tail then the configured fade (3 seconds by default) and restore every reservation on cancellation', async t => {
   const c = normalizeConfig({ hourly: { enabled: true, servers: [{ guildId: '11111', channelIds: ['22222'], enabled: true, bgm: true }] } }); let time = 100000, holds = 0, reserved = 0; const events = [];
   const handlers = { targets: () => ['11111', '33333'], reserve: () => { reserved++; return () => { reserved--; }; }, hold: (_, on) => { holds += on ? 1 : -1; }, log: () => {}, fadeMedia: () => {},
     history: { model: async () => new SmallWordModel() }, model: { start: async () => {} }, generate: async () => ({ text: '猫は時計を運ぶ。', nouns: ['猫', '時計'], model: 'fixture' }),
@@ -93,7 +93,7 @@ test('common chime and custom speech enforce the 1.5-second tail then 1.5-second
     background: async () => ({ fade: async ms => { events.push(['fade', time, ms]); time += ms; }, stop: async () => events.push(['stop', time]) }) };
   const runtime = new HourlyRuntime(temp(t), () => c, handlers, { now: () => time, delay: async ms => { time += ms; await turn(); } });
   runtime.controller = new AbortController(); const program = { ...hourlyProgram(Buffer.alloc(700 * 192), time + 4000), text: '時報' }; await runtime.execute(program, { test: true });
-  assert.deepEqual(events[0][1], ['11111', '33333']); assert.deepEqual(events[1][1], ['11111']); assert.equal(events[2][0], 'fade'); assert.equal(events[2][2], 1500); assert.equal(events[2][1] - events[1][2], 700 + 1500); assert.equal(events[3][1] - events[2][1], 1500); assert.equal(holds, 0); assert.equal(reserved, 0);
+  assert.deepEqual(events[0][1], ['11111', '33333']); assert.deepEqual(events[1][1], ['11111']); assert.equal(events[2][0], 'fade'); assert.equal(events[2][2], 3000); assert.equal(events[2][1] - events[1][2], 700 + 1500); assert.equal(events[3][1] - events[2][1], 3000); assert.equal(holds, 0); assert.equal(reserved, 0);
   handlers.play = async () => { runtime.cancel(); throw new DOMException('cancel', 'AbortError'); }; time = 200000; runtime.controller = new AbortController();
   await assert.rejects(runtime.execute({ ...hourlyProgram(Buffer.alloc(700 * 192), time + 4000), text: '時報' }, { test: true }), { name: 'AbortError' }); assert.equal(holds, 0); assert.equal(reserved, 0); runtime.close();
 });

@@ -14,7 +14,17 @@ export class MediaPool {
     }, job => mediaScope(job.payload) === scope && (scope === 'master' || !this.masterPending()));
     runner.paused = this.paused || this.pausedScopes.has(scope); const lane = { browser, runner }; this.lanes.set(scope, lane); return lane;
   }
-  enqueue(payload) { const job = this.store.enqueue('media', payload); void this.lane(mediaScope(payload)).runner.drain(); return job; }
+  enqueue(payload, { interrupt = false } = {}) {
+    const job = this.store.enqueue('media', payload), scope = mediaScope(payload), lane = this.lane(scope);
+    if (interrupt) {
+      for (const old of this.store.jobs) if (old !== job && old.kind === 'media' && old.status === 'waiting' && mediaScope(old.payload) === scope) old.status = 'cancelled';
+      lane.runner.skip();
+      if (this.paused) { this.paused = false; for (const key of this.lanes.keys()) if (key !== scope) this.pausedScopes.add(key); }
+      this.pausedScopes.delete(scope); lane.runner.paused = false;
+      lane.browser.setPaused(scope !== 'master' && this.masterPending()); this.store.saveState();
+    }
+    void lane.runner.drain(); return job;
+  }
   drain() { if (this.store.jobs.some(j => j.kind === 'media' && j.status === 'waiting' && j.payload.master)) void this.lane('master').runner.drain(); for (const j of this.store.jobs) if (j.kind === 'media' && j.status === 'waiting') void this.lane(mediaScope(j.payload)).runner.drain(); }
   forJob(job) { return this.lane(mediaScope(job.payload)).runner; }
   pause(value, scope) { if (scope) { if (value) this.pausedScopes.add(scope); else this.pausedScopes.delete(scope); } else this.paused = value; for (const [key, lane] of this.lanes) if (!scope || scope === key) { lane.runner.pause(this.paused || this.pausedScopes.has(key)); lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); } this.store.emit('change'); }

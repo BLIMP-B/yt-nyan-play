@@ -16,6 +16,7 @@
     "dist:dir": "electron-builder --dir --publish never",
     "smoke:desktop": "node scripts/smoke-desktop.mjs",
     "icon:build": "electron scripts/build-app-icon.cjs",
+    "verify:streaming": "node scripts/verify-streaming.mjs",
     "verify:audio": "node scripts/verify-audio.mjs",
     "verify:accounts": "node scripts/verify-media-accounts.mjs",
     "verify:account-link": "node scripts/verify-account-link.mjs",
