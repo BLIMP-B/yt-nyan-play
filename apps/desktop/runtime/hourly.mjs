@@ -34,9 +34,10 @@ export class HourlyRuntime extends EventEmitter {
   failed(error) { if (error.name !== 'AbortError') { this.error = error.message; this.handlers.log('error', `時報: ${error.message}`); this.changed(); } }
   async until(at, signal) { while (this.now() < at) { signal?.throwIfAborted(); await this.delay(Math.min(250, at - this.now()), signal); } signal?.throwIfAborted(); }
   async generate(server, cutoff, signal) {
-    const began = performance.now(); await this.handlers.model.start(signal);
+    const began = performance.now();
     const model = await this.handlers.history.model(server, cutoff, signal);
-    const result = await (this.handlers.generate || generateSlm)(model, this.getConfig().hourly, signal, this.handlers.fetcher);
+    await this.handlers.model.start(signal);
+    const result = await (this.handlers.generate || generateSlm)(model, this.getConfig().hourly, signal, this.handlers.fetcher, this.handlers.analyze);
     const elapsedMs = Math.round(performance.now() - began); this.saved.measurements[server.guildId] = { daily: this.saved.measurements[server.guildId]?.daily || false, elapsedMs, model: result.model, cutoff, text: result.text, nouns: result.nouns };
     this.save(); return { ...result, elapsedMs, cutoff };
   }

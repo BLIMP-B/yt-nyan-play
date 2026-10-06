@@ -28,6 +28,16 @@ writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
 writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'nyan-audio-verification', type: 'module', main: 'audio-bootstrap.mjs', version: JSON.parse(readFileSync(join(root, 'package.json'))).version }));
 writeFileSync(join(directory, 'audio-bootstrap.mjs'), `
 import { MediaStreamResolver } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href)};
+import { HourlyHistory } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/hourly-history.mjs')).href)};
+const historyRows = Array.from({length:5000},(_,i)=>({id:String(10000+i),guildId:'11111',channelId:'22222',createdTimestamp:i+1,content:'猫が時計を眺める。森の太陽は月の料理を運ぶ。'.repeat(70)}));
+const historyClient={isReady:()=>true,user:{},channels:{fetch:async()=>({guildId:'11111',name:'負荷試験',permissionsFor:()=>({has:()=>true}),messages:{fetch:async options=>{await new Promise(resolve=>setTimeout(resolve,200));return new Map(historyRows.filter(m=>!options.before||BigInt(m.id)<BigInt(options.before)).reverse().slice(0,options.limit).map(m=>[m.id,m]));}}})}};
+const sync = HourlyHistory.prototype.sync;
+HourlyHistory.prototype.sync = function(...args) {
+  this.getClient=()=>historyClient; globalThis.nyanAudioHistory=this;
+  const metrics=globalThis.nyanHistoryMetrics={ticks:0,maxGapMs:0}; let previous=performance.now();
+  const timer=setInterval(()=>{const now=performance.now();metrics.ticks++;metrics.maxGapMs=Math.max(metrics.maxGapMs,now-previous);previous=now;},20);
+  return sync.apply(this,args).finally(()=>clearInterval(timer));
+};
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
   if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} });
@@ -114,7 +124,7 @@ try {
         const frequency = crossings * 48000 / (2 * (buffer.length / 4));
         if (peak > 500 && frequency >= 800 && frequency <= 950) metrics.thirdToneAt = Date.now();
       }
-      for (let i = 0; i + 1 < buffer.length; i += 2) { const v = Math.abs(buffer.readInt16LE(i)); metrics.peak = Math.max(metrics.peak, v); if (v > 100) metrics.nonSilentSamples++; }
+      for (let i = 0; i + 1 < buffer.length; i += 2) { const v = Math.abs(buffer.readInt16LE(i)); metrics.peak = Math.max(metrics.peak, v); if (v > 100) { metrics.nonSilentSamples++; if(globalThis.nyanAudioHistory?.syncing) metrics.samplesDuringHistory=(metrics.samplesDuringHistory||0)+1; } }
       if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
     });
     const mediaSession = session.fromPartition('persist:nyan-playback');
@@ -131,6 +141,9 @@ try {
   }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
+  const historyConfig=(await call(page,'state')).config; historyConfig.hourly.servers=[{guildId:'11111',channelIds:['22222'],enabled:true,bgm:false}];
+  await call(page,'config:save',historyConfig);
+  const historyTask=call(page,'hourly:sync'); historyTask.catch(()=>{});
   const jobs = [];
   for (let n = 1; n <= 3; n++) jobs.push(await call(page, 'speech:test', { text: `連続読み上げ${n}`, styleId: 3 }));
   for (const job of jobs) { await waitForJob(page, job.id); report.speech.push({ text: job.payload.text, status: 'completed' }); }
@@ -160,6 +173,11 @@ try {
     report.media.push({ kind, status: 'completed', ...metrics });
     await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   }
+  await historyTask;
+  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
+  assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
+  assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
+  assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
   const interrupted = await call(page, 'media:add', { url: 'http://media-fixture.test/video', mode: 'direct' });
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.some(m => m.startedAt));
   const replacement = await call(page, 'media:add', { url: 'http://media-fixture.test/audio', mode: 'full' });
@@ -184,7 +202,7 @@ try {
   report.discordEncoder = { packets: decoded.length, peak, bytes: bytes.length };
   assert.ok(report.discordEncoder.peak > 100);
   // Exercise the actual timed AudioContext playback and capture its long 880-Hz third beep.
-  const hourlyConfig = (await call(page, 'state')).config; hourlyConfig.hourly.output = 'local'; hourlyConfig.hourly.enabled = false;
+  const hourlyConfig = (await call(page, 'state')).config; hourlyConfig.hourly.output = 'local'; hourlyConfig.hourly.enabled = false; hourlyConfig.hourly.servers=[];
   await call(page, 'config:save', hourlyConfig);
   await application.evaluate(async () => {
     const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'hourly';

@@ -33,7 +33,7 @@ export async function trainRows(rows, signal) {
   for (const row of rows) { signal?.throwIfAborted(); model.train(JSON.parse(row.tokens)); if (++count % 500 === 0) await yieldTurn(); }
   return model;
 }
-export async function generateSlm(model, config, signal, fetcher = fetch) {
+export async function generateSlm(model, config, signal, fetcher = fetch, analyze = async text => lexicalTokens(text, await tokenizer())) {
   const words = model.vocabulary('名詞'); if (words.length < 2) throw new Error('資料チャンネルに異なる名詞が2語以上必要です');
   const first = model.choose(words), required = [first, model.choose(words.filter(w => w.word !== first))];
   const usedVerbs = model.vocabulary('動詞').filter(v => transitives.includes(v.word)).map(v => v.word);
@@ -47,11 +47,11 @@ export async function generateSlm(model, config, signal, fetcher = fetch) {
       options: { num_ctx: 2048, num_predict: 180, temperature: 0.9 }, keep_alive: '24h' }) });
   if (!response.ok) throw new Error(`ローカルSLM: HTTP ${response.status}`);
   const bytes = await response.arrayBuffer(); if (bytes.byteLength > 65536) throw new Error('SLMの応答が大きすぎます');
-  const result = JSON.parse(JSON.parse(Buffer.from(bytes).toString()).response); const analyzer = await tokenizer();
+  const result = JSON.parse(JSON.parse(Buffer.from(bytes).toString()).response);
   if (!required.includes(result.subject) || !required.includes(result.object) || !verbs.includes(result.verb) || !adjectives.includes(result.adjective)) throw new Error('SLMの文章に資料の名詞2語・主語・述語が必要です');
   const object = result.object === result.subject ? required.find(w => w !== result.subject) : result.object;
   const text = `${result.adjective}${result.subject}は、${object}を${result.verb}。`;
-  const extracted = [...new Set(lexicalTokens(text, analyzer).filter(t => t.pos === '名詞').map(t => t.word))];
+  const extracted = [...new Set((await analyze(text, signal)).filter(t => t.pos === '名詞').map(t => t.word))];
   const nouns = required.filter(w => extracted.includes(w));
   if (text.length > 120 || nouns.length !== 2) throw new Error('SLMの文章形式を確認してください');
   return { text, nouns, model: config.slmModel };

@@ -84,6 +84,10 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - run: ./scripts/check-windows-icon.ps1
+      - name: Verify packaged Windows app and history worker
+        run: npm run smoke:desktop
+        env:
+          NYAN_SMOKE_EXECUTABLE: dist/desktop/win-unpacked/NyanTalk-Damare.exe
       - uses: actions/upload-artifact@v4
         with:
           name: nyan-talk-damare-windows-x64

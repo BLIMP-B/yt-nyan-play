@@ -27,7 +27,7 @@ export class DiscordBot {
     client.on(Events.MessageCreate, safe(message => this.handlers.history?.(message)));
     client.on(Events.MessageUpdate, safe(async (_, message) => { if (message.partial) message = await message.fetch(); await this.handlers.history?.(message); }));
     client.on(Events.MessageDelete, safe(message => this.handlers.historyDelete?.(message.id)));
-    client.on(Events.MessageBulkDelete, safe(messages => { for (const id of messages.keys()) this.handlers.historyDelete?.(id); }));
+    client.on(Events.MessageBulkDelete, safe(messages => this.handlers.historyDelete?.([...messages.keys()])));
     client.on(Events.VoiceStateUpdate, safe((previous, next) => this.voiceState(previous, next)));
     for (const event of [Events.GuildCreate, Events.GuildDelete, Events.GuildUpdate, Events.ChannelCreate, Events.ChannelDelete, Events.ChannelUpdate, Events.ThreadCreate, Events.ThreadDelete, Events.ThreadUpdate, Events.GuildRoleUpdate, Events.GuildRoleDelete, Events.GuildMemberUpdate]) client.on(event, () => this.store.emit('change'));
     client.on(Events.ShardReconnecting, () => { this.status = 'reconnecting'; this.store.emit('change'); });

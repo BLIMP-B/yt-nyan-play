@@ -5,7 +5,8 @@ export const DEFAULT_CONFIG = {
   desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light' },
   android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720 },
   hourly: { enabled: false, output: 'discord', volume: 0.8, mediaGain: 0.15, fadeMs: 1000, bgmVolume: 0.18, bgmFadeInMs: 3000, bgmFadeOutMs: 3000,
-    slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60, servers: [] },
+    slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60,
+    historySyncMessages: 500, historyPageDelayMs: 500, historyCorpusMessages: 2000, servers: [] },
   twitter: { accounts: [], clientId: '', callbackPort: 11488, pollSeconds: 60, readRetweets: true, readReplies: true, readExisting: false, guildId: '' },
   bot: {
     autoConnect: false, prefix: '!nyan', includeBots: false, includeWebhooks: true,
@@ -72,6 +73,7 @@ export function normalizeConfig(patch) {
   for (const key of ['volume', 'mediaGain', 'bgmVolume']) number(c.hourly[key], 0, 1, '時報音量');
   number(c.hourly.fadeMs, 100, 5000, '時報フェード時間', true); number(c.hourly.generationTimeoutSeconds, 5, 300, 'SLM生成上限', true);
   for (const key of ['bgmFadeInMs', 'bgmFadeOutMs']) number(c.hourly[key], 0, 30000, 'BGMフェード時間', true);
+  number(c.hourly.historySyncMessages, 50, 2000, '1回の履歴取得件数', true); number(c.hourly.historyPageDelayMs, 200, 5000, '履歴取得の間隔', true); number(c.hourly.historyCorpusMessages, 100, 10000, '文章生成に使う履歴件数', true);
   if (!['local', 'discord', 'both'].includes(c.hourly.output) || !['auto', 'live', 'daily'].includes(c.hourly.generationMode)) fail('時報出力・生成方法');
   const slm = new URL(c.hourly.slmUrl);
   if (slm.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(slm.hostname) || slm.username || slm.password || slm.search || slm.hash || slm.pathname !== '/') fail('PC内のSLM URL');

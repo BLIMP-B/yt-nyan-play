@@ -84,7 +84,7 @@ else {
   function syncHourlyHistory() {
     if (!getConfig().hourly.servers.some(s => s.enabled) || !bot.client?.isReady()) return;
     historyController ||= new AbortController();
-    if (hourlyHistory.syncing) { const signal = historyController.signal; void hourlyHistory.syncing.catch(() => {}).finally(() => { if (!signal.aborted) syncHourlyHistory(); }); return; }
+    if (hourlyHistory.syncing) return;
     void hourlyHistory.sync(historyController.signal).catch(error => { if (error.name !== 'AbortError') store.log('warn', `時報履歴: ${error.message}`); });
   }
   function stopBot() { hourly?.cancel(); historyController?.abort(); historyController = null; speechRunner?.pause(true); speechRunner?.halt(true); media?.pause(true); media?.skip(); bot?.stop(); }
@@ -141,7 +141,7 @@ else {
     if (name === 'hourly:cancel') { hourly.cancel(); return snapshot(); }
     if (name === 'hourly:sync') { historyController ||= new AbortController(); await hourlyHistory.sync(historyController.signal); return snapshot(); }
     if (name === 'hourly:sync-cancel') { historyController?.abort(); historyController = null; return snapshot(); }
-    if (name === 'hourly:history-clear') { hourlyHistory.clear(); return snapshot(); }
+    if (name === 'hourly:history-clear') { await hourlyHistory.clear(); return snapshot(); }
     if (name === 'hourly:model-setup') { await hourlyModel.setup(); return snapshot(); }
     if (name === 'hourly:model-cancel') { hourlyModel.cancel(); return snapshot(); }
     if (name === 'hourly:generate') {
@@ -291,7 +291,7 @@ else {
     hourlyHistory = new HourlyHistory(store.directory, () => bot.client, getConfig, emitState);
     hourlyModel = new HourlyModel(store.directory, getConfig, (url, options) => net.fetch(url, options)); hourlyModel.on('change', emitState);
     hourly = new HourlyRuntime(store.directory, getConfig, {
-      history: hourlyHistory, model: hourlyModel, fetcher: (url, options) => net.fetch(url, options),
+      history: hourlyHistory, model: hourlyModel, fetcher: (url, options) => net.fetch(url, options), analyze: (text, signal) => hourlyHistory.tokens(text, signal),
       log: (level, text) => store.log(level, text), targets: () => voice.snapshot().filter(v => v.status === 'ready').map(v => v.guildId), reserve: scopes => speechRunner.reserve(scopes),
       hold: (id, value) => { voice.holdSpeech(id, value); if (value) voice.interruptSpeech(id); },
       synthesize: async (text, signal) => decodeAudio(await new Voicevox(getConfig().speech.engineUrl).synthesize(text, getConfig().speech, signal), signal),
@@ -357,6 +357,9 @@ else {
     if (getConfig().bot.autoConnect && vault.hasToken() && !smoke) await startBot().catch(e => store.log('error', e.message));
     powerMonitor.on('resume', () => { hourly.cancel(); hourly.update(); store.log('info', 'Windowsの復帰を検出しました'); if (getConfig().bot.autoConnect && bot.status === 'offline') void startBot().catch(e => store.log('error', e.message)); });
     if (smoke) {
+      const words = await hourlyHistory.tokens('猫 時計');
+      if (!words.some(w => w.word === '猫') || !words.some(w => w.word === '時計')) throw new Error('履歴ワーカーの単語解析が失敗しました');
+      console.log('NYAN_HISTORY_WORKER_READY');
       await new Promise(resolve => setTimeout(resolve, 500));
       const verified = await window.webContents.executeJavaScript(`(async () => {
         const initial = await window.nyan.invoke('state');
@@ -447,6 +450,6 @@ else {
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });
-  app.on('before-quit', () => { quitting = true; hourly?.close(); clearInterval(historyTimer); hourlyModel?.close(); if (bot) stopBot(); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
+  app.on('before-quit', () => { quitting = true; hourly?.close(); clearInterval(historyTimer); hourlyModel?.close(); if (bot) stopBot(); void hourlyHistory?.close().catch(() => {}); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
   app.on('window-all-closed', () => { if (quitting) app.quit(); });
 }

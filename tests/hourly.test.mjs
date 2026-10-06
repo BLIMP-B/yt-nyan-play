@@ -64,17 +64,17 @@ test('browser fade changes volume smoothly without pausing or replaying naturall
 });
 test('all selected channel history is paginated, persisted, updated, deleted and cut off at generation time', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'nyan-hourly-history-')); let history;
-  t.after(() => { history?.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  t.after(async () => { await history?.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const c = normalizeConfig({ hourly: { servers: [{ guildId: '11111', enabled: true, bgm: false, channelIds: ['22222', '33333'] }] } });
   const messages = Array.from({ length: 230 }, (_, i) => ({ id: String(10000 + i), channelId: '22222', guildId: '11111', content: i === 0 ? '猫 時計' : '森 太陽', createdTimestamp: i + 1 }));
   let calls = 0, denied = false;
   const channel = id => ({ guildId: '11111', name: id, permissionsFor: () => ({ has: () => !denied }), messages: { fetch: async options => { calls++; return new Map(messages.filter(m => m.channelId === id && (!options.before || BigInt(m.id) < BigInt(options.before))).reverse().slice(0, options.limit).map(m => [m.id, m])); } } });
   const client = { isReady: () => true, user: { id: '99999' }, channels: { fetch: async id => channel(id) } };
   history = new HourlyHistory(directory, () => client, () => c); await history.sync(); assert.equal(history.snapshot().messages, 230); assert.ok(calls >= 4);
-  const model = await history.model(c.hourly.servers[0], 1); assert.equal(model.vocabulary('名詞').length, 2); history.close();
+  const model = await history.model(c.hourly.servers[0], 1); assert.equal(model.vocabulary('名詞').length, 2); await history.close();
   history = new HourlyHistory(directory, () => client, () => c);
   const before = calls; await history.sync(); assert.equal(calls - before, 2); assert.equal(history.snapshot().messages, 230);
-  await history.record({ ...messages[0], content: '月 料理' }); history.deleted(messages[1].id); assert.equal(history.snapshot().messages, 229);
+  await history.record({ ...messages[0], content: '月 料理' }); await history.deleted(messages[1].id); assert.equal(history.snapshot().messages, 229);
   denied = true; await assert.rejects(history.model(c.hourly.servers[0], 999), /現在の履歴閲覧権限/);
 });
 test('the local SLM receives words, produces a subject and predicate, and supplies two nouns actually present in its output', async () => {
