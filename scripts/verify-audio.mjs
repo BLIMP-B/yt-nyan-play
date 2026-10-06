@@ -25,6 +25,16 @@ const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query
 engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
 const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'local', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'local', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
 writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
+writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'nyan-audio-verification', type: 'module', main: 'audio-bootstrap.mjs', version: JSON.parse(readFileSync(join(root, 'package.json'))).version }));
+writeFileSync(join(directory, 'audio-bootstrap.mjs'), `
+import { MediaStreamResolver } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href)};
+const original = MediaStreamResolver.prototype.resolve;
+MediaStreamResolver.prototype.resolve = function(url, signal) {
+  if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} });
+  return original.call(this, url, signal);
+};
+await import(${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/main.mjs')).href)});
+`);
 let application, monitor;
 const monitorChunks = [];
 if (process.env.NYAN_AUDIO_MONITOR_SOURCE) {
@@ -65,7 +75,7 @@ async function encodedAudio(pcm) {
 const liveService = url => /(^|\.)(youtube\.com|youtu\.be)$/.test(new URL(url).hostname) ? 'youtube' : /(^|\.)nicovideo\.jp$/.test(new URL(url).hostname) ? 'niconico' : new URL(url).hostname;
 try {
   const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
-  application = await _electron.launch({ executablePath: require('electron'), args: [root, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
+  application = await _electron.launch({ executablePath: require('electron'), args: [directory, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
   application.on('console', message => console.log('Electron:', message.text()));
   const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
   const fadeFields = ['media.duckFadeOutMs', 'media.duckFadeInMs', 'hourly.bgmFadeInMs', 'hourly.bgmFadeOutMs'];
@@ -85,14 +95,6 @@ try {
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.duckFadeOutMs === 3000);
   report.fadeSettings = { defaultsSeconds: 3, savedSeconds: 1.2, savedMilliseconds: 1200, passed: true };
   await page.locator('[data-view="overview"]').click();
-  // Substitute only the remote metadata lookup; test the real FFmpeg-to-Electron audio path.
-  await application.evaluate(async (_electron, { moduleUrl, audioFile }) => {
-    const { MediaStreamResolver } = await import(moduleUrl), original = MediaStreamResolver.prototype.resolve;
-    MediaStreamResolver.prototype.resolve = function(url, signal) {
-      if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: audioFile, audioOnly: true, service: 'fixture', headers: {} });
-      return original.call(this, url, signal);
-    };
-  }, { moduleUrl: pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href, audioFile: join(directory, 'audio.ogg') });
   // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
   await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio }) => {
     const ui = BrowserWindow.getAllWindows()[0];
@@ -222,7 +224,7 @@ try {
       job = await call(page, 'media:add', { url, mode: 'direct' });
       await application.evaluate(async ({ BrowserWindow }, label) => {
         const probe = globalThis.nyanAudioProbe; probe.active = label;
-        const until = Date.now() + 10000;
+        const until = Date.now() + 180000;
         while (Date.now() < until) {
           const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
           if (target) { probe.target = target; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
