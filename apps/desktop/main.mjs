@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, Notification, powerMonitor, net } from 'electron';
+import { app, BrowserWindow, Tray, Menu, ipcMain, dialog, shell, clipboard, Notification, powerMonitor, net } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, isAbsolute } from 'node:path';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -55,7 +55,7 @@ else {
   };
   const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
-    voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })),
+    voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })), accountLink: accounts.snapshot(),
     paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot(),
     hourly: hourly ? { ...hourly.snapshot(), history: hourlyHistory.snapshot(), model: hourlyModel.snapshot() } : null });
   const audioCommand = (...args) => audioBridge.command(...args);
@@ -132,7 +132,9 @@ else {
     }
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
     if (name === 'media:show') { media.show(); return null; }
-    if (name === 'media:login') { await accounts.open(data); return null; }
+    if (name === 'media:login') return accounts.open(data);
+    if (name === 'media:account-copy') { const code = accounts.snapshot().code; if (!code) throw new Error('YouTubeのログイン画面を開いて、接続コードを発行してください'); clipboard.writeText(code); return null; }
+    if (name === 'media:account-cancel') { accounts.link.close(); emitState(); return null; }
     if (name === 'hourly:test') { try { await hourly.test(String(data?.guildId || '')); } catch (error) { if (error.name !== 'AbortError') throw error; } return snapshot(); }
     if (name === 'hourly:cancel') { hourly.cancel(); return snapshot(); }
     if (name === 'hourly:sync') { historyController ||= new AbortController(); await hourlyHistory.sync(historyController.signal); return snapshot(); }
@@ -194,7 +196,7 @@ else {
     bouyomi = new BouyomiImport(store.directory); bouyomi.on('change', emitState);
     bouyomiProcessor = new BouyomiProcessor(store.directory);
     android = new AndroidRuntime(store.directory, getConfig, (l, t) => store.log(l, t), (url, options) => net.fetch(url, options));
-    accounts = new MediaAccounts(getConfig, (l, t) => store.log(l, t));
+    accounts = new MediaAccounts(getConfig, (l, t) => store.log(l, t), emitState);
     const education = new ChatEducation(store, () => {
       if (!getConfig().speech.bouyomiPreprocess || getConfig().speech.provider !== 'voicevox') return null;
       if (bouyomi.child) throw new Error('教育辞書を更新するには元の棒読みちゃんを終了してください');

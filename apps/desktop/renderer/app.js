@@ -95,6 +95,7 @@ import { HourlySettings } from './hourly-settings.js';
     });
     const services = $('media-account-service');
     if (!services.options.length) for (const service of state.mediaAccounts || []) { const option = node('option', service.name); option.value = service.id; services.append(option); }
+    renderAccountLink();
     serverSettings.render(state);
     hourlySettings.render(state);
     if (state.hourly) {
@@ -121,7 +122,16 @@ import { HourlySettings } from './hourly-settings.js';
   document.querySelectorAll('[data-view],[data-go]').forEach(e => e.addEventListener('click', () => navigate(e.dataset.view || e.dataset.go)));
   document.querySelectorAll('.save-config').forEach(e => e.addEventListener('click', task(() => save())));
   const actions = { 'bot-start': 'bot:start', 'bot-stop': 'bot:stop', 'show-media': 'media:show', 'open-docs': 'open:docs', 'open-voicevox': 'open:voicevox', 'stop-engine': 'engine:stop', 'export-config': 'config:export' };
-  $('media-account-open').addEventListener('click', task(() => invoke('media:login', $('media-account-service').value)));
+  function renderAccountLink() {
+    const youtube = $('media-account-service').value === 'youtube', link = state.accountLink || {};
+    $('youtube-account-help').hidden = !youtube; $('embedded-account-help').hidden = youtube;
+    $('media-account-code').value = link.code || ''; $('media-account-copy').disabled = !link.code; $('media-account-cancel').disabled = !link.code;
+    $('media-account-status').textContent = link.status === 'received' ? 'YouTubeのログイン情報を受け取りました。再生をお試しください。' : link.status === 'expired' ? '接続コードの期限が切れました。ログイン画面を開いて再発行してください。' : link.code ? `にゃんぷれいの設定へ貼り付けてください。有効期限: ${new Date(link.expiresAt).toLocaleTimeString('ja-JP')}` : 'にゃんぷれい v0.2.2以降が必要です。';
+  }
+  $('media-account-service').addEventListener('change', renderAccountLink);
+  $('media-account-open').addEventListener('click', task(async () => { await invoke('media:login', $('media-account-service').value); render(await invoke('state')); }));
+  $('media-account-copy').addEventListener('click', task(async () => { await invoke('media:account-copy'); toast('接続コードをコピーしました。にゃんぷれいの設定へ貼り付けてください'); }));
+  $('media-account-cancel').addEventListener('click', task(async () => { await invoke('media:account-cancel'); render(await invoke('state')); }));
   for (const [id, action] of Object.entries(actions)) $(id).addEventListener('click', task(async () => { const value = await invoke(action); if (value?.config) render(value); }));
   $('pause-toggle').addEventListener('click', task(async () => render(await invoke('control', state.paused.media || state.paused.speech ? 'resume' : 'pause'))));
   $('skip-media').addEventListener('click', task(async () => render(await invoke('control', 'skip')))); $('stop-all').addEventListener('click', task(async () => render(await invoke('control', 'stop'))));

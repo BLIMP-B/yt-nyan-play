@@ -24,6 +24,25 @@ test('ordinary speech uses template while unconfigured channels and self message
   const s = setup(t); await s.bot.message(s.message('こんにちは')); assert.equal(s.speech[0].text, 'ねこ、こんにちは');
   const m = s.message('無視', '2'); m.channelId = '77777'; await s.bot.message(m); m.channelId = '22222'; m.author.id = '99999'; await s.bot.message(m); assert.equal(s.speech.length, 1);
 });
+test('URL modes and fixed-schema media work outside speech channels, with server and sender isolation', async t => {
+  const s = setup(t); s.store.config.speech.enabled = false;
+  const url = 'https://youtu.be/h9cOgegwcM0?si=xHwun4M5KiZgZmSE';
+  for (const [index, mode] of ['再生', '無限', '直接'].entries()) {
+    const m = s.message(url + mode, 'off-channel-' + index); m.channelId = '77777';
+    await s.bot.message(m); await s.bot.message(m);
+  }
+  assert.deepEqual(s.media.map(m => m.mode), ['preview', 'full', 'direct']);
+  assert.ok(s.media.every(m => m.url === url && m.guildId === '11111' && !m.master));
+  const fixed = s.message('NYANPLAY/1 ' + JSON.stringify({ version: 1, type: 'play', mediaUrl: url, mode: 'direct', startSeconds: 15 }), 'schema');
+  fixed.channelId = '77777'; fixed.webhookId = '55555'; fixed.author.bot = true;
+  await s.bot.message(fixed); assert.equal(s.media.at(-1).startSeconds, 15);
+  const unknown = s.message(url + '再生', 'unknown'); unknown.guildId = '55555'; unknown.channelId = '77777'; await s.bot.message(unknown);
+  assert.equal(s.media.length, 4); assert.match(s.store.logs[0].text, /VC設定/);
+  const excluded = s.message(url + '再生', 'excluded'); excluded.channelId = '77777'; excluded.author.bot = true;
+  await s.bot.message(excluded); assert.equal(s.media.length, 4);
+  s.store.config.bot.includeWebhooks = false; fixed.id = 'no-webhooks'; await s.bot.message(fixed); assert.equal(s.media.length, 4);
+  await s.bot.message(s.message('普通の会話', 'normal-off')); assert.equal(s.speech.length, 0);
+});
 test('read-channel off persists and suppresses speech while accepting media and admin commands', async t => {
   const s = setup(t);
   await s.bot.message(s.message('!nyan read-channel 22222 off', '1', true));
@@ -49,7 +68,8 @@ test('plain ていし is scoped, deduplicated and received with speech disabled 
   const m = s.message(' ていし '); await s.bot.message(m); await s.bot.message(m);
   assert.deepEqual(stopped, [{ guildId: '11111', master: false }]); assert.equal(s.speech.length, 0);
   s.store.config.bot.masterTextChannelId = '22222'; await s.bot.message(s.message('ていし', '2')); assert.equal(stopped[1].master, true);
-  const unregistered = s.message('ていし', '3'); unregistered.channelId = '77777'; await s.bot.message(unregistered); assert.equal(stopped.length, 2);
+  const otherChannel = s.message('ていし', '3'); otherChannel.channelId = '77777'; await s.bot.message(otherChannel); assert.equal(stopped.length, 3); assert.equal(stopped[2].master, false);
+  const unregistered = s.message('ていし', '4'); unregistered.channelId = '77777'; unregistered.guildId = '55555'; await s.bot.message(unregistered); assert.equal(stopped.length, 3);
 });
 test('VC text is read and can be disabled through read-channel', async t => {
   const s = setup(t), m = s.message('VC内の会話'); m.channelId = '33333'; await s.bot.message(m); assert.equal(s.speech.length, 1);

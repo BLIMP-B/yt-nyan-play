@@ -33,10 +33,10 @@ export function parseMediaCommand(content, config) {
     const url = data.mediaUrl || data.pageUrl;
     command = { url, title: data.title, mode: data.mode || (data.loop === true ? 'full' : 'preview'), startSeconds: data.startSeconds ?? urlStartSeconds(url) };
   } else {
-    const m = text.match(/^(https?:\/\/\S+?)(再生|無限|直接)(?:\r?\n\*\*【([\s\S]*?)】\*\*)?$/);
+    const m = text.match(/^(?:<(https?:\/\/[^\s<>]+)>|(https?:\/\/[^\s<>]+?))\s*(再生|無限|直接)(?:\r?\n\*\*【([\s\S]*?)】\*\*)?$/);
     if (!m) return null;
-    const u = new URL(m[1]);
-    command = { url: m[1], title: m[3] || u.hostname, mode: { 再生: 'preview', 無限: 'full', 直接: 'direct' }[m[2]], startSeconds: urlStartSeconds(m[1]) };
+    const url = m[1] || m[2], u = new URL(url);
+    command = { url, title: m[4] || u.hostname, mode: { 再生: 'preview', 無限: 'full', 直接: 'direct' }[m[3]], startSeconds: urlStartSeconds(url) };
   }
   if (!['preview', 'full', 'direct'].includes(command.mode) || typeof command.url !== 'string' || !Number.isFinite(command.startSeconds) || command.startSeconds < 0 || command.startSeconds > 86400) throw new Error('再生URL・開始位置・方式を確認してください');
   return { ...command, url: validateMediaUrl(command.url, config.media.allowedHosts), title: String(command.title || '').slice(0, 250) };

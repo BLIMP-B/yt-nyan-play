@@ -28,7 +28,10 @@ const references = [
 ];
 for (const path of new Set(references)) checkReference(path);
 const html = readFileSync(resolve(extension, manifest.options_page), 'utf8');
-for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) checkReference(match[1]);
+for (const match of html.matchAll(/(src|href)="([^"]+)"/g)) {
+  if (match[1] === 'href' && match[2].startsWith('https://')) assert.doesNotThrow(() => new URL(match[2]));
+  else checkReference(match[2]);
+}
 
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {

@@ -23,7 +23,7 @@ test('Extension adapters retain SNS permalinks and use service-specific seek lin
 function worker(fetch) {
   let listener;
   const noop=()=>{};
-  const context=vm.createContext({URL,AbortSignal,fetch,chrome:{runtime:{onInstalled:{addListener:noop},onStartup:{addListener:noop},onMessage:{addListener:l=>listener=l},openOptionsPage:noop},permissions:{onAdded:{addListener:noop},onRemoved:{addListener:noop}},action:{onClicked:{addListener:noop}}}});
+  const context=vm.createContext({URL,AbortSignal,fetch,importScripts:noop,chrome:{runtime:{onInstalled:{addListener:noop},onStartup:{addListener:noop},onMessage:{addListener:l=>listener=l},openOptionsPage:noop},permissions:{onAdded:{addListener:noop},onRemoved:{addListener:noop}},action:{onClicked:{addListener:noop}}}});
   vm.runInContext(readFileSync(new URL('../extension/service-worker.js',import.meta.url),'utf8'),context);
   return msg=>new Promise(resolve=>listener(msg,{},resolve));
 }

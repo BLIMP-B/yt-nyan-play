@@ -10,7 +10,7 @@ const require=createRequire(import.meta.url),root=resolve(import.meta.dirname,'.
 const output=resolve(process.env.NYAN_EXTENSION_REPORT_DIR||join(root,'dist/extension-verification'));mkdirSync(output,{recursive:true});
 const profile=mkdtempSync(join(tmpdir(),'nyan-extension-')),media=join(profile,'fixture.mp4');
 execFileSync(require('ffmpeg-static'),['-hide_banner','-loglevel','error','-f','lavfi','-i','testsrc2=size=640x360:rate=12','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','45','-c:v','libx264','-preset','ultrafast','-pix_fmt','yuv420p','-c:a','aac','-y',media]);
-const video=readFileSync(media),report={version:'0.2.1',mode:'real Chrome extension with controlled site-DOM fixtures',platform:process.platform,sites:[],checks:[],passed:false};
+const video=readFileSync(media),report={version:JSON.parse(readFileSync(join(root,'extension/manifest.json'))).version,mode:'real Chrome extension with controlled site-DOM fixtures',platform:process.platform,sites:[],checks:[],passed:false};
 let context;const received=[];
 const webhook=i=>'https://discord.com/api/webhooks/'+String(i).padStart(20,'0')+'/fixture_token_'+i;
 try {

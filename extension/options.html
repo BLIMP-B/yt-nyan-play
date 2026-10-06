@@ -16,6 +16,13 @@
       <span>にゃんぷれい - 設定</span>
     </h1>
 
+    <h2>YouTubeログインの引き継ぎ</h2>
+    <p>このChrome / Edgeで<a href="https://www.youtube.com/" target="_blank" rel="noopener">YouTubeにログイン</a>し、にゃんとーくの「再生アカウント」から接続コードをコピーしてください。</p>
+    <div class="urlRow"><input id="accountCode" class="input" type="password" autocomplete="off" maxlength="100" placeholder="接続コード"><button id="transferAccount" type="button">にゃんとーくへ引き継ぐ</button></div>
+    <p>クリック時に許可を求めます。YouTubeのログイン情報を同じPCのにゃんとーくへ渡します。Googleのパスワードや他のサイトのログイン情報は渡しません。</p>
+    <p id="accountStatus" role="status" aria-live="polite"></p>
+
+    <h2>送信先を追加</h2>
     <div class="form">
       <!-- 表示名 -->
       <input id="label" class="input" placeholder="表示名">
@@ -42,6 +49,7 @@
 
   </div>
 
+  <script src="account-link.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

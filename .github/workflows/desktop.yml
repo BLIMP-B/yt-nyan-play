@@ -20,6 +20,13 @@ jobs:
       - run: npm test
       - run: xvfb-run --auto-servernum npm run smoke:desktop
       - run: xvfb-run --auto-servernum npm run verify:accounts
+      - run: npx playwright-core install --with-deps chromium
+      - run: xvfb-run --auto-servernum npm run verify:account-link
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: account-link-verification-linux
+          path: dist/account-link-verification
       - name: Check real speech, video audio and PC output
         run: |
           sudo apt-get update
@@ -47,6 +54,13 @@ jobs:
       - run: npm test
       - run: npm run smoke:desktop
       - run: npm run verify:accounts
+      - run: npx playwright-core install chromium
+      - run: npm run verify:account-link
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: account-link-verification-windows
+          path: dist/account-link-verification
       - run: npm run verify:audio
       - uses: actions/upload-artifact@v4
         if: always()

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "にゃんぷれい",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "YouTube・ニコニコ・SNSの動画や音声から、再生指定と開始位置を選んでDiscordへ送信します。",
   "permissions": [
     "storage",
@@ -84,7 +84,9 @@
       "run_at": "document_idle"
     }
   ],
+  "optional_permissions": ["cookies"],
   "optional_host_permissions": [
-    "https://*/*"
+    "https://*/*",
+    "http://127.0.0.1/*"
   ]
 }

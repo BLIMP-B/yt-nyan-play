@@ -12,7 +12,7 @@ small = ImageFont.truetype(font_path, 17)
 width, cell_w, cell_h = 1500, 500, 385
 canvas = Image.new('RGB', (width, 95 + cell_h * 3), '#edf0f3')
 draw = ImageDraw.Draw(canvas)
-draw.text((22, 10), 'にゃんぷれい v0.2.1 — ボタン・送信画面の表示確認', font=font, fill='#202124')
+draw.text((22, 10), f"にゃんぷれい v{report['version']} — ボタン・送信画面の表示確認", font=font, fill='#202124')
 draw.text((22, 51), '各サイトの投稿DOMを使ったChrome拡張の試験画面です。実サイトの画面ではありません。', font=small, fill='#515b64')
 for i, site in enumerate(report['sites']):
     x, y = i % 3 * cell_w, 95 + i // 3 * cell_h

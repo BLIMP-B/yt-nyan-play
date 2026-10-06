@@ -9,12 +9,12 @@ export class DiscordBot {
       intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.DirectMessages], partials: [Partials.Channel],
     }));
-    this.client = null; this.status = 'offline'; this.startedAt = null; this.receiving = new Set(); this.mediaActivity = []; this.presenceKey = null;
+    this.client = null; this.status = 'offline'; this.startedAt = null; this.receiving = new Set(); this.mediaActivity = []; this.presenceKey = null; this.emptyContentReported = false;
   }
   async start(token) {
     if (this.client) throw new Error('Botは接続中です');
     if (typeof token !== 'string' || !token.trim()) throw new Error('Botトークンを保存してください');
-    this.status = 'connecting'; this.store.emit('change');
+    this.status = 'connecting'; this.emptyContentReported = false; this.store.emit('change');
     const client = this.clientFactory(); this.client = client;
     const safe = callback => (...args) => { Promise.resolve().then(() => callback(...args)).catch(e => { if (e.name !== 'AbortError') this.store.log('error', e.message); }); };
     client.on(Events.ClientReady, safe(async () => {
@@ -54,8 +54,20 @@ export class DiscordBot {
   async message(message) {
     if (message.author.id === this.client?.user?.id || message.system) return;
     const c = this.store.config; const normalized = this.normalize(message);
+    if (!normalized.content && !normalized.attachments.length && !message.stickers?.size && !normalized.isBot && !normalized.webhookId && !this.emptyContentReported && c.bot.bindings.some(b => b.guildId === normalized.guildId)) {
+      this.emptyContentReported = true;
+      this.store.log('warn', 'Discordから本文が空のメッセージを受信しました。URL再生命令も届かない場合は、Developer PortalのBot設定でMESSAGE CONTENT INTENTを有効にし、Botを再接続してください');
+    }
     const inBinding = c.bot.bindings.some(b => b.guildId === normalized.guildId && (b.voiceChannelId === normalized.channelId || b.textChannelIds.includes(normalized.channelId)));
-    if (!inBinding && normalized.channelId !== c.bot.masterTextChannelId && !(c.bot.readDMs && !normalized.guildId)) return;
+    const isReadChannel = inBinding || normalized.channelId === c.bot.masterTextChannelId || c.bot.readDMs && !normalized.guildId;
+    const mediaText = normalized.content.trim();
+    const mediaRequest = mediaText.startsWith('NYANPLAY/1 ') || /^<?https?:\/\/[\s\S]+(?:再生|無限|直接)(?:\s|$)/.test(mediaText);
+    const mediaControl = mediaRequest || mediaText === 'ていし';
+    // Media commands belong to the server's VC, independently of speech checkboxes.
+    if (!isReadChannel && !(mediaControl && c.bot.bindings.some(b => b.guildId === normalized.guildId))) {
+      if (mediaRequest) this.store.log('warn', `メディア要求を受信しましたが、サーバー ${normalized.guildId} のVC設定がありません。「Discord接続」で接続先を設定してください`);
+      return;
+    }
     const control = parseBotCommand(normalized.content, c.bot.prefix);
     if (control) {
       if (normalized.isBot || normalized.webhookId) return;
@@ -63,15 +75,25 @@ export class DiscordBot {
       const admin = c.bot.controlUserIds.includes(normalized.userId) || message.member?.permissions.has(PermissionFlagsBits.ManageGuild);
       try { await this.command(control, message, normalized, admin); } catch (e) { await this.reply(message, e.message); } return;
     }
-    if (!shouldReceive(normalized, c) || this.receiving.has(message.id) || this.store.seen.includes(`message:${message.id}`)) return;
+    if (!shouldReceive(normalized, c, mediaControl) || this.receiving.has(message.id) || this.store.seen.includes(`message:${message.id}`)) return;
     this.receiving.add(message.id);
     try {
     if (normalized.content.trim() === 'ていし') {
       await this.handlers.stopRequested({ guildId: normalized.guildId, master: normalized.channelId === c.bot.masterTextChannelId });
       this.store.remember(`message:${message.id}`); return;
     }
-    const media = parseMediaCommand(normalized.content, c);
-    if (media) { if (c.media.enabled) { await this.handlers.media({ ...media, master: normalized.channelId === c.bot.masterTextChannelId, guildId: normalized.guildId, source: normalized.displayName }); this.store.remember(`message:${message.id}`); } return; }
+    let media;
+    try { media = parseMediaCommand(normalized.content, c); }
+    catch (error) { this.store.log('error', `メディア要求: ${error.message}`); if (!normalized.isBot && !normalized.webhookId) await this.reply(message, error.message); return; }
+    if (media) {
+      if (c.media.enabled) {
+        await this.handlers.media({ ...media, master: normalized.channelId === c.bot.masterTextChannelId, guildId: normalized.guildId, source: normalized.displayName });
+        this.store.remember(`message:${message.id}`);
+        this.store.log('info', `メディア要求をキューに追加しました: サーバー ${normalized.guildId} / チャンネル ${normalized.channelId} / ${media.mode}`);
+      } else this.store.log('warn', 'メディア要求を受信しましたが、設定でメディアの受信が無効になっています');
+      return;
+    }
+    if (!isReadChannel) return;
     if (!c.speech.enabled || !shouldRead(normalized, c)) return;
     if (c.speech.chatEducationEnabled) {
       try {

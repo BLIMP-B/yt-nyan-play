@@ -51,3 +51,7 @@ SNSではプレイヤー右上のボタンをページに重ねるため、サ�
 `npm run check`、`node --test tests/extension.test.mjs`、`npm run verify:extension`、`npm run package`を使用します。表示試験にはPlaywright用Chromiumの導入が必要です（`npx playwright-core install --with-deps chromium`）。管理ポリシーで拡張追加が禁止されたChromeでは試験できません。
 
 GitHub Actionsは実際のMV3拡張を読み込んだ制御された投稿DOMで表示・操作を検査し、別の新規プロファイルで実公開ページを調べます。試験条件と未確認事項を記録し、画像・報告・`yt-nyan-play-0.2.1.zip`をGitHub Releasesに配置します。
+
+## v0.2.2のYouTubeログイン引き継ぎ
+
+設定画面の明示操作でのみ、任意の`cookies`権限と`http://127.0.0.1/*`を要求します。設定画面由来であることをservice workerで確認し、`youtube.com`のCookieだけを読みます。接続コードで指定できる送信先は固定の127.0.0.1とポートのみで、URL・ホストを任意指定できません。CookieをDiscord、拡張の同期ストレージ、ログ、ファイルへ送信・保存しません。10分・1回限りの接続コードでアプリへ送り、YouTube用の永続再生領域へ保存します。GoogleのCookieやパスワードは取り込みません。

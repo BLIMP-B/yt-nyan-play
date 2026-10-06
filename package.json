@@ -1,6 +1,6 @@
 {
   "name": "nyan-talk-damare",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "にゃんとーく〜Damare〜 Windows Discord.js統合アプリと送信側Chrome拡張",
   "engines": {
@@ -18,6 +18,7 @@
     "icon:build": "electron scripts/build-app-icon.cjs",
     "verify:audio": "node scripts/verify-audio.mjs",
     "verify:accounts": "node scripts/verify-media-accounts.mjs",
+    "verify:account-link": "node scripts/verify-account-link.mjs",
     "verify:android": "node scripts/verify-android.mjs",
     "verify:hourly-model": "node scripts/verify-hourly-model.mjs",
     "verify:extension": "node scripts/verify-extension.mjs",
@@ -41,7 +42,7 @@
     "electron-builder": "26.15.3",
     "playwright-core": "1.58.2"
   },
-  "extensionVersion": "0.2.1",
+  "extensionVersion": "0.2.2",
   "license": "UNLICENSED",
   "build": {
     "appId": "jp.blimp.nyantalkdamare",

@@ -1,3 +1,4 @@
+importScripts('account-link.js');
 function validWebhook(value) {
   try {
     const u = new URL(String(value || '').trim().replace(/^<|>$/g, ''));
@@ -28,8 +29,12 @@ chrome.runtime.onStartup.addListener(()=>{registerAdditionalSites().catch(()=>{}
 chrome.permissions.onAdded.addListener(()=>{registerAdditionalSites().catch(()=>{});});
 chrome.permissions.onRemoved.addListener(()=>{registerAdditionalSites().catch(()=>{});});
 chrome.action.onClicked.addListener(()=>chrome.runtime.openOptionsPage());
-chrome.runtime.onMessage.addListener((msg,_sender,reply)=>{
+chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
   (async()=>{
+    if(msg?.type==='TRANSFER_YOUTUBE_SESSION') {
+      if(sender.id!==chrome.runtime.id || sender.url?.split(/[?#]/)[0]!==chrome.runtime.getURL('options.html')) return {ok:false,error:'にゃんぷれいの設定画面から接続してください。'};
+      try { return await NyanAccountLink.transfer(msg.code); } catch(e) { return {ok:false,error:e.message}; }
+    }
     if(msg?.type==='OPEN_OPTIONS'){await chrome.runtime.openOptionsPage();return {ok:true};}
     if(msg?.type==='REGISTER_ADDITIONAL_SITES'){await registerAdditionalSites();return {ok:true};}
     if(msg?.type==='ENSURE_DEFAULT_DESTINATIONS')return {ok:true,seeded:false};

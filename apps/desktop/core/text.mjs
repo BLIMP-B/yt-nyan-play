@@ -4,7 +4,7 @@ import { applyEducation } from './education.mjs';
 export function formatTemplate(template, values) {
   return template.replace(/\$([\w-]+)\$/g, (_, key) => String(values[key] ?? ''));
 }
-export function shouldReceive(message, config) {
+export function shouldReceive(message, config, forMedia = false) {
   if (message.isSelf || message.isSystem) return false;
   if (config.speech.ignoredUserIds.includes(message.userId)) return false;
   if (config.speech.allowedUserIds.length && !config.speech.allowedUserIds.includes(message.userId)) return false;
@@ -15,6 +15,7 @@ export function shouldReceive(message, config) {
   } else if (message.isBot && !config.bot.includeBots) return false;
   if (!message.guildId) return config.bot.readDMs;
   if (config.bot.masterTextChannelId === message.channelId) return true;
+  if (forMedia) return config.bot.bindings.some(b => b.guildId === message.guildId);
   return config.bot.bindings.some(b => b.guildId === message.guildId && (b.voiceChannelId === message.channelId || b.textChannelIds.includes(message.channelId)));
 }
 export function shouldRead(message, config) {

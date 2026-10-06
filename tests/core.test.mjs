@@ -31,6 +31,7 @@ test('media allowlist blocks local, credentials, non-HTTP and deceptive domains'
 test('existing extension commands preserve titles, playback mode and time offsets', () => {
   assert.deepEqual(parseMediaCommand('https://www.youtube.com/watch?v=abc&t=1h2m3s再生\n**【ねこ】**', config()), { url: 'https://www.youtube.com/watch?v=abc&t=1h2m3s', title: 'ねこ', mode: 'preview', startSeconds: 3723 });
   assert.equal(parseMediaCommand('https://youtu.be/abc無限', config()).mode, 'full');
+  assert.equal(parseMediaCommand('<https://youtu.be/abc?t=42> 無限', config()).startSeconds, 42);
   assert.equal(parseMediaCommand('普通の会話 https://youtu.be/abc', config()), null);
 });
 test('versioned commands validate type and offsets', () => {

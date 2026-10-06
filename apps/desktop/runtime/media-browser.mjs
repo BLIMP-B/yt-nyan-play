@@ -16,7 +16,7 @@ export class MediaBrowser {
     const window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
       icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     this.window = window; let captureStarted = false;
-    guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child));
+    guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
     try {
@@ -45,7 +45,8 @@ export class MediaBrowser {
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
         this.status = { ...state, title, service: mediaServiceName(url), startedAt: playbackStartedAt, paused: this.paused }; this.bridge.changed();
         if (state.blockedReason && state.blockedReason !== reportedBlock) {
-          reportedBlock = state.blockedReason; this.log('warn', `${mediaServiceName(url)}の再生条件: ${state.blockedReason}${state.loginRequired ? '。再生画面からログインしてください（Chromeとは別のCookie領域です）' : ''}`);
+          const youtube = /(^|\.)youtube\.com$|^youtu\.be$/.test(new URL(url).hostname);
+          reportedBlock = state.blockedReason; this.log('warn', `${mediaServiceName(url)}の再生条件: ${state.blockedReason}${state.loginRequired ? youtube ? '。「再生アカウント」で通常ブラウザのログインを引き継いでから再実行してください' : '。再生画面からログインしてください（Chromeとは別のCookie領域です）' : ''}`);
           if (state.loginRequired && !payload.background && !window.isVisible()) window.show();
         }
         if (state.error) throw new Error(`メディアを再生できません: ${state.error}`);

@@ -1,5 +1,5 @@
 import {chromium} from 'playwright-core';
-import {mkdirSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdirSync,mkdtempSync,writeFileSync,rmSync,readFileSync} from 'node:fs';
 import {resolve,join} from 'node:path';
 import {tmpdir} from 'node:os';
 const root=resolve(import.meta.dirname,'..'),out=join(root,'dist/extension-live'),profile=mkdtempSync(join(tmpdir(),'nyan-public-'));
@@ -16,7 +16,7 @@ const samples=[
   {id:'bluesky',url:'https://bsky.app/profile/bsky.app/post/3lg5g64vvos23'},
   {id:'mastodon',url:'https://mastodon.social/@Gargron'}
 ];
-const e=join(root,'extension');let context;const report={version:'0.2.1',mode:'actual public pages, fresh unauthenticated Chrome profile',sites:[]};
+const e=join(root,'extension');let context;const report={version:JSON.parse(readFileSync(join(e,'manifest.json'))).version,mode:'actual public pages, fresh unauthenticated Chrome profile',sites:[]};
 try{
   context=await chromium.launchPersistentContext(profile,{channel:'chromium',headless:true,viewport:{width:1280,height:900},locale:'ja-JP',args:['--no-sandbox',`--disable-extensions-except=${e}`,`--load-extension=${e}`],ignoreDefaultArgs:['--disable-extensions']});
   const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker',{timeout:15000});

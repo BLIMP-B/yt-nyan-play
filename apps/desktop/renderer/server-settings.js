@@ -83,6 +83,7 @@ export class ServerSettings {
       body.append(switches);
       if (!binding) body.append(node('p', '先に音声接続先を選択してください。選択内容は自動で保存されます。', 'help'));
       else if (binding.readEnabled === false) body.append(node('p', 'このサーバーのチャット読み上げは停止中です。チャンネルの選択は保持しています。', 'help'));
+      if (binding) body.append(node('p', 'URL＋再生／無限／直接と「ていし」は、Botが閲覧できるこのサーバーの全チャンネルで受け付けます。以下のチェックは通常の読み上げ対象です。', 'help'));
       const channels = [...guild.channels];
       for (const id of new Set([...(binding?.textChannelIds || []), ...(binding ? [binding.voiceChannelId] : [])])) if (!channels.some(c => c.id === id)) channels.push({ id, name: id, text: true, voice: id === binding.voiceChannelId, unavailable: true, parentId: '__unavailable', parentName: '保存済み・未取得のチャンネル' });
       const groups = new Map();

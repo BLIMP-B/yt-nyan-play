@@ -1,4 +1,18 @@
 let editId = null;
+document.getElementById('transferAccount').addEventListener('click', async () => {
+  const button = document.getElementById('transferAccount'), input = document.getElementById('accountCode'), status = document.getElementById('accountStatus');
+  try {
+    NyanAccountLink.parse(input.value);
+    // Invoke immediately in the click handler so Chrome retains the user gesture.
+    const permission = chrome.permissions.request({ permissions: ['cookies'], origins: ['http://127.0.0.1/*'] });
+    button.disabled = true; status.textContent = '接続しています…';
+    if (!await permission) throw new Error('ログイン引き継ぎが許可されませんでした。');
+    const result = await chrome.runtime.sendMessage({ type: 'TRANSFER_YOUTUBE_SESSION', code: input.value.trim() });
+    if (!result?.ok) throw new Error(result?.error || '接続を確認できませんでした。');
+    input.value = ''; status.textContent = 'YouTubeのログイン情報を引き継ぎました。にゃんとーくで再生をお試しください。';
+  } catch (e) { status.textContent = e.message; }
+  finally { button.disabled = false; }
+});
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isWebhook = value => { try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && ['discord.com','discordapp.com'].includes(u.hostname) && /^\/api\/webhooks\/\d+\/[\w-]+$/.test(u.pathname); } catch { return false; } };
 
@@ -320,7 +334,7 @@ async function renderOrigins() {
   const fixed = new Set(chrome.runtime.getManifest().host_permissions);
   const origins = (await chrome.permissions.getAll()).origins || [];
   const root = el('originList'); root.replaceChildren();
-  for (const origin of origins.filter(x => !fixed.has(x) && x !== 'https://*/*')) {
+  for (const origin of origins.filter(x => !fixed.has(x) && x !== 'https://*/*' && x.startsWith('https://'))) {
     const row = document.createElement('div'); row.className = 'item';
     const label = document.createElement('span'); label.textContent = origin;
     const remove = document.createElement('button'); remove.textContent = '許可を解除';
