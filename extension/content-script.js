@@ -11,6 +11,7 @@
   const mask = url => { try { const u = new URL(url); return `${u.hostname}/api/webhooks/••••${u.pathname.split('/').at(-1).slice(-4)}`; } catch { return '未設定'; } };
   const style = `
     :host { all: initial; font: 14px/1.5 system-ui, "Noto Sans CJK JP", sans-serif; color: #252526; color-scheme: light; --bg:#fff; --field:#f5f5f5; --fg:#252526; --muted:#616161; --border:#d4d4d4; --accent:#0078d4; --hover:#e8f2fa; }
+    :host([hidden]) { display:none !important; }
     :host([data-theme="dark"]) { color-scheme:dark; --bg:#252526; --field:#1e1e1e; --fg:#e4e4e4; --muted:#aaa; --border:#454545; --accent:#70b7f5; --hover:#323e48; }
     *, *::before, *::after { box-sizing:border-box; } button,input,select { font:inherit; } button { cursor:pointer; }
     button:focus-visible,input:focus-visible,select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
