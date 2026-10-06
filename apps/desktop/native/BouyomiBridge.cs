@@ -53,7 +53,23 @@ public static class BouyomiBridge {
         // and the MSIME/Talk/Post path must not be fed to VOICEVOX as ordinary Japanese.
         List<Dictionary<string, object>> generated = new List<Dictionary<string, object>>();
         foreach (object tag in (IEnumerable)Field(tagged, "Tags")) generated.Add(new Dictionary<string, object> { { "type", Field(tag, "Type").ToString() }, { "args", Field(tag, "Args") } });
-        return new Dictionary<string, object> { { "text", value.ToString() }, { "parts", Invoke(processor, "SplitToShortText", value) }, { "tags", generated } };
+        // Fixed Latin readings explicitly chosen in native word/education rules
+        // retain priority over the application's Latin fallback.
+        HashSet<string> readings = new HashSet<string>();
+        string output = value.ToString();
+        foreach (string stage in study ? new string[] { "Study", "Word" } : new string[] { "Word" }) {
+            foreach (string suffix in new string[] { "", "Regex" }) {
+                string path = Path.Combine(directory, "Replace" + stage + suffix + ".dic");
+                if (!File.Exists(path)) continue;
+                foreach (string line in File.ReadAllLines(path, Encoding.UTF8)) {
+                    string[] fields = line.Split('\t');
+                    if (fields.Length != 4 || !Regex.IsMatch(fields[3], "[a-zA-ZＡ-Ｚａ-ｚ]") || fields[3].IndexOf('$') >= 0) continue;
+                    string reading = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(fields[3])).ToString();
+                    if (reading.Length > 0 && output.Contains(reading)) readings.Add(reading);
+                }
+            }
+        }
+        return new Dictionary<string, object> { { "text", output }, { "parts", Invoke(processor, "SplitToShortText", value) }, { "tags", generated }, { "readings", new List<string>(readings) } };
     }
     static object Learn(string type, string args, XmlDocument settings) {
         object rules = Field(processor, "ReplaceStudies"); string source, reading = "";

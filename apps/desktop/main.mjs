@@ -29,7 +29,7 @@ import { bouyomiSpeak } from './runtime/bouyomi.mjs';
 import { AndroidRuntime } from './runtime/android.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
 import { MediaPool } from './core/media-pool.mjs';
-import { speechTargets, applyDictionary } from './core/text.mjs';
+import { speechTargets, prepareSpeech, prepareNativeText } from './core/text.mjs';
 import { resolveDestination } from './core/destination.mjs';
 import { AudioBridge } from './runtime/audio-bridge.mjs';
 import { browserUserAgent } from './core/browser-user-agent.mjs';
@@ -127,7 +127,9 @@ else {
     if (name === 'clip:choose') { const result = await dialog.showOpenDialog(window, { properties: ['openFile'], filters: [{ name: '音声', extensions: ['wav', 'mp3', 'ogg', 'flac'] }] }); return result.filePaths[0] || ''; }
     if (name === 'speech:test') {
       if (typeof data?.text !== 'string' || !data.text.trim() || data.text.length > 2000) throw new Error('読み上げる文章を入力してください');
-      const payload = resolveDestination({ text: data.text, guildId: String(data.guildId || ''), userId: '', styleId: Number(data.styleId ?? getConfig().speech.styleId) }, getConfig().speech.output, getConfig().bot.bindings, voice.snapshot());
+      const c = getConfig(), guildId = String(data.guildId || '');
+      const text = prepareSpeech({ content: data.text, guildId, userId: '' }, { ...c, speech: { ...c.speech, readNames: false } });
+      const payload = resolveDestination({ text, guildId, userId: '', styleId: Number(data.styleId ?? c.speech.styleId) }, c.speech.output, c.bot.bindings, voice.snapshot());
       if (getConfig().speech.output !== 'local') await voice.connect(payload.guildId);
       return speechRunner.enqueue(payload);
     }
@@ -283,7 +285,7 @@ else {
         const pendingCharacters = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
         const pipelineController = new AbortController(); const pipelineSignal = AbortSignal.any([signal, pipelineController.signal]);
         try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: bouyomiProcessor,
-          output: (text, options, textSignal) => output(applyDictionary(text, c.dictionary, job.payload), options, textSignal), log: (l, text) => store.log(l, text),
+          output: (text, options, textSignal, readings) => output(prepareNativeText(text, c, job.payload, readings), options, textSignal), log: (l, text) => store.log(l, text),
           sound: async (name, options, original, soundSignal) => {
             if (original.SoundDisablePath === 'true' && (isAbsolute(name) || name.split(/[\\/]/).includes('..'))) throw new Error('Soundタグの外部パスは無効です');
             const base = resolve(bouyomi.directory, original.SoundPath || 'Sound'); let file = resolve(base, name);
@@ -325,7 +327,7 @@ else {
     }); hourly.on('change', emitState);
     twitterAppVault = new Vault(store.directory, 'twitter-app-token.bin');
     twitter = new TwitterSource(store.directory, getConfig, new Vault(store.directory, 'twitter-login.bin'), twitterAppVault, {
-      speech: payload => { if (!store.seen.includes(`twitter:${payload.twitterId}`)) { store.enqueue('speech', payload); store.remember(`twitter:${payload.twitterId}`); void speechRunner.drain(); } },
+      speech: payload => { if (!store.seen.includes(`twitter:${payload.twitterId}`)) { const c = getConfig(); const text = prepareSpeech({ ...payload, content: payload.text }, { ...c, speech: { ...c.speech, readNames: false } }); if (text) store.enqueue('speech', { ...payload, text }); store.remember(`twitter:${payload.twitterId}`); void speechRunner.drain(); } },
       log: (level, text) => store.log(level, text), logout: () => { for (const job of speechRunner.activeJobs) if (job.payload.privateOwnerId) speechRunner.forJob(job).skip(); for (const job of store.jobs) if (job.payload.privateOwnerId) { job.payload.text = '[非公開投稿]'; if (job.status === 'waiting') job.status = 'cancelled'; } store.saveState(); },
     }, (url, options) => net.fetch(url, options)); twitter.on('change', emitState);
     window = new BrowserWindow({ width: 1260, height: 850, minWidth: 900, minHeight: 680, title: 'にゃんとーく〜Damare〜',

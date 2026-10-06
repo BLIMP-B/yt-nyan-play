@@ -21,7 +21,8 @@ execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=320x180:rate=25:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:v', 'libvpx', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-shortest', join(directory, 'video.webm')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
 const wav = readFileSync(join(directory, 'speech.wav'));
-const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query')) res.end('{}'); else if (req.url.startsWith('/synthesis')) { res.setHeader('Content-Type', 'audio/wav'); res.end(wav); } else { res.statusCode = 404; res.end(); } });
+const synthesisTexts = [];
+const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query')) { synthesisTexts.push(new URL(req.url, 'http://localhost').searchParams.get('text')); res.end('{}'); } else if (req.url.startsWith('/synthesis')) { res.setHeader('Content-Type', 'audio/wav'); res.end(wav); } else { res.statusCode = 404; res.end(); } });
 engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
 const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'local', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'local', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
 writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
@@ -177,6 +178,16 @@ try {
   const displayed = await page.evaluate(() => window.__nyanDisplayed);
   for (const job of jobs) assert.ok(displayed.some(text => text.includes(job.payload.text)), `Now-playing did not show ${job.payload.text}`);
   report.nowPlayingUpdated = true;
+  // Exercise the actual IPC/queue/synthesis path, not only the text helper.
+  const latinConfig = (await call(page, 'state')).config;
+  latinConfig.dictionary.push({ source: 'override', replacement: 'CAT', scope: 'global', regex: false, caseSensitive: false });
+  await call(page, 'config:save', latinConfig);
+  const latinInput = 'A b n N ka NYAN override https://example.test/ABC';
+  const latinExpected = 'エー ビー ん エヌ か にゃん CAT URL';
+  const latinJob = await call(page, 'speech:test', { text: latinInput, styleId: 3 });
+  await waitForJob(page, latinJob.id);
+  assert.equal(synthesisTexts.at(-1), latinExpected);
+  report.latinReading = { input: latinInput, synthesisText: synthesisTexts.at(-1), singleLetters: true, romaji: true, lowercaseN: true, dictionaryPriority: true, urlExcluded: true, passed: true };
   const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));

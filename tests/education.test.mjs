@@ -41,6 +41,14 @@ test('education overwrite, same-reading forgetting, literal replacements and Eng
   await f.education.apply(parseEducationCommand('教育（ＣＡＴ＝cat）')); assert.equal(f.store.config.education.length, 0);
   assert.equal(parseEducationCommand('(Study 猫猫=ねこ)'), null);
 });
+test('Discord education and forgetting preserve specified readings before the romaji fallback', async t => {
+  const f = setup(t);
+  await f.bot.message(f.message('ka n N')); assert.equal(f.spoken.at(-1).text, 'か ん エヌ');
+  await f.bot.message(f.message('教育（nyan＝CAT）'));
+  await f.bot.message(f.message('NYAN ka n')); assert.equal(f.spoken.at(-1).text, 'CAT か ん');
+  await f.bot.message(f.message('忘却(nyan)'));
+  await f.bot.message(f.message('nyan')); assert.equal(f.spoken.at(-1).text, 'にゃん');
+});
 test('education follows read-channel and user policy, deduplicates messages, and reports malformed input', async t => {
   const f = setup(t), first = f.message('教育(猫猫=ねこ)'); await f.bot.message(first); const count = f.spoken.length; await f.bot.message(first); assert.equal(f.spoken.length, count);
   await f.bot.message(f.message('教育(猫猫)')); assert.match(f.replies.at(-1), /区切って/); assert.equal(f.store.config.education[0].reading, 'ねこ');

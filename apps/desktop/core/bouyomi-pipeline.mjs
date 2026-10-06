@@ -51,12 +51,12 @@ export async function runNativeSpeech({ text, settings, original, pendingCharact
   try {
     for (const segment of nativeSegments(result)) {
       signal.throwIfAborted();
-      if (segment.kind === 'text') { if (segment.text.trim()) await output(segment.text, current, signal); continue; }
+      if (segment.kind === 'text') { if (segment.text.trim()) await output(segment.text, current, signal, result.readings); continue; }
       if (source[`${segment.type.replace(/W$/, '')}Tag`] !== 'true') continue;
       if (['Voice', 'Speed', 'Tone', 'Volume'].includes(segment.type)) { current = nativeTagSettings(segment, current, source); continue; }
       if (segment.type === 'Study' || segment.type === 'Forget') {
         const learned = await processor.learn(segment.type, segment.args, signal);
-        if (learned.text) { const response = await processor.process(learned.text, 'off', signal); await output(response.text, current, signal); }
+        if (learned.text) { const response = await processor.process(learned.text, 'off', signal); await output(response.text, current, signal, response.readings); }
       } else if (segment.type === 'Sound' || segment.type === 'SoundW') {
         const playing = sound(segment.args, current, source, signal);
         if (segment.type === 'SoundW') await playing; else { parallel.push(playing); playing.catch(() => {}); }

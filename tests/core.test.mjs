@@ -51,7 +51,7 @@ test('bot and webhook policies are independent and enforce binding and exclusion
 });
 test('speech resolves mentions, suppresses spoilers and handles attachments', () => {
   const c = config(), m = message(); m.content = '<@55555> ||秘密|| https://example.test/a <a:cat:66666>'; m.mentions = { '55555': 'あお' }; m.attachments = [{ name: 'image.png' }];
-  assert.equal(prepareSpeech(m, c), 'ねこ、あお ネタバレ URL 。添付ファイル1件、image.png');
+  assert.equal(prepareSpeech(m, c), 'ねこ、あお ネタバレ URL 。添付ファイル1件、いまげ.ピーんジー');
   c.speech.maxChars = 4; m.content = '猫😀猫'; assert.equal([...prepareSpeech(m, c)].length, 4);
 });
 test('dictionary applies only matching scopes and safely handles literal punctuation', () => {
