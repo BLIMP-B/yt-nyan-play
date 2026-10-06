@@ -49,6 +49,11 @@ try {
   await page.locator('#second-media').evaluate(v=>v.remove());await assertCount(trigger,1);report.checks.push('Multiple media selection, SNS URL retained for full playback, direct mode, removed media cleanup');
   // Post DOM reused during SPA navigation must update the permalink without a reload.
   await page.locator('article a').evaluate(a=>a.href='https://x.com/nyan_fixture/status/1000000000000000002');await page.waitForTimeout(300);await open();assert.match(await page.locator('#preview').textContent(),/1000000000000000002/);await page.getByRole('button',{name:'閉じる',exact:true}).click();report.checks.push('Reused SPA post permalink updates');
+  // Meta's players can be deeply nested and aria-hidden while still visually usable.
+  await page.locator('#fixture-media').evaluate(v=>{
+    v.setAttribute('aria-hidden','true');const wrap=document.createElement('div');v.replaceWith(wrap);let parent=wrap;
+    for(let n=0;n<24;n++){const next=document.createElement('div');parent.append(next);parent=next;}parent.append(v);
+  });await assertCount(trigger,1);await open();assert.match(await page.locator('#preview').textContent(),/1000000000000000002/);await page.getByRole('button',{name:'閉じる',exact:true}).click();report.checks.push('Deep React player nesting and visually available aria-hidden media');
   // Partial failures must stay open and retry only the failed destination.
   await open();await page.getByRole('checkbox').nth(0).check();await page.getByRole('checkbox').nth(1).check();rejectSecond=true;
   await page.getByRole('button',{name:'送信',exact:true}).click();await page.getByRole('button',{name:'失敗した宛先に再送',exact:true}).waitFor();assert.equal(received.length,2);rejectSecond=false;

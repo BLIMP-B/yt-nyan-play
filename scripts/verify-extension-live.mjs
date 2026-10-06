@@ -10,7 +10,7 @@ const samples=[
   {id:'niconico',url:'https://www.nicovideo.jp/watch/sm9'},
   {id:'x',url:'https://x.com/NASA/status/1225357420224032768'},
   {id:'instagram',url:'https://www.instagram.com/nasa/'},
-  {id:'tiktok',url:'https://www.tiktok.com/@nasa'},
+  {id:'tiktok',url:'https://www.tiktok.com/@scout2015/video/6718335390845095173'},
   {id:'facebook',url:'https://www.facebook.com/NASA/videos'},
   {id:'threads',url:'https://www.threads.com/@nasa'},
   {id:'bluesky',url:'https://bsky.app/profile/bsky.app/post/3lg5g64vvos23'},
@@ -31,18 +31,19 @@ try{
       }
       if (sample.id === 'mastodon') {
         const post = await page.evaluate(async()=>{
-          try { const account=await (await fetch('/api/v1/accounts/lookup?acct=Gargron')).json();
-            const posts=await (await fetch('/api/v1/accounts/'+account.id+'/statuses?only_media=true&limit=40')).json();
+          try { const account=await (await fetch('/api/v1/accounts/lookup?acct=Gargron',{signal:AbortSignal.timeout(15000)})).json();
+            const posts=await (await fetch('/api/v1/accounts/'+account.id+'/statuses?only_media=true&limit=40',{signal:AbortSignal.timeout(15000)})).json();
             return posts.find(p=>p.media_attachments?.some(m=>['video','gifv','audio'].includes(m.type)))?.url || null;
           } catch { return null; }
         });
         if(post)await page.goto(post,{waitUntil:'domcontentloaded',timeout:45000});
       }
+      try { await page.locator('video,audio').first().waitFor({timeout:10000}); await page.locator('video,audio').first().scrollIntoViewIfNeeded({timeout:5000}); } catch {}
       const trigger=page.getByRole('button',{name:/のメディアをDiscordで再生/});
       try{await trigger.first().waitFor({state:'visible',timeout:25000});}catch{}
       result.finalUrl=page.url();result.title=await page.title();result.mediaCount=await page.locator('video,audio').count();
       result.mediaDiagnostics=await page.locator('video,audio').evaluateAll(elements=>elements.slice(0,5).map(m=>{
-        const ancestors=[];for(let a=m.parentElement,n=0;a&&n<12;a=a.parentElement,n++){
+        const ancestors=[];for(let a=m.parentElement,n=0;a&&n<32;a=a.parentElement,n++){
           ancestors.push({tag:a.tagName,role:a.getAttribute('role'),testid:a.getAttribute('data-testid'),class:a.className,links:[...a.querySelectorAll('a[href]')].map(x=>x.href).filter(x=>/\/(status|post|videos|reel|watch)\b/.test(x)).slice(0,12)});
         }
         return{readyState:m.readyState,sourceScheme:(m.currentSrc||m.getAttribute('src')||'').split(':')[0],rect:m.getBoundingClientRect().toJSON(),ancestors};

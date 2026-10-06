@@ -50,7 +50,7 @@ const NyanMedia = (() => {
     if (service.id === 'html') return {url: httpUrl(location.href)?.href || null, scope};
     // Some React feeds use generic DIVs; examine the nearest media/post ancestors.
     // Stop before a container holds several distinct posts, rather than taking a feed's first link.
-    for (let area = media.parentElement, depth = 0; area && depth < 12; area = area.parentElement, depth++) {
+    for (let area = media.parentElement, depth = 0; area && depth < 32; area = area.parentElement, depth++) {
       const links = [...area.querySelectorAll('a[href]')];
       if (area.matches('a[href]')) links.unshift(area);
       const primary = links.filter(a => a.querySelector('time') || a.matches('.status__relative-time, .detailed-status__datetime, [data-testid="timestamp"]'));
@@ -78,7 +78,7 @@ const NyanMedia = (() => {
     const service = serviceFor(); if (!service) return [];
     const result = [];
     for (const media of document.querySelectorAll('video, audio')) {
-      if (media.closest('#nyan-play-share-modal, #nyan-play-controls') || media.closest('[aria-hidden="true"], [hidden]')) continue;
+      if (media.closest('#nyan-play-share-modal, #nyan-play-controls') || media.closest('[hidden]')) continue;
       const source = mediaSource(media); if (!source && media.readyState < 1) continue;
       const { url, scope } = resolvePost(media, service); if (!url) continue;
       if (service.id === 'youtube' && (document.querySelector('.ad-showing, .ad-interrupting') || scope?.querySelector('.ad-showing'))) continue;

@@ -20,7 +20,8 @@
     "verify:accounts": "node scripts/verify-media-accounts.mjs",
     "verify:android": "node scripts/verify-android.mjs",
     "verify:hourly-model": "node scripts/verify-hourly-model.mjs",
-    "verify:extension": "node scripts/verify-extension.mjs"
+    "verify:extension": "node scripts/verify-extension.mjs",
+    "verify:extension:live": "node scripts/verify-extension-live.mjs"
   },
   "type": "module",
   "main": "apps/desktop/main.mjs",
