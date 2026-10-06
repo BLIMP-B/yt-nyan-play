@@ -64,7 +64,7 @@ jobs:
           assert.equal(run.status, 'completed');
           assert.equal(run.event, 'push');
           const { jobs } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-jobs.json')));
-          for (const name of ['tests', 'windows', 'android-install', 'hourly-model']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
+          for (const name of ['tests', 'windows', 'android-install', 'hourly-model', 'tag-verified-source']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
           assert.equal(run.conclusion, 'success');
           JS
       - uses: actions/download-artifact@v4
@@ -112,6 +112,14 @@ jobs:
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
           assert.equal(audio.passed, true);
+          const effects = audio.mediaEffects;
+          assert.equal(effects.bypassByDefault, true);
+          assert.equal(effects.eqPresetApplied, true);
+          assert.equal(effects.compressorPresetApplied, true);
+          assert.equal(effects.customSaved, true);
+          assert.equal(effects.rendererReloadVerified, true);
+          assert.equal(effects.opus.passed, true);
+          assert.ok(effects.opus.peak > 100 && effects.opus.packets > 20);
           const history = audio.historyConcurrent;
           assert.ok(history.messages > 0 && history.messages <= 500);
           assert.equal(history.errors.length, 0);
