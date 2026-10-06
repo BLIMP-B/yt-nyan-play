@@ -9,7 +9,12 @@ async function send(url, content) {
   const response = await fetch(target, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content,allowed_mentions:{parse:[]}}),signal:AbortSignal.timeout(12000)});
   if(!response.ok)throw new Error(`送信失敗（HTTP ${response.status}）`);
 }
-async function registerAdditionalSites() {
+let siteRegistration = Promise.resolve();
+function registerAdditionalSites() {
+  siteRegistration = siteRegistration.catch(()=>{}).then(syncAdditionalSites);
+  return siteRegistration;
+}
+async function syncAdditionalSites() {
   const origins=(await chrome.permissions.getAll()).origins||[];
   const fixed=new Set(chrome.runtime.getManifest().host_permissions);
   const extra=origins.filter(x=>!fixed.has(x)&&/^https:\/\//.test(x)&&x!=='https://*/*');

@@ -11,7 +11,7 @@ const NyanMedia = (() => {
     { id: 'x', name: 'X', hosts: ['x.com', 'twitter.com'], post: u => /\/(?:[^/]+\/status|i\/status)\/\d+/.test(u.pathname), scope: 'article[data-testid="tweet"], article', text: '[data-testid="tweetText"]' },
     { id: 'instagram', name: 'Instagram', hosts: ['instagram.com'], post: u => /^\/(?:p|reel|reels)\/[^/]+/.test(u.pathname), scope: 'article, [role="dialog"]', text: 'h1, [data-testid="post-caption"], span[dir="auto"]' },
     { id: 'tiktok', name: 'TikTok', hosts: ['tiktok.com'], post: u => /\/@[^/]+\/video\/\d+/.test(u.pathname), scope: '[data-e2e="recommend-list-item-container"], [data-e2e="browse-video"], article', text: '[data-e2e="browse-video-desc"], [data-e2e="video-desc"]' },
-    { id: 'facebook', name: 'Facebook', hosts: ['facebook.com', 'fb.watch'], post: u => /\/(?:reel\/|[^/]+\/videos\/|watch)/.test(u.pathname) || u.searchParams.has('v') || hostIs(u.hostname, 'fb.watch') && u.pathname.length > 1, scope: '[role="article"], article', text: '[data-ad-preview="message"], [data-ad-comet-preview="message"]' },
+    { id: 'facebook', name: 'Facebook', hosts: ['facebook.com', 'fb.watch'], post: u => /\/(?:reel\/|videos\/|[^/]+\/videos\/|share\/v\/|watch)/.test(u.pathname) || u.searchParams.has('v') || hostIs(u.hostname, 'fb.watch') && u.pathname.length > 1, scope: '[role="article"], article', text: '[data-ad-preview="message"], [data-ad-comet-preview="message"]' },
     { id: 'threads', name: 'Threads', hosts: ['threads.net', 'threads.com'], post: u => /\/@[^/]+\/post\/[^/]+/.test(u.pathname), scope: '[data-pressable-container="true"], article', text: '[data-testid="post-text"], [dir="auto"]' },
     { id: 'bluesky', name: 'Bluesky', hosts: ['bsky.app'], post: u => /\/profile\/[^/]+\/post\/[^/]+/.test(u.pathname), scope: '[data-testid="postThreadItem"], [data-testid^="feedItem"], article', text: '[data-testid="postText"], [data-testid="postTextContainer"]' },
     { id: 'mastodon', name: 'Mastodon', hosts: ['mastodon.social', 'mastodon.online', 'mstdn.jp', 'pawoo.net'], post: u => /\/@[^/]+\/\d+/.test(u.pathname) || /\/users\/[^/]+\/statuses\/\d+/.test(u.pathname), scope: '.status, .detailed-status, article', text: '.status__content, .status__content__text, .detailed-status__content' }
@@ -47,14 +47,23 @@ const NyanMedia = (() => {
   }
   function resolvePost(media, service) {
     const scope = media.closest(service.scope) || media.parentElement;
-    const links = [...(scope?.querySelectorAll('a[href]') || [])];
-    // A timestamp/permalink wins over quoted posts or author profile links.
-    const primary = links.filter(a => a.querySelector('time') || a.matches('.status__relative-time, .detailed-status__datetime, [data-testid="timestamp"]'));
-    for (const a of [...primary, ...links]) { const post = canonicalPost(a.href, service); if (post) return { url: post, scope }; }
-    // On a timeline never fall back to a different post's URL.
+    if (service.id === 'html') return {url: httpUrl(location.href)?.href || null, scope};
+    // Some React feeds use generic DIVs; examine the nearest media/post ancestors.
+    // Stop before a container holds several distinct posts, rather than taking a feed's first link.
+    for (let area = media.parentElement, depth = 0; area && depth < 12; area = area.parentElement, depth++) {
+      const links = [...area.querySelectorAll('a[href]')];
+      if (area.matches('a[href]')) links.unshift(area);
+      const primary = links.filter(a => a.querySelector('time') || a.matches('.status__relative-time, .detailed-status__datetime, [data-testid="timestamp"]'));
+      const choices = [...primary, ...links].map(a => canonicalPost(a.href, service)).filter(Boolean);
+      const unique = [...new Set(choices)];
+      if (unique.length === 1) return {url: unique[0], scope: area};
+      if (unique.length > 1) break;
+      if (area === document.body) break;
+    }
+    // Metadata on a permalink page applies to the main player, not unrelated feed items.
     const own = canonicalPost(location.href, service);
-    if (own && (!scope || !['x', 'bluesky', 'mastodon'].includes(service.id) || !scope.querySelector('a[href]') || location.pathname.includes('/status/') || location.pathname.includes('/post/') || /\/@[^/]+\/\d+/.test(location.pathname))) return { url: own, scope };
-    return { url: null, scope };
+    if (own) return {url:own, scope};
+    return {url:null, scope};
   }
   function titleFor(scope, service, media) {
     const text = cleanText(scope?.querySelector(service.text)?.textContent);

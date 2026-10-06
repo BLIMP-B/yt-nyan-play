@@ -25,16 +25,35 @@ try{
     const result={id:sample.id,url:sample.url,button:false,dialog:false,status:'unverified'};const page=await context.newPage();
     try{
       const response=await page.goto(sample.url,{waitUntil:'domcontentloaded',timeout:45000});result.http=response?.status();
+      if (sample.id === 'tiktok') {
+        const link = page.locator('a[href*="/video/"]').first();
+        try { await link.waitFor({timeout:10000}); const url=await link.getAttribute('href'); if(url) await page.goto(new URL(url,page.url()).href,{waitUntil:'domcontentloaded',timeout:45000}); } catch {}
+      }
+      if (sample.id === 'mastodon') {
+        const post = await page.evaluate(async()=>{
+          try { const account=await (await fetch('/api/v1/accounts/lookup?acct=Gargron')).json();
+            const posts=await (await fetch('/api/v1/accounts/'+account.id+'/statuses?only_media=true&limit=40')).json();
+            return posts.find(p=>p.media_attachments?.some(m=>['video','gifv','audio'].includes(m.type)))?.url || null;
+          } catch { return null; }
+        });
+        if(post)await page.goto(post,{waitUntil:'domcontentloaded',timeout:45000});
+      }
       const trigger=page.getByRole('button',{name:/のメディアをDiscordで再生/});
       try{await trigger.first().waitFor({state:'visible',timeout:25000});}catch{}
       result.finalUrl=page.url();result.title=await page.title();result.mediaCount=await page.locator('video,audio').count();
+      result.mediaDiagnostics=await page.locator('video,audio').evaluateAll(elements=>elements.slice(0,5).map(m=>{
+        const ancestors=[];for(let a=m.parentElement,n=0;a&&n<12;a=a.parentElement,n++){
+          ancestors.push({tag:a.tagName,role:a.getAttribute('role'),testid:a.getAttribute('data-testid'),class:a.className,links:[...a.querySelectorAll('a[href]')].map(x=>x.href).filter(x=>/\/(status|post|videos|reel|watch)\b/.test(x)).slice(0,12)});
+        }
+        return{readyState:m.readyState,sourceScheme:(m.currentSrc||m.getAttribute('src')||'').split(':')[0],rect:m.getBoundingClientRect().toJSON(),ancestors};
+      }));
       result.button=await trigger.count()>0&&await trigger.first().isVisible();
       await page.screenshot({path:join(out,sample.id+'-page.png')});
       if(result.button){
         await trigger.first().click({timeout:5000});await page.getByRole('dialog').waitFor({timeout:5000});result.dialog=true;result.preview=await page.locator('#preview').textContent();await page.screenshot({path:join(out,sample.id+'-dialog.png')});result.status='display-verified';
       }else{
         const text=(await page.locator('body').innerText()).slice(0,3000);
-        result.status=/log in|sign in|ログイン|アクセスを確認|captcha|verify you|not a robot/i.test(text)?'login-or-access-check':result.http>=400?'http-blocked':'no-playable-media';
+        result.status=/ログインして bot|Instagramにログイン|captcha|verify you|not a robot|ログインして続きを|アクセスを確認/i.test(text)||/\/accounts\/login|\/login\b/.test(page.url())?'login-or-access-check':result.http>=400?'http-blocked':result.mediaCount?'media-found-display-unverified':'no-playable-media';
         result.reason=text.slice(0,600);
       }
     }catch(error){result.status='error';result.error=error.message.slice(0,350);try{await page.screenshot({path:join(out,sample.id+'-error.png')});}catch{}}
