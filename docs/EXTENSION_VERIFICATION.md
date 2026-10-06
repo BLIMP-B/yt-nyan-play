@@ -26,7 +26,15 @@ YouTube、ニコニコ動画、X、Instagram、TikTok、Facebook、Threads、Blu
 
 別の未ログインプロファイルで、実際の公開ページを開き、ページと送信画面を撮影します。サイトを試験HTMLへ置き換えず、実際の動画・音声と投稿URLを調べます。ログイン、CAPTCHA、非公開・アクセス制限の回避は行いません。
 
-ニコニコ動画・Bluesky・Mastodonでは、公開ページ上のボタンと送信画面を確認できています。YouTubeはbot確認のログイン画面、X・Instagramはアクセス失敗やログインへの遷移があり、ログイン後の実表示は未確認です。TikTok・Facebook・Threadsを含む最終のサイト別結果は、Releaseに添付した`public-pages/public-report.json`を確認してください。メディアが存在していてもボタンを確認できなかった場合は成功としません。
+ニコニコ動画・TikTok・Facebook・Threads・Bluesky・Mastodonでは、公開ページ上のボタンと送信画面を確認できています。YouTubeはbot確認のログイン画面、X・Instagramはアクセス失敗やログインへの遷移があり、ログイン後の実表示は未確認です。最終のサイト別結果は、Releaseに添付した`public-pages/public-report.json`を確認してください。メディアが存在していてもボタンを確認できなかった場合は成功としません。
+
+最終ソースは`ed5fa211e9a69cd7c1706167b2ea22c54e0a736f`、[検証実行](https://github.com/BLIMP-B/yt-nyan-play/actions/runs/37430472512)は成功しています。
+
+| サイト | 実公開ページの結果 |
+| --- | --- |
+| ニコニコ動画・TikTok・Facebook・Threads・Bluesky・Mastodon | ボタンと送信画面を確認 |
+| YouTube | bot確認によるログイン要求で未確認 |
+| X・Instagram | ページ取得時のHTTP応答失敗で未確認 |
 
 実公開ページの報告には、アクセス先・最終URL・HTTP結果・プレイヤー数・ボタンとダイアログの有無・送信プレビューを記録します。ボタンが見つからない場合は、公開DOM内のメディア状態と近い投稿リンクを診断用に保存します。実音声の再生や実Discord送信は、この報告の成功条件には含めていません。
 
