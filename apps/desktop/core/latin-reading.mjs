@@ -22,7 +22,6 @@ for (const prefix of ['x', 'l']) for (const [key, value] of Object.entries({ a: 
 
 export function romanKana(value) {
   const normalized = value.normalize('NFKC');
-  if (normalized === 'n') return 'ん';
   const word = normalized.toLowerCase();
   if (word.length === 1) return names[word.charCodeAt(0) - 97];
   const result = []; let position = 0;

@@ -10,7 +10,7 @@ const speech = (content, c = config(), context = {}) => prepareSpeech({ content,
 
 test('single Latin letters use Japanese letter names with case and fullwidth equivalence', () => {
   const expected = 'エー ビー シー ディー イー エフ ジー エイチ アイ ジェー ケー エル エム エヌ オー ピー キュー アール エス ティー ユー ブイ ダブリュー エックス ワイ ゼット';
-  for (const value of ['ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz', 'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ', 'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ']) assert.equal(speech([...value].join(' ')), /[nｎ]/u.test(value) ? expected.replace('エヌ', 'ん') : expected);
+  for (const value of ['ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz', 'ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ', 'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ']) assert.equal(speech([...value].join(' ')), expected);
   assert.equal(speech('文字ABC、ab12cd。'), '文字あビーシー、あビー12シーディー。');
 });
 test('recognized URLs are excluded while adjacent letter sequences are spelled', () => {
@@ -28,11 +28,11 @@ test('two or more letters use Japanese romaji, including contracted sounds and n
     ['konnichiwa', 'こんにちわ'], ['gakkou', 'がっこう'], ['matcha', 'まっちゃ'], ['shinbun', 'しんぶん'],
     ['shinnyuu', 'しんにゅう'], ["kan'i", 'かんい'], ['kan’i', 'かんい'], ['nn', 'ん'],
     ['shi si chi ti tsu tu fu hu', 'し し ち ち つ つ ふ ふ'], ['xtsu ltu kya she fa va', 'っ っ きゃ しぇ ふぁ ゔぁ'],
-    ['QR', 'キューアール'], ['A-ka-12-n-N', 'エー-か-12-ん-エヌ'],
+    ['QR', 'キューアール'], ['A-ka-12-n-N', 'エー-か-12-エヌ-エヌ'],
   ]) assert.equal(speech(input), expected, input);
 });
-test('only standalone lowercase n is the letter-name exception, and dictionaries retain precedence', () => {
-  assert.equal(speech('n N ｎ Ｎ'), 'ん エヌ ん エヌ');
+test('standalone n uses the same letter name in both cases, while dictionary overrides take precedence', () => {
+  assert.equal(speech('n N ｎ Ｎ'), 'エヌ エヌ エヌ エヌ');
   assert.equal(speech('n n', config({ dictionary: [{ source: 'n', replacement: 'エヌ', caseSensitive: true, scope: 'global' }] })), 'エヌ エヌ');
 });
 test('Markdown speaks its label and actual URL playback commands remain unchanged', () => {
@@ -88,5 +88,5 @@ test('native fallback runs after generated tags and preserves command arguments'
   }, new AbortController().signal);
   assert.deepEqual(operations, [text, 'ABC.wav']);
   assert.deepEqual(spoken, ['あビー', 'シーディー https://example.test/AB']);
-  assert.equal(prepareNativeText('DOG nyan n N', c, {}, ['DOG']), 'DOG にゃん ん エヌ');
+  assert.equal(prepareNativeText('DOG nyan n N', c, {}, ['DOG']), 'DOG にゃん エヌ エヌ');
 });

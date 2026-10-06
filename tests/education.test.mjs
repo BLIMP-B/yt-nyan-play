@@ -43,9 +43,9 @@ test('education overwrite, same-reading forgetting, literal replacements and Eng
 });
 test('Discord education and forgetting preserve specified readings before the romaji fallback', async t => {
   const f = setup(t);
-  await f.bot.message(f.message('ka n N')); assert.equal(f.spoken.at(-1).text, 'か ん エヌ');
+  await f.bot.message(f.message('ka n N')); assert.equal(f.spoken.at(-1).text, 'か エヌ エヌ');
   await f.bot.message(f.message('教育（nyan＝CAT）'));
-  await f.bot.message(f.message('NYAN ka n')); assert.equal(f.spoken.at(-1).text, 'CAT か ん');
+  await f.bot.message(f.message('NYAN ka n')); assert.equal(f.spoken.at(-1).text, 'CAT か エヌ');
   await f.bot.message(f.message('忘却(nyan)'));
   await f.bot.message(f.message('nyan')); assert.equal(f.spoken.at(-1).text, 'にゃん');
 });

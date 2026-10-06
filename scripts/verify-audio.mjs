@@ -183,11 +183,11 @@ try {
   latinConfig.dictionary.push({ source: 'override', replacement: 'CAT', scope: 'global', regex: false, caseSensitive: false });
   await call(page, 'config:save', latinConfig);
   const latinInput = 'A b n N ka NYAN override https://example.test/ABC';
-  const latinExpected = 'エー ビー ん エヌ か にゃん CAT URL';
+  const latinExpected = 'エー ビー エヌ エヌ か にゃん CAT URL';
   const latinJob = await call(page, 'speech:test', { text: latinInput, styleId: 3 });
   await waitForJob(page, latinJob.id);
   assert.equal(synthesisTexts.at(-1), latinExpected);
-  report.latinReading = { input: latinInput, synthesisText: synthesisTexts.at(-1), singleLetters: true, romaji: true, lowercaseN: true, dictionaryPriority: true, urlExcluded: true, passed: true };
+  report.latinReading = { input: latinInput, synthesisText: synthesisTexts.at(-1), singleLetters: true, romaji: true, standaloneN: true, dictionaryPriority: true, urlExcluded: true, passed: true };
   const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
