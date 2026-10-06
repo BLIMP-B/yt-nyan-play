@@ -36,7 +36,8 @@ test('startup joins occupied VCs, leaves empty or Bot-only VCs and isolates fail
 });
 test('human joins/moves trigger the configured VC only; mute changes and other Bots do not join', async t => {
   const s = setup(t), g = s.guild('11111', '33333', 1);
-  await s.bot.voiceState(s.state(g, null), s.state(g, '33333')); assert.deepEqual(s.joined, ['11111']);
+  let changes = 0; s.store.on('change', () => changes++);
+  await s.bot.voiceState(s.state(g, null), s.state(g, '33333')); assert.deepEqual(s.joined, ['11111']); assert.ok(changes > 0, 'connection completion must refresh the UI');
   await s.bot.voiceState(s.state(g, '33333'), s.state(g, '33333')); assert.equal(s.joined.length, 1);
   await s.bot.voiceState(s.state(g, null, '55555', true), s.state(g, '33333', '55555', true)); assert.equal(s.joined.length, 1);
   await s.bot.voiceState(s.state(g, '77777'), s.state(g, '88888')); assert.equal(s.joined.length, 1);

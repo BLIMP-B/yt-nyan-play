@@ -58,6 +58,7 @@ export class DiscordBot {
       if (occupied === null && transition) occupied = hasHumanListeners(guild, binding.voiceChannelId, transition);
       if (occupied === false && c.bot.autoLeave) await this.handlers.leave(guildId, { automatic: true });
       else if (occupied && c.bot.autoJoin) await this.handlers.join(guildId, { automatic: true });
+      if (this.client === client) this.store.emit('change');
     });
     this.voiceTasks.set(guildId, task);
     void task.finally(() => { if (this.voiceTasks.get(guildId) === task) this.voiceTasks.delete(guildId); }).catch(() => {});

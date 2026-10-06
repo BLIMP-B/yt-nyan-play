@@ -5,7 +5,26 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel obsolete preparation runs before tagging a newer source
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARE_REPOSITORY: ${{ github.repository }}
+          PREPARE_RUN_ID: ${{ github.run_id }}
+        run: |
+          gh api "repos/$PREPARE_REPOSITORY/actions/workflows/desktop.yml/runs?branch=codex%2Fwindows-desktop-bot&event=push&per_page=100" --jq '.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | .id' |
+          while read -r RUN_ID; do
+            if test "$RUN_ID" -lt "$PREPARE_RUN_ID"; then gh api --method POST "repos/$PREPARE_REPOSITORY/actions/runs/$RUN_ID/cancel"; fi
+          done
   tag-verified-source:
     needs: [tests, windows, android-install, hourly-model, live-media]
     if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
@@ -28,6 +47,7 @@ jobs:
             gh api --method POST "repos/$VERIFIED_REPOSITORY/git/refs" --field ref="refs/tags/$TAG" --field sha="$VERIFIED_SOURCE_SHA" > /dev/null
           fi
   tests:
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
