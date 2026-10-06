@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits, Activ
 import { parseBotCommand, parseMediaCommand } from '../core/protocol.mjs';
 import { shouldRead, shouldReceive, prepareSpeech, formatTemplate } from '../core/text.mjs';
 import { parseEducationCommand } from '../core/education.mjs';
+import { hasHumanListeners } from '../core/voice-audience.mjs';
 
 export class DiscordBot {
   constructor(store, handlers, clientFactory) {
@@ -10,6 +11,7 @@ export class DiscordBot {
         GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.DirectMessages], partials: [Partials.Channel],
     }));
     this.client = null; this.status = 'offline'; this.startedAt = null; this.receiving = new Set(); this.mediaActivity = []; this.presenceKey = null; this.emptyContentReported = false;
+    this.voiceTasks = new Map(); this.voiceTimer = null;
   }
   async start(token) {
     if (this.client) throw new Error('Botは接続中です');
@@ -18,9 +20,11 @@ export class DiscordBot {
     const client = this.clientFactory(); this.client = client;
     const safe = callback => (...args) => { Promise.resolve().then(() => callback(...args)).catch(e => { if (e.name !== 'AbortError') this.store.log('error', e.message); }); };
     client.on(Events.ClientReady, safe(async () => {
+      if (this.client !== client) return;
       this.status = 'online'; this.startedAt = new Date().toISOString(); this.store.log('info', 'Discord Botに接続しました');
       this.presenceKey = null; this.updateMediaActivity(this.mediaActivity);
-      if (this.store.config.bot.autoJoin) for (const b of this.store.config.bot.bindings) await this.handlers.join(b.guildId);
+      await this.reconcileVoices();
+      clearInterval(this.voiceTimer); this.voiceTimer = setInterval(() => { void this.reconcileVoices(); }, 30000); this.voiceTimer.unref();
       await this.handlers.ready?.();
     }));
     client.on(Events.MessageCreate, safe(message => this.message(message)));
@@ -31,13 +35,34 @@ export class DiscordBot {
     client.on(Events.VoiceStateUpdate, safe((previous, next) => this.voiceState(previous, next)));
     for (const event of [Events.GuildCreate, Events.GuildDelete, Events.GuildUpdate, Events.ChannelCreate, Events.ChannelDelete, Events.ChannelUpdate, Events.ThreadCreate, Events.ThreadDelete, Events.ThreadUpdate, Events.GuildRoleUpdate, Events.GuildRoleDelete, Events.GuildMemberUpdate]) client.on(event, () => this.store.emit('change'));
     client.on(Events.ShardReconnecting, () => { this.status = 'reconnecting'; this.store.emit('change'); });
-    client.on(Events.ShardResume, () => { this.status = 'online'; this.store.emit('change'); });
+    client.on(Events.ShardResume, safe(async () => { this.status = 'online'; this.store.emit('change'); await this.reconcileVoices(); }));
     client.on(Events.ShardDisconnect, () => { this.status = 'reconnecting'; this.store.emit('change'); });
     client.on(Events.Error, e => this.store.log('error', `Discord接続: ${e.message}`));
     try { await client.login(token.trim()); }
     catch { this.stop(); throw new Error('Discord Botへ接続できません。Botトークン・Intent設定・回線を確認してください'); }
   }
-  stop() { this.client?.destroy(); this.client = null; this.status = 'offline'; this.handlers.disconnect?.(); this.store.emit('change'); }
+  stop() { clearInterval(this.voiceTimer); this.voiceTimer = null; this.voiceTasks.clear(); this.client?.destroy(); this.client = null; this.status = 'offline'; this.handlers.disconnect?.(); this.store.emit('change'); }
+  async reconcileVoices() {
+    if (!this.client?.isReady()) return;
+    await Promise.all(this.store.config.bot.bindings.map(b => this.reconcileVoice(b.guildId).catch(e => { if (e.name !== 'AbortError') this.store.log('error', `VC自動接続 (${b.guildId}): ${e.message}`); })));
+  }
+  reconcileVoice(guildId, transition) {
+    const client = this.client, previousTask = this.voiceTasks.get(guildId) || Promise.resolve();
+    const task = previousTask.catch(() => {}).then(async () => {
+      if (this.client !== client || !client?.isReady()) return;
+      const c = this.store.config, binding = c.bot.bindings.find(b => b.guildId === guildId); if (!binding) return;
+      const guild = client.guilds?.cache.get(guildId) || transition?.next.guild;
+      // Read the current cache when the serialized task runs, rather than retaining
+      // an earlier join event while a slow voice connection is being established.
+      let occupied = hasHumanListeners(guild, binding.voiceChannelId);
+      if (occupied === null && transition) occupied = hasHumanListeners(guild, binding.voiceChannelId, transition);
+      if (occupied === false && c.bot.autoLeave) await this.handlers.leave(guildId, { automatic: true });
+      else if (occupied && c.bot.autoJoin) await this.handlers.join(guildId, { automatic: true });
+    });
+    this.voiceTasks.set(guildId, task);
+    void task.finally(() => { if (this.voiceTasks.get(guildId) === task) this.voiceTasks.delete(guildId); }).catch(() => {});
+    return task;
+  }
   normalize(message) {
     return {
       id: message.id, content: message.content || '', userId: message.author.id,
@@ -141,17 +166,25 @@ export class DiscordBot {
     return this.reply(message, '未対応のコマンドです。helpで一覧を確認してください');
   }
   async voiceState(previous, next) {
-    if (previous.channelId === next.channelId || next.member?.user.bot) return;
+    if (previous.channelId === next.channelId) return;
     const c = this.store.config; const binding = c.bot.bindings.find(b => b.guildId === next.guild.id); if (!binding) return;
-    if (c.bot.autoJoin && next.channelId === binding.voiceChannelId) await this.handlers.join(binding.guildId);
+    const relevant = [previous.channelId, next.channelId].includes(binding.voiceChannelId);
+    if (!relevant) return;
+    const occupied = hasHumanListeners(next.guild, binding.voiceChannelId, { previous, next });
+    if (occupied === false && c.bot.autoLeave) {
+      // Cancel immediately, including a pending connection. Do not read the last
+      // departure into an empty VC and let that speech reconnect the Bot.
+      await this.handlers.leave(binding.guildId, { automatic: true });
+      return;
+    }
+    if (next.member?.user.bot) return;
+    if (c.bot.autoJoin || c.bot.autoLeave) await this.reconcileVoice(binding.guildId, { previous, next });
     if (c.speech.enabled && (binding.announceJoinLeave ?? c.bot.announceJoinLeave) && next.member && !c.speech.ignoredUserIds.includes(next.id) && [previous.channelId, next.channelId].includes(binding.voiceChannelId)) {
       const template = !previous.channelId ? c.speech.joinTemplate : !next.channelId ? c.speech.leaveTemplate : c.speech.moveTemplate;
       const text = formatTemplate(template, { nickname: next.member.displayName, username: next.member.user.username, server: next.guild.name,
         channel: next.channel?.name || previous.channel?.name || '', 'channel-prev': previous.channel?.name || '', 'channel-next': next.channel?.name || '' });
       this.handlers.speech({ text, guildId: binding.guildId, userId: next.id });
     }
-    const channel = next.guild.channels.cache.get(binding.voiceChannelId);
-    if (c.bot.autoLeave && previous.channelId === binding.voiceChannelId && channel && !channel.members.some(m => !m.user.bot)) this.handlers.leave(binding.guildId);
   }
   catalog() {
     if (!this.client?.isReady()) return [];

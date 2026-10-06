@@ -1,10 +1,12 @@
 import { decorateButton } from './icons.js';
 import { ServerSettings } from './server-settings.js';
 import { HourlySettings } from './hourly-settings.js';
+import { setupMediaEffectsSettings } from './media-effects-settings.js';
 
 (() => {
   const api = window.nyan;
   if (!api) return;
+  setupMediaEffectsSettings();
   const $ = id => document.getElementById(id);
   let state, speakers = [], initialized = false, toastTimer, bindingUpdates = Promise.resolve();
   const labels = { waiting: '待機中', running: '処理中', completed: '完了', failed: '失敗', interrupted: '中断', cancelled: '取消' };

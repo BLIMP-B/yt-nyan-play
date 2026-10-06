@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { DEFAULT_EQUALIZER, DEFAULT_COMPRESSOR, EQ_PRESETS, COMPRESSOR_PRESETS, effectPreset } from './media-effects-settings.mjs';
 
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
@@ -30,6 +31,7 @@ export const DEFAULT_CONFIG = {
   media: {
     enabled: true, volume: 0.7, ducking: 0.35, duckFadeInMs: 3000, duckFadeOutMs: 3000, bandwidthSaving: true, showWindow: true,
     output: 'discord', maxMinutes: 120,
+    equalizer: DEFAULT_EQUALIZER, compressor: DEFAULT_COMPRESSOR,
     allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'nico.ms', 'x.com',
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
       'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
@@ -106,6 +108,15 @@ export function normalizeConfig(patch) {
   number(c.media.volume, 0, 1, '動画音量'); number(c.media.ducking, 0, 1, '読み上げ中の動画音量');
   for (const key of ['duckFadeInMs', 'duckFadeOutMs']) number(c.media[key], 0, 30000, '読み上げ中の動画フェード時間', true);
   number(c.media.maxMinutes, 1, 1440, '再生上限', true);
+  const eq = c.media.equalizer, comp = c.media.compressor;
+  for (const [value, presets, label] of [[eq, EQ_PRESETS, 'イコライザー'], [comp, COMPRESSOR_PRESETS, 'コンプレッサー']]) {
+    if (typeof value.enabled !== 'boolean' || value.preset !== 'custom' && !Object.hasOwn(presets, value.preset)) fail(label);
+  }
+  if (!Array.isArray(eq.gains) || eq.gains.length !== 5) fail('EQの5帯域');
+  eq.gains.forEach(gain => number(gain, -12, 12, 'EQ帯域ゲイン')); number(eq.preampDb, -24, 6, 'EQ入力ゲイン');
+  for (const [key, min, max] of [['thresholdDb', -60, 0], ['ratio', 1, 20], ['kneeDb', 0, 24], ['attackMs', 1, 100], ['releaseMs', 20, 1000], ['makeupDb', 0, 12]]) number(comp[key], min, max, 'コンプレッサー ' + key);
+  if (eq.preset !== 'custom') Object.assign(eq, effectPreset('equalizer', eq.preset));
+  if (comp.preset !== 'custom') Object.assign(comp, effectPreset('compressor', comp.preset));
   if (!/^\S{1,20}$/.test(c.bot.prefix)) fail('コマンド接頭辞');
   for (const key of ['allowedWebhookIds', 'controlUserIds']) strings(c.bot[key], key, true);
   for (const key of ['ignoredUserIds', 'allowedUserIds', 'ignoredRoleIds']) strings(c.speech[key], key, true);

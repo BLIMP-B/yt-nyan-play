@@ -66,6 +66,11 @@ else {
     if (name === 'skip') media.skip(guildId);
     if (name === 'stop') { speechRunner.clear(guildId); media.clear(guildId); }
   };
+  function leaveVoice(guildId) {
+    if (getConfig().speech.output !== 'local') speechRunner?.clear(guildId); voice?.interruptSpeech(guildId);
+    if (getConfig().media.output !== 'local' && media?.lanes.has(guildId)) media.clear(guildId);
+    voice?.disconnect(guildId); emitState();
+  }
   async function stopRequested({ guildId, master }) {
     const scope = master ? 'master' : guildId || 'local';
     const targets = master ? [...voice.connections.keys()] : [guildId];
@@ -98,7 +103,8 @@ else {
       if (hourlyChanged) { hourly.cancel(); historyController?.abort(); historyController = null; }
       if (c.hourly.slmUrl !== store.config.hourly.slmUrl) await hourlyModel.stop();
       for (const d of c.dictionary) if (d.regex) new RE2(d.source, d.caseSensitive ? 'gu' : 'giu');
-      store.updateConfig(c); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
+      store.updateConfig(c); voice.updateSettings(); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
+      void bot.reconcileVoices();
       if (hourlyChanged) { hourly.update(); syncHourlyHistory(); }
       return snapshot();
     }
@@ -106,8 +112,8 @@ else {
     if (name === 'token:clear') { stopBot(); vault.clear(); return { saved: false }; }
     if (name === 'bot:start') { await startBot(); return snapshot(); }
     if (name === 'bot:stop') { stopBot(); return snapshot(); }
-    if (name === 'voice:join') { await voice.connect(String(data)); return snapshot(); }
-    if (name === 'voice:leave') { voice.disconnect(String(data)); return snapshot(); }
+    if (name === 'voice:join') { await voice.connect(String(data), undefined, true); return snapshot(); }
+    if (name === 'voice:leave') { leaveVoice(String(data)); return snapshot(); }
     if (name === 'voices:list') return new Voicevox(getConfig().speech.engineUrl).speakers();
     if (name === 'voices:check') {
       const engineApi = new Voicevox(getConfig().speech.engineUrl); const result = await engineApi.validateZundamon();
@@ -210,7 +216,7 @@ else {
       speech: payload => { store.enqueue('speech', payload); void speechRunner.drain(); },
       education: command => education.apply(command),
       media: payload => media.enqueue(payload, { interrupt: true }), stopRequested,
-      join: guildId => voice.connect(guildId), leave: guildId => voice.disconnect(guildId), disconnect: () => voice.close(), control,
+      join: (guildId, options) => voice.connect(guildId, undefined, !options?.automatic), leave: guildId => leaveVoice(guildId), disconnect: () => voice.close(), control,
       speakers: () => new Voicevox(getConfig().speech.engineUrl).speakers(),
       ready: () => syncHourlyHistory(),
       history: message => hourlyHistory?.record(message), historyDelete: id => hourlyHistory?.deleted(id),

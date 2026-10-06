@@ -6,6 +6,27 @@ on:
 permissions:
   contents: read
 jobs:
+  tag-verified-source:
+    needs: [tests, windows, android-install, hourly-model, live-media]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Register the verified source in its own workflow context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_REPOSITORY: ${{ github.repository }}
+          VERIFIED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          TAG=$(node --input-type=module -e "import{readFileSync}from'node:fs';const p=JSON.parse(readFileSync('package.json')),s=JSON.parse(readFileSync('releases/current.json'));if('v'+p.version!==s.tag)console.log('v'+p.version)")
+          if test -z "$TAG"; then exit 0; fi
+          if EXISTING_SHA=$(gh api "repos/$VERIFIED_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null); then
+            test "$EXISTING_SHA" = "$VERIFIED_SOURCE_SHA"
+          else
+            gh api --method POST "repos/$VERIFIED_REPOSITORY/git/refs" --field ref="refs/tags/$TAG" --field sha="$VERIFIED_SOURCE_SHA" > /dev/null
+          fi
   tests:
     runs-on: ubuntu-latest
     steps:

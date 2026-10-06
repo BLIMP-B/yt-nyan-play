@@ -96,14 +96,40 @@ try {
   await page.screenshot({ path: join(reports, 'hourly-settings.png'), fullPage: true });
   await page.locator('[data-view="settings"]').click();
   for (const key of fadeFields) await page.locator(`[data-config="${key}"]`).evaluate(element => { element.value = '1.2'; });
-  await page.locator('[data-panel="settings"] .save-config').click();
+  await page.locator('[data-panel="settings"] .save-config').first().click();
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.duckFadeOutMs === 1200);
   const saved = (await call(page, 'state')).config;
   for (const key of fadeFields) { const [section, name] = key.split('.'); assert.equal(saved[section][name], 1200); }
   for (const key of fadeFields) await page.locator(`[data-config="${key}"]`).evaluate(element => { element.value = '3'; });
-  await page.locator('[data-panel="settings"] .save-config').click();
+  await page.locator('[data-panel="settings"] .save-config').first().click();
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.duckFadeOutMs === 3000);
   report.fadeSettings = { defaultsSeconds: 3, savedSeconds: 1.2, savedMilliseconds: 1200, passed: true };
+  // Use the production settings controls, then reload the renderer and inspect
+  // the persisted config; this catches preset/custom wiring and packaged imports.
+  const effectsField = path => page.locator(`[data-config="media.${path}"]`);
+  assert.equal(await effectsField('equalizer.enabled').isChecked(), false);
+  assert.equal(await effectsField('compressor.enabled').isChecked(), false);
+  await effectsField('equalizer.preset').selectOption('clarity');
+  assert.equal(await effectsField('equalizer.enabled').isChecked(), true);
+  assert.equal(await effectsField('equalizer.gains.3').inputValue(), '3');
+  await effectsField('compressor.preset').selectOption('level');
+  assert.equal(await effectsField('compressor.enabled').isChecked(), true);
+  assert.equal(await effectsField('compressor.ratio').inputValue(), '3');
+  await effectsField('equalizer.gains.0').fill('-5');
+  await effectsField('compressor.ratio').fill('3.5');
+  assert.equal(await effectsField('equalizer.preset').inputValue(), 'custom');
+  assert.equal(await effectsField('compressor.preset').inputValue(), 'custom');
+  await page.locator('[data-panel="settings"] .save-config').first().click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.compressor.ratio === 3.5);
+  await page.reload(); await page.waitForFunction(() => document.querySelector('[data-config="media.compressor.ratio"]').value === '3.5');
+  await page.locator('[data-view="settings"]').click();
+  assert.equal(await effectsField('equalizer.gains.0').inputValue(), '-5');
+  const effectSettings = (await call(page, 'state')).config.media;
+  const persisted = JSON.parse(readFileSync(join(directory, 'config.json')));
+  assert.deepEqual(persisted.media.equalizer, effectSettings.equalizer); assert.deepEqual(persisted.media.compressor, effectSettings.compressor);
+  await effectsField('equalizer.enabled').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: join(reports, 'media-effects-settings.png'), fullPage: true });
+  report.mediaEffects = { bypassByDefault: true, eqPresetApplied: true, compressorPresetApplied: true, customSaved: true, rendererReloadVerified: true, equalizer: effectSettings.equalizer, compressor: effectSettings.compressor };
   await page.locator('[data-view="overview"]').click();
   // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
   await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio }) => {
@@ -187,6 +213,7 @@ try {
   // Confirm captured media passes through the same mixer and Opus resource used for Discord.
   const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks.video)]));
   const mixer = new PcmMixer(); mixer.mediaVolume = 1;
+  mixer.configureEffects(effectSettings);
   const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
   const decoded = [], decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
   player._preparePacket = packet => decoded.push(Buffer.from(decoder.decode(packet)));
@@ -201,6 +228,7 @@ try {
   writeFileSync(join(reports, 'video-after-discord-encoder.wav'), Buffer.concat([header, bytes]));
   report.discordEncoder = { packets: decoded.length, peak, bytes: bytes.length };
   assert.ok(report.discordEncoder.peak > 100);
+  report.mediaEffects.opus = { ...report.discordEncoder, passed: true };
   // Exercise the actual timed AudioContext playback and capture its long 880-Hz third beep.
   const hourlyConfig = (await call(page, 'state')).config; hourlyConfig.hourly.output = 'local'; hourlyConfig.hourly.enabled = false; hourlyConfig.hourly.servers=[];
   await call(page, 'config:save', hourlyConfig);
