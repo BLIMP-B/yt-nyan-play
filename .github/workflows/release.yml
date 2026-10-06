@@ -79,7 +79,13 @@ jobs:
           path: verification/model
           github-token: ${{ github.token }}
           run-id: ${{ steps.selection.outputs.run }}
-      - name: Check real Android startup and local SLM generation reports
+      - uses: actions/download-artifact@v4
+        with:
+          name: playback-duration-verification-windows
+          path: verification/duration
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - name: Check real Android startup, local SLM and long playback reports
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
@@ -94,6 +100,19 @@ jobs:
           assert.equal(model.passed, true);
           assert.equal(model.samples.length, 3);
           for (const sample of model.samples) assert.ok(sample.text && sample.nouns.length === 2);
+          const duration = JSON.parse(readFileSync('verification/duration/duration-report.json'));
+          assert.equal(duration.platform, 'win32');
+          assert.equal(duration.passed, true);
+          assert.equal(duration.fixtures.length, 6);
+          assert.equal(duration.continuations.length, 3);
+          for (const kind of ['whole', 'truncated']) for (const mode of ['preview', 'full', 'direct']) {
+            const fixture = duration.fixtures.find(f => f.kind === kind && f.mode === mode);
+            assert.equal(fixture?.status, 'completed');
+            assert.equal(fixture.windowIds.length, kind === 'truncated' ? 2 : 1);
+            assert.ok(fixture.audio.audibleSamples > 1000);
+            if (mode === 'preview') assert.ok(fixture.elapsedMs < 54000);
+            else { assert.ok(fixture.elapsedMs > 50000); assert.ok(fixture.maximumTime > 50); assert.ok(fixture.audio.samplesAfter46Seconds > 1000); }
+          }
           JS
       - uses: actions/download-artifact@v4
         with:
