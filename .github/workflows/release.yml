@@ -112,6 +112,13 @@ jobs:
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
           assert.equal(audio.passed, true);
+          assert.equal(audio.latinReading.passed, true);
+          assert.equal(audio.latinReading.singleLetters, true);
+          assert.equal(audio.latinReading.romaji, true);
+          assert.equal(audio.latinReading.standaloneN, true);
+          assert.equal(audio.latinReading.dictionaryPriority, true);
+          assert.equal(audio.latinReading.urlExcluded, true);
+          assert.equal(audio.latinReading.synthesisText, 'エー ビー エヌ エヌ か にゃん CAT URL');
           const effects = audio.mediaEffects;
           assert.equal(effects.bypassByDefault, true);
           assert.equal(effects.eqPresetApplied, true);
