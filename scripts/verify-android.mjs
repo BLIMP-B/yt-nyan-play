@@ -31,7 +31,9 @@ try {
     config.android.audioEnabled = false;
     config.android.showWindow = true;
     await android.start(); report.bootVerified = true;
-    const windows = await android.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'Android Emulator' } | Select-Object -ExpandProperty MainWindowTitle) -join [Environment]::NewLine"], { timeout: 15000 });
+    // MainWindowHandle enumerates windows for each process. Filter first so a
+    // busy first boot does not scan every Windows service and exceed the deadline.
+    const windows = await android.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(Get-Process -Name emulator,qemu-system-x86_64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'Android Emulator' } | Select-Object -ExpandProperty MainWindowTitle) -join [Environment]::NewLine"], { timeout: 30000 });
     report.nativeWindowVerified = /Android Emulator/.test(windows);
     assert.equal(report.nativeWindowVerified, true, 'The native Android window for protected authentication screens was not visible');
     report.stage = 'verify-installed-play';
