@@ -12,7 +12,8 @@ export function materialUnits(text, analyzer) {
     if (nounTokens.length !== nouns.length) return;
     if (body && nouns.length) units.set(`${kind}:${body}`, { kind, text: body, words, nouns });
   };
-  for (const sentence of cleanMaterial(text).slice(0, 2000).split(/[。！？!?\n]+/u).map(s => s.trim()).filter(Boolean)) {
+  const sentences = new Set(cleanMaterial(text).slice(0, 2000).split(/[。！？!?\n]+/u).map(s => s.trim()).filter(Boolean));
+  for (const sentence of sentences) {
     // Never present a truncated sentence as a complete source sentence.
     const whole = [...sentence].length <= 160;
     for (let offset = 0; offset < sentence.length; offset += 200) {

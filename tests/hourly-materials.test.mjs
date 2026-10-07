@@ -48,3 +48,9 @@ test('source catalog keeps per-kind bounds and unique units even with repeated m
   assert.equal(model.materials.size, 512); trainMaterials(model, [{ kind: 'phrase', text: '猫0', words: ['猫'], nouns: ['猫'] }], 'again');
   assert.equal(model.materials.size, 512); assert.equal(model.materials.get('phrase:猫0').count, 2);
 });
+test('duplicate sentences are analyzed once per post, keeping large repeated imports cheap', async () => {
+  const analyzer = await tokenizer(); let calls = 0;
+  const counted = { tokenize: text => { calls++; return analyzer.tokenize(text); } };
+  const units = materialUnits('猫が時計を眺める。森の太陽は月の料理を運ぶ。'.repeat(70), counted);
+  assert.equal(calls, 2); assert.equal(units.filter(u => u.kind === 'sentence').length, 2);
+});
