@@ -70,7 +70,7 @@ export class AndroidRuntime extends EventEmitter {
       signal?.throwIfAborted(); const child = spawn(executable, args, { env: this.environment(), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
       const chunks = []; let length = 0, errors = '', tail = '', done = false, lastProgress = 0; const timer = setTimeout(() => finish(new Error('Androidの処理がタイムアウトしました')), timeout);
       const abort = () => finish(new DOMException('Cancelled', 'AbortError'));
-      const finish = (error, output) => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); if (error) { child.kill(); reject(error); } else resolve(output); };
+      const finish = (error, output) => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort); if (error) { void this.terminateChild(child).catch(e => this.log('warn', `Androidツールの終了: ${e.message}`)); reject(error); } else resolve(output); };
       signal?.addEventListener('abort', abort, { once: true }); child.on('error', e => finish(new Error(`Androidツールを実行できません: ${e.code}`))); child.stdin.on('error', () => {});
       const report = b => {
         tail = (tail + b.toString().replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')).slice(-16384);
@@ -166,14 +166,38 @@ export class AndroidRuntime extends EventEmitter {
     }
   }
   cancelSetup() { this.installController?.abort(); }
+  async terminateChild(child) {
+    if (!child) return;
+    const live = () => child.exitCode === null && child.signalCode === null;
+    try {
+      if (live() && process.platform === 'win32' && Number.isInteger(child.pid)) {
+        // emulator.exe launches another process which inherits its output pipes.
+        // Killing only the launcher leaves the VM and Node's pipes alive.
+        await new Promise(resolve => {
+          const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, shell: false, stdio: 'ignore' });
+          let done = false;
+          const finish = failed => { if (done) return; done = true; clearTimeout(timer); if (failed && live()) child.kill(); resolve(); };
+          const timer = setTimeout(() => { killer.kill(); finish(true); }, 5000);
+          killer.once('error', () => finish(true)); killer.once('exit', code => finish(code !== 0));
+        });
+      } else if (live()) child.kill();
+    } finally {
+      // A launcher may exit before its inherited pipes close. Dispose our own
+      // streams even in that case so cancellation and app exit stay bounded.
+      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy();
+      if (live()) await new Promise(resolve => {
+        const finish = () => { clearTimeout(timer); child.removeListener('exit', finish); resolve(); };
+        const timer = setTimeout(finish, 2000); child.once('exit', finish); if (!live()) finish();
+      });
+      child.unref();
+    }
+  }
   async stopProcess() {
     clearInterval(this.frameTimer); const child = this.child; this.child = null;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    const closed = new Promise(resolve => child.once('close', resolve));
-    await this.adb(['emu', 'kill'], { timeout: 5000 }).catch(() => {});
-    if (child.exitCode === null && child.signalCode === null) child.kill();
-    let timer; await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, 5000); })]); clearTimeout(timer);
+    if (!child) return;
+    if (child.exitCode === null && child.signalCode === null) await this.adb(['emu', 'kill'], { timeout: 5000 }).catch(() => {});
+    await this.terminateChild(child);
   }
   async stop() { this.playController?.abort(new DOMException('中止しました', 'AbortError')); this.bootController?.abort(new DOMException('起動を中止しました', 'AbortError')); await this.stopProcess(); this.activeConfig = null; this.status = 'stopped'; this.change(); }
-  close() { this.cancelSetup(); this.playController?.abort(new DOMException('終了しました', 'AbortError')); this.bootController?.abort(new DOMException('終了しました', 'AbortError')); clearInterval(this.frameTimer); this.child?.kill(); this.child = null; }
+  close() { this.cancelSetup(); this.playController?.abort(new DOMException('終了しました', 'AbortError')); this.bootController?.abort(new DOMException('終了しました', 'AbortError')); clearInterval(this.frameTimer); const child = this.child; this.child = null; void this.terminateChild(child).catch(e => this.log('warn', `Androidの終了: ${e.message}`)); }
 }

@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as wait } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AndroidRuntime } from '../apps/desktop/runtime/android.mjs';
@@ -26,4 +29,25 @@ test('Android installation still supports cancellation and process timeouts whil
   android.once('change', () => controller.abort());
   await assert.rejects(android.run(process.execPath, ['-e', "setInterval(() => process.stdout.write('download progress'), 10)"], { progress: true, signal: controller.signal }), { name: 'AbortError' });
   await assert.rejects(android.run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { progress: true, timeout: 100 }), /タイムアウト/);
+});
+test('Android stop releases inherited output pipes even after the launcher exited', async t => {
+  const android = runtime(t);
+  const script = `const {spawn}=require('node:child_process'); const worker=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,2]}); process.stdout.write(String(worker.pid)+'\\n'); process.exit(0);`;
+  const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const exited = once(child, 'exit');
+  const [output] = await once(child.stdout, 'data'); const workerPid = Number(output.toString().trim());
+  t.after(() => { try { process.kill(workerPid); } catch {} child.stdout.destroy(); child.stderr.destroy(); });
+  await exited; assert.equal(child.stdout.destroyed, false, 'The worker must retain the inherited pipe for this regression');
+  android.child = child; android.adb = async () => { throw new Error('An exited launcher must not issue more ADB commands'); };
+  await android.stop(); assert.equal(child.stdout.destroyed, true); assert.equal(child.stderr.destroyed, true);
+});
+test('Windows Android tool timeouts terminate the owned subprocess tree', { skip: process.platform !== 'win32' }, async t => {
+  const android = runtime(t), file = join(android.directory, 'owned-pids.json'); let pids = [];
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  t.after(() => { for (const pid of pids) if (alive(pid)) { try { process.kill(pid); } catch {} } });
+  const script = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:['ignore',1,2]});require('node:fs').writeFileSync(${JSON.stringify(file)},JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000);`;
+  await assert.rejects(android.run(process.execPath, ['-e', script], { timeout: 2000 }), /タイムアウト/);
+  pids = JSON.parse(readFileSync(file, 'utf8'));
+  for (let i = 0; i < 350 && pids.some(alive); i++) await wait(20);
+  assert.deepEqual(pids.map(alive), [false, false], 'A timed-out launcher must not leave its worker running');
 });

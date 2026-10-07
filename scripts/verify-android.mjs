@@ -31,9 +31,32 @@ try {
     config.android.audioEnabled = false;
     config.android.showWindow = true;
     await android.start(); report.bootVerified = true;
-    // MainWindowHandle enumerates windows for each process. Filter first so a
-    // busy first boot does not scan every Windows service and exceed the deadline.
-    const windows = await android.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(Get-Process -Name emulator,qemu-system-x86_64 -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'Android Emulator' } | Select-Object -ExpandProperty MainWindowTitle) -join [Environment]::NewLine"], { timeout: 30000 });
+    // Query visible top-level windows directly. Process.MainWindowHandle can
+    // wait on a busy Qt process during Android's first boot. Python is already
+    // installed on the Windows CI runner; the desktop app does not require it.
+    const windows = await android.run('python', ['-X', 'utf8', '-c', `import ctypes
+from ctypes import wintypes
+user = ctypes.WinDLL('user32', use_last_error=True)
+callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+user.IsWindowVisible.argtypes = [wintypes.HWND]
+user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+titles = []
+@callback_type
+def visit(window, unused):
+    if user.IsWindowVisible(window):
+        size = user.GetWindowTextLengthW(window)
+        if size:
+            text = ctypes.create_unicode_buffer(size + 1)
+            user.GetWindowTextW(window, text, size + 1)
+            if 'Android Emulator' in text.value:
+                titles.append(text.value)
+    return True
+if not user.EnumWindows(visit, 0):
+    raise ctypes.WinError(ctypes.get_last_error())
+print('\\n'.join(titles))`], { timeout: 15000 });
+    report.nativeWindows = windows.trim().split(/\r?\n/).filter(Boolean);
     report.nativeWindowVerified = /Android Emulator/.test(windows);
     assert.equal(report.nativeWindowVerified, true, 'The native Android window for protected authentication screens was not visible');
     report.stage = 'verify-installed-play';
@@ -79,7 +102,11 @@ try {
   }
 }
 finally {
-  clearTimeout(timeout); await android.stop().catch(() => {}); android.close(); report.emulatorOutput = android.emulatorLog; report.bootAttempts = android.bootAttempts;
+  clearTimeout(timeout); const child = android.child;
+  await android.stop().catch(error => { report.shutdownError = error.message; process.exitCode = 1; }); android.close();
+  report.shutdownVerified = !child || child.exitCode !== null || child.signalCode !== null;
+  if (!report.shutdownVerified) { report.shutdownError ||= 'The emulator launcher remained alive after stopping'; process.exitCode = 1; }
+  report.emulatorOutput = android.emulatorLog; report.bootAttempts = android.bootAttempts;
   writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2));
   // This isolated CI machine owns the ADB server; stop it before removing its locked executable.
   await android.run(android.paths().adb, ['kill-server']).catch(() => {});
