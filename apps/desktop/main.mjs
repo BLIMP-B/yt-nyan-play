@@ -342,8 +342,8 @@ else {
       webPreferences: { preload: join(directory, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); window.webContents.on('will-navigate', event => event.preventDefault());
     const uiSession = window.webContents.session;
-    uiSession.setPermissionCheckHandler((web, permission) => web === window.webContents && ['media', 'display-capture'].includes(permission));
-    uiSession.setPermissionRequestHandler((web, permission, callback) => callback(web === window.webContents && ['media', 'display-capture'].includes(permission)));
+    uiSession.setPermissionCheckHandler((web, permission) => web === window.webContents && ['media', 'display-capture', 'speaker-selection'].includes(permission));
+    uiSession.setPermissionRequestHandler((web, permission, callback) => callback(web === window.webContents && ['media', 'display-capture', 'speaker-selection'].includes(permission)));
     uiSession.setDisplayMediaRequestHandler((request, callback) => {
       const capture = captures.get(captureRequest);
       if (request.frame !== window.webContents.mainFrame || !capture || !capture.window || capture.window.isDestroyed()) return callback({});

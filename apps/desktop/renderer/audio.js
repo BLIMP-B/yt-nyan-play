@@ -32,7 +32,7 @@
     else if (message.type === 'stop' && monitor?.id === message.id) stopMonitor();
     else if (message.type === 'pcm' && monitor?.id === message.id) monitor.processor?.port.postMessage(new Uint8Array(message.bytes));
   });
-  window.nyanLocalAudio = { update: state => {
+  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId) }), update: state => {
     const previous = config; config = state.config.desktop;
     if (state.voiceMonitor?.id) void startMonitor(state.voiceMonitor.id); else if (monitor) stopMonitor();
     if (monitor?.gain) monitor.gain.gain.setTargetAtTime(config.voiceMonitorVolume, monitor.context.currentTime, 0.02);

@@ -183,7 +183,7 @@ try {
       const replace = file.includes('replace') ? `<script>document.querySelector('${tag}').addEventListener('ended', () => { const next = document.createElement('video'); next.controls = true; next.autoplay = true; next.src = '/video.webm'; document.querySelector('${tag}').replaceWith(next); });</script>` : '';
       return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>${replace}`, { headers: { 'Content-Type': 'text/html' } });
     });
-    ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture'].includes(permission)));
+    ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture', 'speaker-selection'].includes(permission)));
   }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
   await application.evaluate(() => { globalThis.nyanAudioProbe.capture = true; });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
@@ -286,13 +286,16 @@ try {
   const monitorConfig = (await call(page, 'state')).config;
   monitorConfig.bot.bindings.push({ guildId: '99998', voiceChannelId: '33333', textChannelIds: [] });
   monitorConfig.desktop.voiceMonitorGuildId = '99998'; monitorConfig.desktop.voiceMonitorVolume = 0.65;
-  monitorConfig.desktop.outputDevice = 'unavailable-speaker-verification';
+  const availableSpeakers = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default'));
+  monitorConfig.desktop.outputDevice = availableSpeakers[0]?.deviceId || '';
   await call(page, 'config:save', monitorConfig); await call(page, 'voice:join', '99998');
   await application.evaluate(async () => {
     const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'voice-monitor'; probe.capture = true;
     await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
     globalThis.nyanMonitorFixture.speaking.emit('start', '99999'); globalThis.nyanMonitorFixture.speaking.emit('start', '44444');
   });
+  if (availableSpeakers.length) await page.waitForFunction(id => window.nyanLocalAudio.snapshot().monitorSink === id, availableSpeakers[0].deviceId);
+  report.speakerSelection = { availableDevices: availableSpeakers.length, actualSinkVerified: Boolean(availableSpeakers.length) };
   const monitorEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO), monitorPcm = wav.subarray(44), monitorPackets = [];
   try { for (let i = 0; i < 100; i++) { const offset = i * 3840 % (Math.floor(monitorPcm.length / 3840) * 3840); monitorPackets.push([...monitorEncoder.encode(monitorPcm.subarray(offset, offset + 3840), 960)]); } } finally { monitorEncoder.delete(); }
   const voiceResult = await application.evaluate(async (_electron, packets) => {
@@ -304,6 +307,8 @@ try {
   assert.equal(voiceResult.selfExcluded, true); assert.ok(voiceResult.metrics.nonSilentSamples > 1000);
   await page.locator('[data-view="settings"]').click(); await page.screenshot({ path: join(reports, 'voice-monitor-settings.png'), fullPage: true });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  const unavailableConfig = (await call(page, 'state')).config; unavailableConfig.desktop.outputDevice = 'unavailable-speaker-verification'; await call(page, 'config:save', unavailableConfig);
+  await page.waitForFunction(() => window.nyanLocalAudio.snapshot().monitorSink === '');
   const speakerState = await call(page, 'state'); assert.equal(speakerState.config.desktop.outputDevice, 'unavailable-speaker-verification');
   assert.ok(speakerState.logs.some(log => log.text.includes('指定のスピーカーが利用できない')));
   report.voiceMonitor = { ...voiceResult, deviceConfigSaved: true, unavailableDeviceFallback: true, passed: true };
