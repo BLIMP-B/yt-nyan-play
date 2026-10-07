@@ -235,35 +235,6 @@ try {
   report.latinReading = { input: latinInput, synthesisText: synthesisTexts.at(-1), singleLetters: true, romaji: true, standaloneN: true, dictionaryPriority: true, urlExcluded: true, passed: true };
   const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
-  // Native notification retrieval is verified separately on a real Windows AVD.
-  // Here inject that wire format through the actual notification reader, queue, VOICEVOX and PC output.
-  await call(page, 'android:start');
-  await page.waitForTimeout(200);
-  const notificationConfig = (await call(page, 'state')).config;
-  notificationConfig.android.notificationOutput = 'both'; notificationConfig.speech.output = 'discord';
-  await call(page, 'config:save', notificationConfig);
-  await page.locator('[data-view="android"]').click();
-  assert.equal(await page.locator('[data-config="android.notificationOutput"]').inputValue(), 'both');
-  await page.screenshot({ path: join(reports, 'android-notification-settings.png'), fullPage: true });
-  await application.evaluate(() => {
-    globalThis.nyanAudioProbe.active = 'android';
-    globalThis.nyanNotificationRecords.set('0|com.android.shell|2020|probe|2000', 'NotificationRecord(pkg=com.android.shell)\n  flags=AUTO_CANCEL\n  notification=\n    extras={\n        android.title=String (通知試験)\n        android.text=String (Androidの通知を読み上げます)\n    }\n  publicNotification=\n    None\n');
-  });
-  let notificationJob; const notificationUntil = Date.now() + 15000;
-  while (!notificationJob && Date.now() < notificationUntil) { notificationJob = (await call(page, 'state')).jobs.find(j => j.payload.androidNotification); if (!notificationJob) await page.waitForTimeout(100); }
-  assert.ok(notificationJob, 'Android notification never reached the production speech queue');
-  const notificationState = await waitForJob(page, notificationJob.id);
-  assert.equal(synthesisTexts.at(-1), '通知試験。Androidの通知を読み上げます');
-  const notificationAudio = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.android);
-  assert.ok(notificationAudio?.nonSilentSamples > 1000, 'Android notification produced no PC audio without a Bot VC');
-  assert.equal(notificationState.android.notifications.count, 1);
-  notificationConfig.android.notificationOutput = 'local'; await call(page, 'config:save', notificationConfig);
-  notificationConfig.android.readNotifications = false; await call(page, 'config:save', notificationConfig);
-  assert.equal((await call(page, 'state')).android.notifications.enabled, false);
-  await call(page, 'android:stop');
-  notificationConfig.speech.output = 'both'; await call(page, 'config:save', notificationConfig);
-  await page.locator('[data-view="overview"]').click();
-  report.androidNotifications = { ...notificationAudio, pcFallbackWithoutBotVC: true, outputSavedWhileRunning: true, disabledWhileRunning: true, passed: true };
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   // Validate the full production MediaBrowser with both VIDEO and AUDIO HTML players.
   for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
@@ -289,6 +260,38 @@ try {
   assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
   assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
   assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
+  // Native notification retrieval is verified separately on a real Windows AVD.
+  // Here inject that wire format through the actual notification reader, queue, VOICEVOX and PC output.
+  await call(page, 'android:start');
+  await page.waitForTimeout(200);
+  const notificationConfig = (await call(page, 'state')).config;
+  notificationConfig.android.notificationOutput = 'both'; notificationConfig.speech.output = 'discord';
+  await call(page, 'config:save', notificationConfig);
+  await call(page, 'bot:stop');
+  await page.locator('[data-view="android"]').click();
+  assert.equal(await page.locator('[data-config="android.notificationOutput"]').inputValue(), 'both');
+  await page.screenshot({ path: join(reports, 'android-notification-settings.png'), fullPage: true });
+  await application.evaluate(() => {
+    globalThis.nyanAudioProbe.active = 'android'; globalThis.nyanAudioProbe.target = globalThis.nyanAudioProbe.ui; globalThis.nyanAudioProbe.capture = true;
+    globalThis.nyanNotificationRecords.set('0|com.android.shell|2020|probe|2000', 'NotificationRecord(pkg=com.android.shell)\n  flags=AUTO_CANCEL\n  notification=\n    extras={\n        android.title=String (通知試験)\n        android.text=String (Androidの通知を読み上げます)\n    }\n  publicNotification=\n    None\n');
+  });
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
+  let notificationJob; const notificationUntil = Date.now() + 15000;
+  while (!notificationJob && Date.now() < notificationUntil) { notificationJob = (await call(page, 'state')).jobs.find(j => j.payload.androidNotification); if (!notificationJob) await page.waitForTimeout(100); }
+  assert.ok(notificationJob, 'Android notification never reached the production speech queue');
+  const notificationState = await waitForJob(page, notificationJob.id);
+  assert.equal(synthesisTexts.at(-1), '通知試験。Androidの通知を読み上げます');
+  const notificationAudio = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.android);
+  assert.ok(notificationAudio?.nonSilentSamples > 1000, 'Android notification produced no PC audio without a Bot VC');
+  assert.equal(notificationState.android.notifications.count, 1);
+  notificationConfig.android.notificationOutput = 'local'; await call(page, 'config:save', notificationConfig);
+  notificationConfig.android.readNotifications = false; await call(page, 'config:save', notificationConfig);
+  assert.equal((await call(page, 'state')).android.notifications.enabled, false);
+  await call(page, 'android:stop');
+  notificationConfig.speech.output = 'both'; await call(page, 'config:save', notificationConfig);
+  await page.locator('[data-view="overview"]').click();
+  report.androidNotifications = { ...notificationAudio, pcFallbackWithoutBotVC: true, pcContinuesAfterBotStopped: true, outputSavedWhileRunning: true, disabledWhileRunning: true, passed: true };
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   const interrupted = await call(page, 'media:add', { url: 'http://media-fixture.test/video', mode: 'direct' });
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.some(m => m.startedAt));
   const replacement = await call(page, 'media:add', { url: 'http://media-fixture.test/audio', mode: 'full' });

@@ -86,7 +86,7 @@ else {
     if (bot.status !== 'offline') return;
     if (getConfig().speech.engineExecutable && !engine.child) engine.start(getConfig().speech.engineExecutable, getConfig().speech.engineUrl);
     await bot.start(vault.read());
-    speechRunner.halt(false); speechRunner.pause(false); media.pause(false); media.drain();
+    speechRunner.halt(false); speechRunner.pause(false); speechRunner.stopDiscord(false); media.pause(false); media.drain();
     syncHourlyHistory();
   }
   function syncHourlyHistory() {
@@ -95,7 +95,7 @@ else {
     if (hourlyHistory.syncing) return;
     void hourlyHistory.sync(historyController.signal).catch(error => { if (error.name !== 'AbortError') store.log('warn', `時報履歴: ${error.message}`); });
   }
-  function stopBot() { if (getConfig().hourly.output === 'discord') hourly?.cancel(); historyController?.abort(); historyController = null; if (getConfig().speech.output === 'discord') { speechRunner?.pause(true); speechRunner?.halt(true); } if (getConfig().media.output === 'discord') { media?.pause(true); media?.skip(); } bot?.stop(); }
+  function stopBot() { if (getConfig().hourly.output === 'discord') hourly?.cancel(); historyController?.abort(); historyController = null; speechRunner?.stopDiscord(true); if (getConfig().media.output === 'discord') { media?.pause(true); media?.skip(); } bot?.stop(); }
   async function action(name, data) {
     if (name === 'state') return snapshot();
     if (name === 'config:save') {
@@ -108,6 +108,7 @@ else {
       for (const d of c.dictionary) if (d.regex) new RE2(d.source, d.caseSensitive ? 'gu' : 'giu');
       store.updateConfig(c); voice.updateSettings(); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
       androidNotifications.update();
+      speechRunner.drain();
       void bot.reconcileVoices();
       if (hourlyChanged) { hourly.update(); syncHourlyHistory(); }
       return snapshot();

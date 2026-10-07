@@ -107,7 +107,7 @@ export class AndroidRuntime extends EventEmitter {
         this.bootAttempts.push(entry); this.emulatorLog = '';
         const exited = new AbortController();
         const signal = AbortSignal.any([controller.signal, exited.signal]);
-        const child = spawn(p.emulator, entry.args, { env: this.environment(), windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); this.child = child;
+        const child = spawn(p.emulator, entry.args, { env: this.environment(), windowsHide: !c.showWindow, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); this.child = child;
         const diagnostic = bytes => { entry.log = (entry.log + bytes.toString()).slice(-65536); this.emulatorLog = entry.log; };
         child.stdout.on('data', diagnostic); child.stderr.on('data', diagnostic);
         child.once('error', e => exited.abort(new Error(`Androidを起動できません: ${e.code}`)));

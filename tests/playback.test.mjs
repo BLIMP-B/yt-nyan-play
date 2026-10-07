@@ -144,6 +144,17 @@ test('Bot shutdown prevents priority speech from starting and cancels pending an
   await tick(); assert.deepEqual(started, []); assert.equal(ordinary.status, 'waiting'); pool.halt(false); await tick(); assert.deepEqual(started, ['普通']);
 });
 
+test('Bot disconnect holds Discord-only jobs but PC/both system notifications continue independently of the default output', async t => {
+  const store = new Store(temporary(t)), started = []; const pool = new SpeechPool(store, async j => started.push(j.payload.text));
+  assert.equal(store.config.speech.output, 'discord'); pool.stopDiscord(true);
+  const ordinary = pool.enqueue({ text: 'Discord待機', guildId: '11111' });
+  await assert.rejects(pool.speak({ text: 'Discord告知', system: true, output: 'discord', priority: 100 }), { name: 'AbortError' });
+  await pool.speak({ text: 'PC通知', system: true, master: true, output: 'local' });
+  await pool.speak({ text: '両方の通知', system: true, master: true, output: 'both' });
+  assert.equal(ordinary.status, 'waiting'); assert.deepEqual(started, ['PC通知', '両方の通知']);
+  pool.stopDiscord(false); await tick(); assert.equal(ordinary.status, 'completed'); assert.deepEqual(started, ['PC通知', '両方の通知', 'Discord待機']);
+});
+
 test('FFmpeg audio streams already have their offset applied and never seek a single-use HTTP stream back to zero', () => {
   for (const mode of ['preview', 'full', 'direct']) {
     const p = player(mode, 0); let seeks = 0;
