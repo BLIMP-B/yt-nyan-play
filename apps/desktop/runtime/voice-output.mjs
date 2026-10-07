@@ -1,22 +1,23 @@
 import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import ffmpegPath from 'ffmpeg-static';
-import OpusScript from 'opusscript';
+import OpusScript from './opus-codec.mjs';
 import { GainEnvelope } from '../core/hourly-audio.mjs';
 import { MediaEffects } from './media-effects.mjs';
 import { hasHumanListeners } from '../core/voice-audience.mjs';
 import { VoiceMonitor } from './voice-monitor.mjs';
+import { audioNetwork } from '../core/audio-network.mjs';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
   createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus,
 } from '@discordjs/voice';
 
 export class PcmMixer extends Readable {
-  constructor() {
+  constructor(profile = 'poor') {
     super({ highWaterMark: 3840 }); this.media = Buffer.alloc(0); this.speech = []; this.mediaPrimed = false;
     this.ducking = 0.35; this.mediaVolume = 0.7; this.duckGain = new GainEnvelope(); this.duckFadeInMs = 0; this.duckFadeOutMs = 0;
     this.mediaGain = new GainEnvelope(); this.background = Buffer.alloc(0); this.backgroundPrimed = false; this.backgroundVolume = 0.18; this.backgroundGain = new GainEnvelope();
-    this.mediaEffects = new MediaEffects(); this.backgroundEffects = new MediaEffects();
+    this.network = audioNetwork(profile); this.mediaEffects = new MediaEffects(); this.backgroundEffects = new MediaEffects();
     this.watchdog = setInterval(() => {
       if (this.speech.some(track => Date.now() >= (track.startAt || 0) && Date.now() - Math.max(track.progressAt, track.startAt || 0) > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
     }, 1000);
@@ -39,10 +40,10 @@ export class PcmMixer extends Readable {
   }
   takeFrame(now = Date.now()) {
     if (this.destroyed) throw new Error('音声ストリームが終了しました');
-    if (!this.mediaPrimed && this.media.length >= 3840 * 4) this.mediaPrimed = true;
+    if (!this.mediaPrimed && this.media.length >= this.network.mediaMs * 192) this.mediaPrimed = true;
     if (this.mediaPrimed && this.media.length < 3840) this.mediaPrimed = false;
     const mediaReady = this.mediaPrimed;
-    if (!this.backgroundPrimed && this.background.length >= 3840 * 4) this.backgroundPrimed = true;
+    if (!this.backgroundPrimed && this.background.length >= this.network.mediaMs * 192) this.backgroundPrimed = true;
     if (this.backgroundPrimed && this.background.length < 3840) this.backgroundPrimed = false;
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
@@ -77,17 +78,24 @@ export class PcmMixer extends Readable {
 
 // Generate one packet when Discord requests it. A second 20-ms producer timer drifted
 // behind Discord's clock and forced the player to insert gaps under UI/IPC load.
-export function createDiscordAudioResource(mixer) {
+export function createDiscordAudioResource(mixer, profile = 'poor', bitrateKbps) {
   const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
-  encoder.encoderCTL(4002, 128000); // OPUS_SET_BITRATE
-  encoder.encoderCTL(4016, 0); // OPUS_SET_DTX: transmit quiet audio and silence continuously.
+  const configureNetwork = (value, requestedBitrate) => {
+    const settings = audioNetwork(value); mixer.network = settings;
+    encoder.encoderCTL(4002, requestedBitrate == null ? settings.bitrate : requestedBitrate * 1000); // OPUS_SET_BITRATE
+    encoder.encoderCTL(4006, 0); // CBR: bound every 20-ms packet, even during loud music.
+    encoder.encoderCTL(4012, 1); // In-band FEC when the chosen Opus mode supports it.
+    encoder.encoderCTL(4014, settings.lossPercent);
+    encoder.encoderCTL(4016, 0); // No DTX: quiet media and silence are always transmitted.
+  };
+  configureNetwork(profile, bitrateKbps);
   const source = new Readable({ objectMode: true, highWaterMark: 1,
     read() { try { this.push(Buffer.from(encoder.encode(mixer.takeFrame(), 960))); } catch (e) { this.destroy(e); } },
     destroy(error, callback) { mixer.removeListener('error', failed); mixer.removeListener('close', closed); mixer.destroy(); encoder.delete(); callback(error); },
   });
   const failed = error => source.destroy(error), closed = () => source.destroy();
   mixer.on('error', failed); mixer.once('close', closed);
-  return createAudioResource(source, { inputType: StreamType.Opus });
+  return createAudioResource(source, { inputType: StreamType.Opus, metadata: { configureNetwork } });
 }
 
 export function decodeAudio(buffer, signal, executable = ffmpegPath) {
@@ -128,7 +136,7 @@ export class VoiceOutput {
     if (!channel?.isVoiceBased() || channel.guildId !== guildId) throw new Error('指定した音声チャンネルを利用できません');
     if (!allowEmpty && this.getConfig().bot.autoLeave && hasHumanListeners(channel.guild, channelId) === false) throw new Error('人がいる音声チャンネルへ接続してください');
     const connection = joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: this.getConfig().desktop.voiceMonitorGuildId !== guildId });
-    const mixer = new PcmMixer(); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
+    const mixer = new PcmMixer(this.getConfig().desktop.networkProfile); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
     const entry = { connection, mixer, player, channelId }; this.connections.set(guildId, entry);
     connection.on('stateChange', () => { this.syncMonitor(); this.changed(); });
     connection.on('error', error => this.log('error', `音声接続: ${error.message}`));
@@ -150,7 +158,7 @@ export class VoiceOutput {
       throw new Error('Discord音声接続を確立できません。接続・発言権限と回線を確認してください');
     }
     if ((this.connectionEpochs.get(guildId) || 0) !== epoch || this.connections.get(guildId) !== entry) throw new DOMException('Cancelled', 'AbortError');
-    try { connection.subscribe(player); player.play(createDiscordAudioResource(mixer)); }
+    try { connection.subscribe(player); player.play(createDiscordAudioResource(mixer, this.getConfig().desktop.networkProfile, this.getConfig().desktop.audioBitrateKbps)); }
     catch (error) { this.disconnect(guildId); throw error; }
     this.syncMonitor(); this.changed(); return entry;
   }
@@ -191,10 +199,10 @@ export class VoiceOutput {
   }
   async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); this.mediaSettings(entry.mixer, c); return entry; }
   mediaSettings(mixer, c) { mixer.configureEffects(c.media); mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; mixer.duckFadeInMs = c.media.duckFadeInMs; mixer.duckFadeOutMs = c.media.duckFadeOutMs; }
-  updateSettings() { const c = this.getConfig(); for (const [id, { mixer, connection }] of this.connections) { this.mediaSettings(mixer, c); const selfDeaf = c.desktop.voiceMonitorGuildId !== id; if (connection.joinConfig.selfDeaf !== selfDeaf) connection.rejoin({ selfDeaf }); } this.syncMonitor(); }
+  updateSettings() { const c = this.getConfig(); for (const [id, { mixer, connection, player }] of this.connections) { this.mediaSettings(mixer, c); player?.state?.resource?.metadata?.configureNetwork(c.desktop.networkProfile, c.desktop.audioBitrateKbps); const selfDeaf = c.desktop.voiceMonitorGuildId !== id; if (connection.joinConfig.selfDeaf !== selfDeaf) connection.rejoin({ selfDeaf }); } this.syncMonitor(); }
   syncMonitor() {
     const c = this.getConfig(), guildId = c.desktop.voiceMonitorGuildId, entry = this.connections.get(guildId);
-    if (entry?.connection.state.status === VoiceConnectionStatus.Ready && c.bot.bindings.some(b => b.guildId === guildId && b.voiceChannelId === entry.channelId)) this.monitor.attach(entry, guildId, this.getClient()?.user?.id);
+    if (entry?.connection.state.status === VoiceConnectionStatus.Ready && c.bot.bindings.some(b => b.guildId === guildId && b.voiceChannelId === entry.channelId)) this.monitor.attach(entry, guildId, this.getClient()?.user?.id, c.desktop.networkProfile);
     else if (this.monitor.entry) this.monitor.stop();
   }
   media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; this.mediaSettings(entry.mixer, this.getConfig()); entry.mixer.addMedia(chunk); }

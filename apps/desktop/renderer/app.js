@@ -130,6 +130,9 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   }
   document.querySelectorAll('[data-view],[data-go]').forEach(e => e.addEventListener('click', () => navigate(e.dataset.view || e.dataset.go)));
   document.querySelectorAll('.save-config').forEach(e => e.addEventListener('click', task(() => save())));
+  document.querySelector('[data-config="desktop.networkProfile"]').addEventListener('change', event => {
+    document.querySelector('[data-config="desktop.audioBitrateKbps"]').value = { poor: 48, balanced: 96, fast: 128 }[event.target.value];
+  });
   const actions = { 'bot-start': 'bot:start', 'bot-stop': 'bot:stop', 'show-media': 'media:show', 'open-docs': 'open:docs', 'open-voicevox': 'open:voicevox', 'stop-engine': 'engine:stop', 'export-config': 'config:export' };
   function renderAccountLink() {
     const youtube = $('media-account-service').value === 'youtube', link = state.accountLink || {};

@@ -66,7 +66,7 @@ test('clock reservations preempt active speech including stop announcements, pre
 });
 test('media and BGM use independent buffers and fades; a media ending during a fade is never queued or restarted', async t => {
   let clock = 0; const envelope = new GainEnvelope(1, () => clock); envelope.fade(0, 1500); clock = 750; assert.equal(envelope.value(), 0.5); clock = 1500; assert.equal(envelope.value(), 0);
-  const mixer = new PcmMixer(); t.after(() => mixer.destroy()); const frame = Buffer.alloc(3840 * 4); for (let i = 0; i < frame.length; i += 2) frame.writeInt16LE(1000, i);
+  const mixer = new PcmMixer(); t.after(() => mixer.destroy()); const frame = Buffer.alloc(3840 * 12); for (let i = 0; i < frame.length; i += 2) frame.writeInt16LE(1000, i);
   mixer.mediaVolume = 1; mixer.backgroundVolume = 1; mixer.addMedia(frame); mixer.addBackground(frame); mixer.mediaGain.fade(0); assert.equal(mixer.takeFrame().readInt16LE(0), 1000);
   mixer.backgroundGain.fade(0); assert.equal(mixer.takeFrame().readInt16LE(0), 0); assert.ok(mixer.media.length < frame.length);
   const store = new Store(temp(t)); let played = 0, finish;

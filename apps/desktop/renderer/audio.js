@@ -16,25 +16,25 @@
     monitorEpoch++; const previous = monitor; monitor = null;
     previous?.processor?.disconnect(); previous?.gain?.disconnect(); void previous?.context.close();
   };
-  const startMonitor = async id => {
+  const startMonitor = async (id, rendererMs = 120) => {
     if (monitor?.id === id) return;
     stopMonitor(); const epoch = monitorEpoch;
     const context = new AudioContext({ sampleRate: 48000 }), current = monitor = { id, context };
     try {
       await setDevice(context, config.outputDevice); await context.audioWorklet.addModule('voice-monitor-worklet.js');
       if (epoch !== monitorEpoch) return;
-      const processor = new AudioWorkletNode(context, 'nyan-voice-monitor', { outputChannelCount: [2] }), gain = context.createGain();
+      const processor = new AudioWorkletNode(context, 'nyan-voice-monitor', { outputChannelCount: [2], processorOptions: { bufferMs: rendererMs } }), gain = context.createGain();
       current.processor = processor; current.gain = gain; gain.gain.value = config.voiceMonitorVolume; processor.connect(gain).connect(context.destination); await context.resume();
     } catch (error) { if (epoch === monitorEpoch) { stopMonitor(); window.nyan.audioResult({ type: 'monitor:error', error: error.message }); } }
   };
   window.nyan.onVoiceMonitor(message => {
-    if (message.type === 'start') void startMonitor(message.id);
+    if (message.type === 'start') void startMonitor(message.id, message.rendererMs);
     else if (message.type === 'stop' && monitor?.id === message.id) stopMonitor();
     else if (message.type === 'pcm' && monitor?.id === message.id) monitor.processor?.port.postMessage(new Uint8Array(message.bytes));
   });
   window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId) }), update: state => {
     const previous = config; config = state.config.desktop;
-    if (state.voiceMonitor?.id) void startMonitor(state.voiceMonitor.id); else if (monitor) stopMonitor();
+    if (state.voiceMonitor?.id) void startMonitor(state.voiceMonitor.id, state.voiceMonitor.rendererMs); else if (monitor) stopMonitor();
     if (monitor?.gain) monitor.gain.gain.setTargetAtTime(config.voiceMonitorVolume, monitor.context.currentTime, 0.02);
     if (config.outputDevice !== previous.outputDevice) {
       for (const output of [...playing.values()].map(p => p.context || p).concat([...captures.values()].filter(c => c.local).map(c => c.context), monitor?.context).filter(Boolean)) void setDevice(output, config.outputDevice).catch(error => window.nyan.audioResult({ type: 'device:warning', error: error.message }));

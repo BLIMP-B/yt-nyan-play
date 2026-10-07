@@ -7,7 +7,7 @@
 | Electron / Chromium / Node.js | Windowsアプリと専用ブラウザ | [Electron](https://github.com/electron/electron) MIT、Chromium等は同梱NOTICE |
 | discord.js / @discordjs/voice | Discord Botと音声接続 | [discord.js](https://github.com/discordjs/discord.js) Apache-2.0 |
 | @snazzah/davey | Discord DAVE音声暗号化 | [davey](https://github.com/Snazzah/davey) MIT |
-| opusscript / libopus | Opus音声エンコード | [opusscript](https://github.com/abalabahaha/opusscript) MIT、libopus BSD |
+| opusscript / libopus | Opus音声エンコード・デコード（WASMの境界を補正する自前ラッパー） | [opusscript](https://github.com/abalabahaha/opusscript) MIT、libopus BSD |
 | re2-wasm / RE2 | 辞書の正規表現 | [re2-wasm](https://github.com/google/re2-wasm) Apache-2.0、RE2 BSD |
 | kuromoji / IPADIC | 時報資料の日本語形態素解析 | [kuromoji.js](https://github.com/takuyaa/kuromoji.js) Apache-2.0、IPADICは辞書付属の利用許諾を参照 |
 | ffmpeg-static / FFmpeg | 音声のPCM変換 | [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static) GPL-3.0-or-later。バイナリ版は b6.1.1。対応ソース・ビルド情報は同リポジトリの [リリース](https://github.com/eugeneware/ffmpeg-static/releases/tag/b6.1.1) と [FFmpeg](https://ffmpeg.org/download.html) を参照 |

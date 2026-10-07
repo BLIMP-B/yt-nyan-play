@@ -10,7 +10,7 @@ import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { EQ_PRESETS, COMPRESSOR_PRESETS } from '../apps/desktop/core/media-effects-settings.mjs';
 import { Store } from '../apps/desktop/core/store.mjs';
 import { createAudioPlayer, NoSubscriberBehavior } from '@discordjs/voice';
-import OpusScript from 'opusscript';
+import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 
 function tone(frequency = 1000, amplitude = .1, frames = 50, rightRatio = 1) {
   const pcm = Buffer.alloc(frames * 3840);

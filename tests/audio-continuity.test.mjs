@@ -5,7 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { performance } from 'node:perf_hooks';
 import { PcmMixer, createDiscordAudioResource } from '../apps/desktop/runtime/voice-output.mjs';
 import { createAudioPlayer, NoSubscriberBehavior } from '@discordjs/voice';
-import OpusScript from 'opusscript';
+import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 function tone(frames, amplitude) {
   const bytes = Buffer.alloc(frames * 3840);
   for (let sample = 0; sample < frames * 960; sample++) { const value = Math.round(amplitude * Math.sin(sample * 2 * Math.PI * 440 / 48000)); bytes.writeInt16LE(value, sample * 4); bytes.writeInt16LE(value, sample * 4 + 2); }
@@ -40,7 +40,7 @@ test('Discord packet generation avoids underruns when main-thread work stalls an
 });
 test('jitter buffering never consumes a partial media frame and speech can continue before media primes', async t => {
   const mixer = new PcmMixer(); mixer.mediaVolume = 1; t.after(() => mixer.destroy());
-  const audio = tone(4, 1000); mixer.addMedia(audio.subarray(0, 512));
+  const audio = tone(12, 1000); mixer.addMedia(audio.subarray(0, 512));
   assert.ok(mixer.takeFrame().every(b => b === 0)); assert.equal(mixer.media.length, 512);
   const spoken = mixer.addSpeech(tone(1, 2000), 1); assert.ok(mixer.takeFrame().some(b => b !== 0)); await spoken; assert.equal(mixer.media.length, 512);
   mixer.addMedia(audio.subarray(512)); assert.deepEqual(mixer.takeFrame(), audio.subarray(0, 3840));

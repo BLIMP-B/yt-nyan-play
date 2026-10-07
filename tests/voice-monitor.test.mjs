@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import OpusScript from 'opusscript';
+import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 import { VoiceMonitor } from '../apps/desktop/runtime/voice-monitor.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 
@@ -19,7 +19,7 @@ function setup(t) {
 test('one VC monitor decodes and mixes real Opus while excluding the Bot, without a Discord output lane', t => {
   const s = setup(t); s.monitor.attach(s.entry, '11111', '99999');
   s.speaking.emit('start', '99999'); assert.equal(s.streams.size, 0);
-  for (const userId of ['44444', '55555']) { s.speaking.emit('start', userId); for (let i = 0; i < 8; i++) s.streams.get(userId).write(s.packet()); }
+  for (const userId of ['44444', '55555']) { s.speaking.emit('start', userId); for (let i = 0; i < 16; i++) s.streams.get(userId).write(s.packet()); }
   const output = Buffer.concat(Array.from({ length: 8 }, () => s.monitor.frame()));
   let peak = 0; for (let i = 0; i < output.length; i += 2) peak = Math.max(peak, Math.abs(output.readInt16LE(i)));
   assert.ok(peak > 5000); assert.equal(s.monitor.snapshot().guildId, '11111'); assert.equal(s.monitor.users.size, 2);
@@ -28,7 +28,7 @@ test('one VC monitor decodes and mixes real Opus while excluding the Bot, withou
 test('selection changes release old subscriptions; jitter and stalled-user buffers remain bounded', t => {
   const s = setup(t); s.monitor.attach(s.entry, '11111', '99999'); s.speaking.emit('start', '44444');
   for (let i = 0; i < 100; i++) s.streams.get('44444').write(s.packet());
-  assert.ok(s.monitor.users.get('44444').bytes.length <= 96000);
+  assert.ok(s.monitor.users.get('44444').bytes.length <= 192000);
   s.monitor.users.get('44444').progressAt = Date.now() - 4000; s.monitor.frame(); assert.equal(s.monitor.users.size, 0);
   const next = { ...s.entry, channelId: '66666' }; s.monitor.attach(next, '22222', '99999'); assert.equal(s.monitor.snapshot().channelId, '66666'); assert.equal(s.speaking.listenerCount('start'), 1);
 });

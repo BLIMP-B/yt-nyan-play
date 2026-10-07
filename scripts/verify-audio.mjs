@@ -11,7 +11,8 @@ import { _electron } from 'playwright-core';
 import ffmpeg from 'ffmpeg-static';
 import { PcmMixer, createDiscordAudioResource } from '../apps/desktop/runtime/voice-output.mjs';
 import { createAudioPlayer, NoSubscriberBehavior } from '@discordjs/voice';
-import OpusScript from 'opusscript';
+import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
+import { verifyAudioNetwork } from './audio-network-probe.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { mediaScope } from '../apps/desktop/core/media-pool.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
@@ -40,7 +41,7 @@ VoiceOutput.prototype.connect = async function(guildId, ...args) {
     const speaking = new EventEmitter(); speaking.users = new Map(); const streams = new Map();
     const connection = new EventEmitter(); Object.assign(connection, { state: { status: 'ready' }, joinConfig: { selfDeaf: false }, rejoin: () => true, destroy: () => { connection.state.status = 'destroyed'; }, receiver: { speaking, subscribe: id => { const stream = new PassThrough({ objectMode: true }); streams.set(id, stream); return stream; } } });
     this.monitorFixtureClient = this.getClient; this.getClient = () => ({ user: { id: '99999' }, isReady: () => true });
-    const entry = { channelId: '33333', connection, mixer: new PcmMixer(), player: { stop() {} } }; this.connections.set(guildId, entry); globalThis.nyanMonitorFixture = { speaking, streams };
+    const entry = { channelId: '33333', connection, mixer: new PcmMixer(), player: { stop() {} } }; this.connections.set(guildId, entry); globalThis.nyanMonitorFixture = { speaking, streams, monitor: this.monitor };
   }
   this.syncMonitor(); this.changed(); return this.connections.get(guildId);
 };
@@ -70,7 +71,8 @@ if (process.env.NYAN_AUDIO_MONITOR_SOURCE) {
   monitor.stdout.on('data', bytes => monitorChunks.push(bytes));
   monitor.on('error', error => { console.error(error); process.exitCode = 1; });
 }
-const report = { platform: process.platform, version: JSON.parse(readFileSync(join(root, 'package.json'))).version, fixtureEngine: true, discordLogin: false, speech: [], media: [] };
+const networkReport = await verifyAudioNetwork();
+const report = { network: networkReport, platform: process.platform, version: JSON.parse(readFileSync(join(root, 'package.json'))).version, fixtureEngine: true, discordLogin: false, speech: [], media: [] };
 const call = async (page, action, data) => {
   const result = await page.evaluate(async ({ action, data }) => window.nyan.invoke(action, data), { action, data });
   assert.equal(result.ok, true, result.error); return result.value;
@@ -108,6 +110,19 @@ try {
   const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
   const fadeFields = ['media.duckFadeOutMs', 'media.duckFadeInMs', 'hourly.bgmFadeInMs', 'hourly.bgmFadeOutMs'];
   for (const key of fadeFields) assert.equal(await page.locator(`[data-config="${key}"]`).inputValue(), '3');
+  await page.locator('[data-view="settings"]').click();
+  assert.equal(await page.locator('[data-config="desktop.networkProfile"]').inputValue(), 'poor');
+  assert.equal(await page.locator('[data-config="desktop.audioBitrateKbps"]').inputValue(), '48');
+  await page.locator('[data-config="desktop.networkProfile"]').selectOption('balanced');
+  assert.equal(await page.locator('[data-config="desktop.audioBitrateKbps"]').inputValue(), '96');
+  await page.locator('[data-config="desktop.audioBitrateKbps"]').fill('64');
+  await page.locator('[data-panel="settings"] .save-config').first().click();
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  assert.equal(await page.locator('[data-config="desktop.networkProfile"]').inputValue(), 'balanced');
+  assert.equal(await page.locator('[data-config="desktop.audioBitrateKbps"]').inputValue(), '64');
+  report.network.customBitrateSaved = 64;
+  const networkConfig = (await call(page, 'state')).config; networkConfig.desktop.networkProfile = 'poor'; networkConfig.desktop.audioBitrateKbps = 48; await call(page, 'config:save', networkConfig);
+  report.network.settingsSaved = true;
   await page.locator('[data-view="settings"]').click();
   await page.screenshot({ path: join(reports, 'media-settings.png'), fullPage: true });
   await page.locator('[data-view="hourly"]').click();
@@ -296,15 +311,33 @@ try {
   });
   if (availableSpeakers.length) await page.waitForFunction(id => window.nyanLocalAudio.snapshot().monitorSink === id, availableSpeakers[0].deviceId);
   report.speakerSelection = { availableDevices: availableSpeakers.length, actualSinkVerified: Boolean(availableSpeakers.length) };
-  const monitorEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO), monitorPcm = wav.subarray(44), monitorPackets = [];
+  const monitorEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO); monitorEncoder.encoderCTL(4006, 0); monitorEncoder.encoderCTL(4002, 48000);
+  const monitorPcm = wav.subarray(44), monitorPackets = [];
   try { for (let i = 0; i < 100; i++) { const offset = i * 3840 % (Math.floor(monitorPcm.length / 3840) * 3840); monitorPackets.push([...monitorEncoder.encode(monitorPcm.subarray(offset, offset + 3840), 960)]); } } finally { monitorEncoder.delete(); }
   const voiceResult = await application.evaluate(async (_electron, packets) => {
     const fixture = globalThis.nyanMonitorFixture;
     for (const packet of packets) { fixture.streams.get('44444').write(Buffer.from(packet)); await new Promise(resolve => setTimeout(resolve, 20)); }
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise(resolve => setTimeout(resolve, 650));
     return { selfExcluded: !fixture.streams.has('99999'), receivedUsers: fixture.streams.size, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'] };
   }, monitorPackets);
   assert.equal(voiceResult.selfExcluded, true); assert.ok(voiceResult.metrics.nonSilentSamples > 1000);
+  const longOpusPacket = Buffer.concat([Buffer.from([(monitorPackets[0][0] & 252) | 3, 6]), ...Array(6).fill(Buffer.from(monitorPackets[0]).subarray(1))]);
+  report.network.electronLifecycle = await application.evaluate((_electron, bytes) => {
+    const fixture = globalThis.nyanMonitorFixture; let recycled = 0;
+    for (let round = 0; round < 16; round++) {
+      for (let id = 0; id < 31; id++) {
+        const key = String(55000 + id); fixture.speaking.emit('start', key); fixture.streams.get(key).write(Buffer.from(bytes)); fixture.streams.get(key).write(Buffer.from(bytes));
+      }
+      if (!fixture.monitor.frame().some(byte => byte)) throw new Error('Concurrent Opus PCM is silent');
+      for (let id = 0; id < 31; id++) {
+        const key = String(55000 + id), retired = fixture.streams.get(key); fixture.monitor.users.get(key).ended = true;
+        fixture.speaking.emit('start', key); retired.emit('error', new Error('retired subscription'));
+        fixture.streams.get(key).write(Buffer.from(bytes)); fixture.monitor.remove(key); recycled += 2;
+      }
+    }
+    return { passed: true, recycled, survivors: fixture.monitor.users.has('44444') };
+  }, [...longOpusPacket]);
+  assert.equal(report.network.electronLifecycle.passed, true); assert.equal(report.network.electronLifecycle.recycled, 992);
   await page.locator('[data-view="settings"]').click(); await page.screenshot({ path: join(reports, 'voice-monitor-settings.png'), fullPage: true });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   const unavailableConfig = (await call(page, 'state')).config; unavailableConfig.desktop.outputDevice = 'unavailable-speaker-verification'; await call(page, 'config:save', unavailableConfig);

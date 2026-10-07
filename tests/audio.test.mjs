@@ -8,7 +8,7 @@ import { Voicevox, ZUNDAMON_STYLES } from '../apps/desktop/core/voicevox.mjs';
 import { bouyomiSpeak } from '../apps/desktop/runtime/bouyomi.mjs';
 import { PcmMixer, createDiscordAudioResource, decodeAudio, VoiceOutput } from '../apps/desktop/runtime/voice-output.mjs';
 import { createAudioPlayer, createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus } from '@discordjs/voice';
-import OpusScript from 'opusscript';
+import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 const pcm = value => { const b = Buffer.alloc(3840); for (let i = 0; i < b.length; i += 2) b.writeInt16LE(value, i); return b; };
 function wav() { const data = pcm(1000), b = Buffer.alloc(44); b.write('RIFF'); b.writeUInt32LE(36 + data.length, 4); b.write('WAVEfmt ', 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(2, 22); b.writeUInt32LE(48000, 24); b.writeUInt32LE(192000, 28); b.writeUInt16LE(4, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(data.length, 40); return Buffer.concat([b, data]); }
 test('VOICEVOX discovers all Zundamon styles and uses audio_query then synthesis', async t => {
@@ -29,9 +29,9 @@ test('missing styles and failed or invalid engine responses are detected', async
 });
 test('mixer ducks media while speaking and restores volume, with clipping protection', async t => {
   const mixer = new PcmMixer(); t.after(() => mixer.destroy()); mixer.mediaVolume = 1; mixer.ducking = .25;
-  mixer.addMedia(Buffer.concat(Array.from({ length: 4 }, () => pcm(10000)))); const done = mixer.addSpeech(pcm(20000), .5); assert.equal(mixer.takeFrame().readInt16LE(), 12500); await done;
+  mixer.addMedia(Buffer.concat(Array.from({ length: 12 }, () => pcm(10000)))); const done = mixer.addSpeech(pcm(20000), .5); assert.equal(mixer.takeFrame().readInt16LE(), 12500); await done;
   assert.equal(mixer.takeFrame().readInt16LE(), 10000);
-  mixer.clearMedia(); mixer.addMedia(Buffer.concat(Array.from({ length: 4 }, () => pcm(30000)))); const clipped = mixer.addSpeech(pcm(30000), 1); mixer.ducking = 1; assert.equal(mixer.takeFrame().readInt16LE(), 32767); await clipped;
+  mixer.clearMedia(); mixer.addMedia(Buffer.concat(Array.from({ length: 12 }, () => pcm(30000)))); const clipped = mixer.addSpeech(pcm(30000), 1); mixer.ducking = 1; assert.equal(mixer.takeFrame().readInt16LE(), 32767); await clipped;
 });
 test('FFmpeg decodes WAV to 48kHz stereo PCM and rejects invalid audio', async () => {
   assert.deepEqual(await decodeAudio(wav()), pcm(1000)); await assert.rejects(decodeAudio(Buffer.from('broken')), /FFmpeg/);
