@@ -2,12 +2,14 @@ import { parentPort, workerData } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
 import { setImmediate as yieldTurn } from 'node:timers/promises';
 import { lexicalTokens, tokenizer, SmallWordModel } from '../core/hourly-language.mjs';
+import { materialUnits, trainMaterials } from '../core/hourly-materials.mjs';
 
 const db = new DatabaseSync(workerData.file);
 db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, guild TEXT, channel TEXT, created INTEGER, tokens TEXT); CREATE INDEX IF NOT EXISTS corpus ON messages(guild,channel,created); CREATE TABLE IF NOT EXISTS cursors(channel TEXT PRIMARY KEY, oldest TEXT, newest TEXT, complete INTEGER DEFAULT 0);');
 if (!db.prepare('PRAGMA table_info(cursors)').all().some(c => c.name === 'scan')) db.exec("ALTER TABLE cursors ADD COLUMN scan TEXT DEFAULT ''");
+if (!db.prepare('PRAGMA table_info(messages)').all().some(c => c.name === 'materials')) db.exec("ALTER TABLE messages ADD COLUMN materials TEXT NOT NULL DEFAULT '[]'");
 db.exec('CREATE INDEX IF NOT EXISTS recent_corpus ON messages(guild,created DESC,id DESC);');
-const put = db.prepare('INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?)'), exists = db.prepare('SELECT 1 FROM messages WHERE id=?'), remove = db.prepare('DELETE FROM messages WHERE id=?');
+const put = db.prepare('INSERT OR REPLACE INTO messages(id,guild,channel,created,tokens,materials) VALUES(?,?,?,?,?,?)'), exists = db.prepare('SELECT 1 FROM messages WHERE id=?'), remove = db.prepare('DELETE FROM messages WHERE id=?');
 const putCursor = db.prepare('INSERT OR REPLACE INTO cursors(channel,oldest,newest,complete,scan) VALUES(?,?,?,?,?)');
 let messages = db.prepare('SELECT count(*) AS n FROM messages').get().n, chain = Promise.resolve();
 const cancelled = new Set(), known = new Set();
@@ -20,11 +22,11 @@ async function tokens(text, id) {
 }
 async function record(rows, cursor, channel, id) {
   const prepared = [];
-  for (const row of rows) { check(id); prepared.push({ ...row, tokens: JSON.stringify(await tokens(row.content, id)) }); }
+  for (const row of rows) { check(id); prepared.push({ ...row, tokens: JSON.stringify(await tokens(row.content, id)), materials: JSON.stringify(materialUnits(row.content, await tokenizer())) }); await yieldTurn(); }
   check(id); let added = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
-    for (const row of prepared) { if (!exists.get(row.id)) added++; put.run(row.id, row.guildId, row.channelId, row.created, row.tokens); }
+    for (const row of prepared) { if (!exists.get(row.id)) added++; put.run(row.id, row.guildId, row.channelId, row.created, row.tokens, row.materials); }
     if (cursor) putCursor.run(channel, cursor.oldest, cursor.newest, cursor.complete, cursor.scan ? JSON.stringify(cursor.scan) : '');
     db.exec('COMMIT'); messages += added;
   } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -40,15 +42,16 @@ async function handle(type, data, id) {
   if (type === 'clear') { db.exec('DELETE FROM messages; DELETE FROM cursors; VACUUM;'); messages = 0; return null; }
   if (type === 'model') {
     const slots = data.channels.map(() => '?').join(',');
-    const rows = db.prepare(`SELECT tokens FROM messages WHERE guild=? AND channel IN (${slots}) AND created<=? ORDER BY created DESC,id DESC LIMIT ?`).all(data.guild, ...data.channels, data.cutoff, data.limit);
+    const rows = db.prepare(`SELECT id,tokens,materials FROM messages WHERE guild=? AND channel IN (${slots}) AND created<=? ORDER BY created DESC,id DESC LIMIT ?`).all(data.guild, ...data.channels, data.cutoff, data.limit);
     if (!rows.length) throw new Error('資料の履歴がまだありません。履歴を取得してから文章生成を試してください');
     const model = new SmallWordModel();
     for (let n = 0; n < rows.length; n++) {
       check(id);
-      for (const token of JSON.parse(rows[n].tokens)) if (model.weights.size < 10000 || model.weights.has(`${token.pos}:${token.word}`)) model.train([token]);
+      model.train(JSON.parse(rows[n].tokens), rows[n].id);
+      trainMaterials(model, JSON.parse(rows[n].materials), rows[n].id);
       if (n % 25 === 0) await yieldTurn();
     }
-    return { weights: [...model.weights], used: rows.length };
+    return { weights: [...model.weights], materials: [...model.materials], wordSources: [...model.wordSources], used: rows.length };
   }
   throw new Error('Unknown history operation');
 }

@@ -1,6 +1,6 @@
 {
   "name": "nyan-talk-damare",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "private": true,
   "description": "にゃんとーく〜Damare〜 Windows Discord.js統合アプリと送信側Chrome拡張",
   "engines": {

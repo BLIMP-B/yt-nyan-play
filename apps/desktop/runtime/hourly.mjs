@@ -6,16 +6,20 @@ import { writeAtomic } from '../core/store.mjs';
 import { hourlyProgram, hourPhrase, nextHour } from '../core/hourly-audio.mjs';
 import { hourlyPreparationLead } from '../core/hourly-preparation.mjs';
 import { generateSlm, withNoda } from '../core/hourly-language.mjs';
+import { SENTENCE_VERSION } from '../core/hourly-sentence.mjs';
 
 export class HourlyRuntime extends EventEmitter {
   constructor(directory, getConfig, handlers, { now = Date.now, delay = (ms, signal) => wait(ms, undefined, { signal }) } = {}) {
     super(); this.getConfig = getConfig; this.handlers = handlers; this.now = now; this.delay = delay;
     this.file = join(directory, 'hourly-plans.json'); this.saved = existsSync(this.file) ? JSON.parse(readFileSync(this.file)) : { lastHour: 0, plans: {}, measurements: {} };
+    // Previous generation timings can incorrectly select a late preparation
+    // slot; measure the new source/grammar pipeline again before using them.
+    if (this.saved.sentenceVersion !== SENTENCE_VERSION) Object.assign(this.saved, { sentenceVersion: SENTENCE_VERSION, plans: {}, batchDays: {}, measurements: {} });
     this.active = null; this.preparing = null; this.prepared = null; this.batches = new Map(); this.controller = null; this.phase = '停止中'; this.error = ''; this.nextAt = null;
   }
   changed() { this.emit('change'); }
   save() { const cutoff = this.now() - 2 * 86400000; for (const [key, plan] of Object.entries(this.saved.plans)) if (plan.at < cutoff) delete this.saved.plans[key]; writeAtomic(this.file, this.saved); this.changed(); }
-  key(server, at) { return `${server.guildId}:${at}:${JSON.stringify([server.channelIds, this.getConfig().hourly.slmModel, this.getConfig().hourly.sentenceStyle, this.getConfig().hourly.sentenceMaxChars])}`; }
+  key(server, at) { return `${server.guildId}:${at}:${JSON.stringify([SENTENCE_VERSION, server.channelIds, this.getConfig().hourly.slmModel, this.getConfig().hourly.sentenceStyle, this.getConfig().hourly.sentenceMaxChars])}`; }
   mode(server, budgetMs = 7000) { const c = this.getConfig().hourly; return c.generationMode === 'auto' ? (this.saved.measurements[server.guildId]?.daily && this.saved.measurements[server.guildId]?.preparationStrategyVersion === 2 ? 'daily' : 'live') : c.generationMode; }
   snapshot() { return { phase: this.phase, active: this.active, busy: Boolean(this.active || this.preparing || this.prepared || this.testing), nextAt: this.nextAt, error: this.error, measurements: this.saved.measurements, batches: [...this.batches.keys()] }; }
   start() { if (!this.timer) { this.timer = setInterval(() => this.tick(), 500); this.timer.unref(); } this.tick(); }
@@ -44,7 +48,7 @@ export class HourlyRuntime extends EventEmitter {
     this.save(); return { ...result, elapsedMs, cutoff };
   }
   async batch(server, firstAt, signal, first) {
-    const date = new Date(firstAt), key = `${server.guildId}:${date.getFullYear()}-${date.getMonth()}-${date.getDate()}:${JSON.stringify([server.channelIds, this.getConfig().hourly.slmModel, this.getConfig().hourly.sentenceStyle, this.getConfig().hourly.sentenceMaxChars])}`;
+    const date = new Date(firstAt), key = `${server.guildId}:${date.getFullYear()}-${date.getMonth()}-${date.getDate()}:${JSON.stringify([SENTENCE_VERSION, server.channelIds, this.getConfig().hourly.slmModel, this.getConfig().hourly.sentenceStyle, this.getConfig().hourly.sentenceMaxChars])}`;
     if (this.saved.batchDays?.[key]) return;
     if (this.batches.has(key)) return this.batches.get(key);
     const task = (async () => {

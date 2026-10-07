@@ -83,7 +83,9 @@ export class HourlyHistory {
             cursor.scan = reached ? null : { before: items.at(-1).id, stop, newest };
             if (reached) { cursor.newest = newest; task.phase = 'backfill'; if (items.length < limit && !stop) cursor.complete = 1; cursor.scan = cursor.complete ? null : { backfill: true }; }
           } else { cursor.scan = null; if (items.length) cursor.oldest = items.at(-1).id; if (items.length < limit) cursor.complete = 1; }
-          const result = await this.request('page', { rows: accepted.filter(m => this.selected(m)).map(m => this.row(m)), cursor, channel: task.id }, combined);
+          // Refresh the fetched head too: older caches contain only words.
+          // The same 50-message page budget hydrates phrases/sentences on sync.
+          const result = await this.request('page', { rows: items.filter(m => this.selected(m)).map(m => this.row(m)), cursor, channel: task.id }, combined);
           this.progress = `${task.channel.name}: ${result.channelMessages}件 · 今回${fetched}/${config.historySyncMessages}件`; this.changed();
           await wait(config.historyPageDelayMs, undefined, { signal: combined });
         } catch (error) { combined.throwIfAborted(); this.errors.push(`${task.id}: ${error.message}`); task.done = true; }
@@ -99,7 +101,7 @@ export class HourlyHistory {
       if (channel?.guildId !== server.guildId || !channel.permissionsFor(client.user)?.has(PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory)) throw new Error('資料チャンネルの現在の履歴閲覧権限を確認してください');
     }
     const result = await this.request('model', { guild: server.guildId, channels: server.channelIds, cutoff, limit: this.getConfig().hourly.historyCorpusMessages }, signal);
-    this.used = result.used; const model = new SmallWordModel(); model.weights = new Map(result.weights); return model;
+    this.used = result.used; const model = new SmallWordModel(); model.weights = new Map(result.weights); model.materials = new Map(result.materials); model.wordSources = new Map(result.wordSources); return model;
   }
   snapshot() { return { syncing: Boolean(this.syncing), progress: this.progress, errors: this.errors, messages: this.messages, pending: this.requests.size, used: this.used }; }
   async clear() { if (this.syncing) throw new Error('履歴取得を中止してから削除してください'); await this.request('clear'); this.used = 0; this.progress = '取得履歴を削除しました'; this.changed(); }

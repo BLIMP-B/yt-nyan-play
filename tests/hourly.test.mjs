@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
@@ -98,7 +98,7 @@ test('all selected channel history is paginated, persisted, updated, deleted and
 test('the local SLM receives words, produces a subject and predicate, and supplies two nouns actually present in its output', async () => {
   const analyzer = await tokenizer(), model = new SmallWordModel(() => 0); model.train(lexicalTokens('猫が時計を眺める。', analyzer));
   let body;
-  const result = await generateSlm(model, normalizeConfig({ hourly: { sentenceStyle: 'brief' } }).hourly, undefined, async (url, options) => { assert.equal(url.hostname, '127.0.0.1'); body = JSON.parse(options.body); return new Response(JSON.stringify({ response: JSON.stringify({ subject: '猫', object: '時計', verb: '眺める', adjective: '' }) })); });
+  const result = await generateSlm(model, normalizeConfig({ hourly: { sentenceStyle: 'brief' } }).hourly, undefined, async (url, options) => { assert.equal(url.hostname, '127.0.0.1'); body = JSON.parse(options.body); return new Response(JSON.stringify({ response: JSON.stringify({ parts: [{ i: 0, v: 1 }] }) })); });
   assert.equal(body.model, 'qwen3:0.6b'); assert.equal(body.think, false); assert.deepEqual(result.nouns, ['猫', '時計']); assert.equal(result.text, '猫は、時計を眺めるのだ。');
   await assert.rejects(generateSlm(model, normalizeConfig().hourly, undefined, async () => new Response(JSON.stringify({ response: '{"text":"猫と時計。"}' }))), /主語・述語/);
   assert.throws(() => normalizeConfig({ hourly: { slmUrl: 'https://example.com' } }), /PC内/);
@@ -133,4 +133,12 @@ test('cancelling a pending automatic hour also cancels its slot, so polling cann
   const at = new Date(2026, 9, 5, 12, 0).getTime(), c = normalizeConfig({ hourly: { enabled: true, output: 'local' } }); let prepared = 0;
   const runtime = new HourlyRuntime(temp(t), () => c, { synthesize: async () => { prepared++; return Buffer.alloc(700 * 192); }, log() {} }, { now: () => at - 50000 });
   runtime.tick(); await turn(); assert.equal(runtime.snapshot().busy, true); runtime.cancel(); runtime.tick(); await turn(); assert.equal(prepared, 1); assert.equal(runtime.snapshot().busy, false); runtime.close();
+});
+
+test('old daily sentences and timing measurements cannot survive a generator version change', t => {
+  const directory = temp(t), c = normalizeConfig();
+  writeFileSync(join(directory, 'hourly-plans.json'), JSON.stringify({ lastHour: 10000, plans: { old: { text: '不動は野菜を作る。不動は野菜を作るのだ。' } }, batchDays: { yesterday: 1 }, measurements: { '11111': { daily: true, preparationStrategyVersion: 2, preparationMs: 1 } } }));
+  const runtime = new HourlyRuntime(directory, () => c, {});
+  assert.equal(runtime.saved.lastHour, 10000); assert.deepEqual(runtime.saved.plans, {}); assert.deepEqual(runtime.saved.batchDays, {}); assert.deepEqual(runtime.saved.measurements, {});
+  assert.equal(runtime.mode({ guildId: '11111' }), 'live'); runtime.close();
 });

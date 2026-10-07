@@ -4,6 +4,8 @@ import { hourlyPreparationLead } from '../apps/desktop/core/hourly-preparation.m
 import { hourlyBgmChoice, recentYoutubeMedia } from '../apps/desktop/core/hourly-bgm-history.mjs';
 import { sentencePlan, sentenceFromClauses, SENTENCE_PRESETS } from '../apps/desktop/core/hourly-sentence.mjs';
 import { SmallWordModel, generateSlm } from '../apps/desktop/core/hourly-language.mjs';
+import { tokenizer } from '../apps/desktop/core/hourly-language.mjs';
+import { hourlySourceModel } from '../scripts/hourly-material-fixture.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 test('unmeasured and over-budget end-to-end preparation starts early; only measured fast paths start with the chime', () => {
   assert.equal(hourlyPreparationLead(undefined, 7000), 60000);
@@ -20,17 +22,16 @@ test('failed/empty YouTube search uses latest actually started YouTube media, ex
   await assert.rejects(hourlyBgmChoice(async () => { throw new Error('no results'); }, jobs, AbortSignal.abort(), () => {}), { name: 'AbortError' });
 });
 test('length and style are chosen before generation and complete grammatical clauses fit 200 characters including のだ', async () => {
-  const model = new SmallWordModel(() => 0.8); model.train([{ word: '猫', pos: '名詞' }, { word: '時計', pos: '名詞' }]);
+  const model = hourlySourceModel(await tokenizer(), () => 0.8);
   const lengths = [];
   for (const style of Object.keys(SENTENCE_PRESETS)) {
     const c = normalizeConfig({ hourly: { sentenceStyle: style } }).hourly; let sent;
     const result = await generateSlm(model, c, undefined, async (_url, options) => {
       sent = JSON.parse(options.body);
-      const clause = { subject: '猫', object: '時計', verb: '運ぶ', adjective: '' }, count = sent.format.properties.clauses?.minItems || 1;
-      if (count > 1) { assert.deepEqual(sent.format.properties.clauses.items.properties.s.enum, [0, 1]); assert.deepEqual(sent.format.properties.clauses.items.properties.a.enum, [0]); }
-      return new Response(JSON.stringify({ response: JSON.stringify(count === 1 ? clause : { clauses: Array.from({ length: count }, () => ({ s: 0, v: 0, a: 0 })) }) }));
-    }, async () => [{ word: '猫', pos: '名詞' }, { word: '時計', pos: '名詞' }]);
-    assert.ok(sent.prompt.includes(style)); assert.ok(result.text.endsWith('のだ。')); assert.ok(result.text.length <= 200); lengths.push(result.text.length);
+      const count = sent.format.properties.parts.minItems;
+      return new Response(JSON.stringify({ response: JSON.stringify({ parts: Array.from({ length: count }, (_, i) => ({ i, v: i % 10 })) }) }));
+    });
+    assert.ok(sent.prompt.includes(style)); assert.ok(result.text.endsWith('のだ。')); assert.ok(result.text.length <= 200); assert.equal((result.text.match(/。/g) || []).length, 1); lengths.push(result.text.length);
   }
   assert.ok(lengths.at(-1) >= 160); assert.ok(lengths.every((length, i) => i === 0 || length > lengths[i - 1]));
   const plan = sentencePlan({ sentenceStyle: 'extended', sentenceMaxChars: 40 }, ['猫', '時計'], () => 0.9);

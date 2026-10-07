@@ -65,6 +65,28 @@ test('old configurations gain safe limits and invalid history settings are rejec
 test('SLM sentence validation uses the asynchronous history worker with cancellation propagated', async t => {
   const f=fixture(t,{length:50}),h=f.open(),controller=new AbortController(); await h.sync();
   const model=await h.model(f.config.hourly.servers[0],1000); let analyzed=false;
-  const result=await generateSlm(model,{...f.config.hourly,sentenceStyle:'brief'},controller.signal,async()=>new Response(JSON.stringify({response:JSON.stringify({subject:'猫',object:'時計',verb:'眺める',adjective:''})})),(text,signal)=>{assert.equal(signal,controller.signal);analyzed=true;return h.tokens(text,signal);});
+  const result=await generateSlm(model,{...f.config.hourly,sentenceStyle:'brief'},controller.signal,async()=>new Response(JSON.stringify({response:JSON.stringify({parts:[{i:0,v:1}]})})),(text,signal)=>{assert.equal(signal,controller.signal);analyzed=true;return h.tokens(text,signal);});
   assert.equal(analyzed,true); assert.deepEqual(result.nouns.sort(),['時計','猫']);
+});
+
+test('legacy caches hydrate source units within the page budget and edits, deletions, channels and cutoffs govern words and phrases together', async t => {
+  const f = fixture(t, { length: 50 }), h = f.open(); await h.sync();
+  await h.record({ ...f.messages[0], content: '青い時計は静かな森を眺める。' });
+  let model = await h.model(f.config.hourly.servers[0], 1);
+  assert.ok([...model.materials.values()].some(u => u.kind === 'sentence' && u.text.includes('静かな森')));
+  assert.ok([...model.materials.values()].every(u => u.source === f.messages[0].id));
+  assert.equal((await h.model(f.config.hourly.servers[0], 50)).vocabulary('名詞').some(n => n.word === '森'), true);
+  await h.record({ ...f.messages[0], content: '赤い自転車は銀色の橋を見つける。' });
+  model = await h.model(f.config.hourly.servers[0], 1);
+  assert.ok(![...model.materials.values()].some(u => u.text.includes('森')));
+  await h.deleted(f.messages[0].id);
+  assert.equal((await h.model(f.config.hourly.servers[0], 50)).materials.size, 0);
+  await h.close();
+  const db = new DatabaseSync(join(f.directory, 'hourly-history.sqlite'));
+  db.exec("UPDATE messages SET materials='[]'"); db.close();
+  f.messages.at(-1).content = '夜空の星が光を集める。';
+  const restored = f.open(); const before = f.calls.length; await restored.sync();
+  assert.equal(f.calls.length - before, 1);
+  model = await restored.model(f.config.hourly.servers[0], 50);
+  assert.ok([...model.materials.values()].some(u => u.kind === 'sentence' && u.text.includes('夜空の星')));
 });
