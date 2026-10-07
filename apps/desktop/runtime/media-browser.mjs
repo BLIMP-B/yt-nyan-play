@@ -31,7 +31,7 @@ export class MediaBrowser {
     catch (error) { stream?.close(); throw error; }
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
-    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: c.media.output === 'discord' ? 1 : c.media.volume * this.overlayGain, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream };
+    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: c.media.output === 'discord' ? 1 : c.media.volume * this.overlayGain, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
     guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
@@ -57,7 +57,7 @@ export class MediaBrowser {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
         const volume = c.media.output === 'discord' ? 1 : this.getConfig().media.volume * (this.ducked ? this.getConfig().media.ducking : 1) * this.overlayGain;
-        const options = this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume, paused: this.paused, volumeRampMs: c.media.output === 'discord' ? 0 : this.volumeRampMs, bandwidthSaving: c.media.bandwidthSaving && !stream };
+        const options = this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume, paused: this.paused, volumeRampMs: c.media.output === 'discord' ? 0 : this.volumeRampMs, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
         let state = await window.webContents.executeJavaScript(mediaScript(options), true);
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}

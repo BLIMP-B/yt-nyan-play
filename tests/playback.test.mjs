@@ -143,3 +143,13 @@ test('Bot shutdown prevents priority speech from starting and cancels pending an
   pool.halt(true); const ordinary = pool.enqueue({ text: '普通' }); await assert.rejects(pool.speak({ text: '停止告知', priority: 100 }), { name: 'AbortError' });
   await tick(); assert.deepEqual(started, []); assert.equal(ordinary.status, 'waiting'); pool.halt(false); await tick(); assert.deepEqual(started, ['普通']);
 });
+
+test('FFmpeg audio streams already have their offset applied and never seek a single-use HTTP stream back to zero', () => {
+  for (const mode of ['preview', 'full', 'direct']) {
+    const p = player(mode, 0); let seeks = 0;
+    Object.defineProperty(p.video, 'currentTime', { get: () => 0.25, set() { seeks++; throw new Error('An unseekable stream would request its URL again'); } });
+    const state = runInNewContext(mediaScript({ mode, startSeconds: 0, seek: false }), p.context);
+    assert.equal(seeks, 0); assert.equal(p.context.window.__nyanStarted, true); assert.equal(state.currentTime, 0.25); assert.equal(p.video.paused, false);
+  }
+  const browser = player('full', 80); browser.read(); assert.equal(browser.video.currentTime, 80);
+});

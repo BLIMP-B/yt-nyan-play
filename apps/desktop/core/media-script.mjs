@@ -1,6 +1,6 @@
-export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false }) {
+export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving })};
+    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek })};
     let lowestQuality = false;
     if (options.bandwidthSaving) {
       // Use exposed player APIs. Hiding video does not save network bandwidth.
@@ -56,7 +56,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
       }, 20);
     }
     if (!advertisement && !window.__nyanStarted && chosen.readyState >= 1) {
-      try { chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
+      try { if (options.seek) chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
     if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
     let youtubeEnded = false;
