@@ -80,6 +80,13 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   });
   function render(next) {
     state = next;
+    window.nyanLocalAudio?.update(state);
+    const monitorPicker = $('voice-monitor-guild'), monitorValue = monitorPicker.dataset.populated ? monitorPicker.value : state.config.desktop.voiceMonitorGuildId;
+    monitorPicker.dataset.populated = 'true'; monitorPicker.replaceChildren(node('option', '通話音声を聞かない')); monitorPicker.firstChild.value = '';
+    for (const binding of state.config.bot.bindings) { const guild = state.bot.servers.find(g => g.id === binding.guildId), channel = guild?.channels.find(c => c.id === binding.voiceChannelId); const option = node('option', `${guild?.name || binding.label || binding.guildId} / ${channel?.name || binding.voiceChannelId}`); option.value = binding.guildId; monitorPicker.append(option); }
+    if (monitorValue && ![...monitorPicker.options].some(o => o.value === monitorValue)) { const option = node('option', `未設定のサーバー ${monitorValue}`); option.value = monitorValue; monitorPicker.append(option); }
+    monitorPicker.value = monitorValue;
+    $('voice-monitor-status').textContent = !state.config.desktop.voiceMonitorGuildId ? '通話音声の受信は停止中です。' : state.voiceMonitor?.status === 'listening' ? '選択したVCの通話音声をPCへ出力しています。' : state.voiceMonitor?.error || '選択したVCへのBot接続を待っています。';
     document.body.dataset.theme = state.config.desktop.theme; document.body.classList.toggle('vs-dark', state.config.desktop.theme === 'dark'); document.body.classList.toggle('vs', state.config.desktop.theme === 'light'); decorateButton($('theme-toggle'), state.config.desktop.theme === 'light' ? 'moon' : 'sun', state.config.desktop.theme === 'light' ? 'ダークモードに切り替え' : 'ライトモードに切り替え');
     if (!initialized) { renderStyles(); fillConfig(); initialized = true; }
     const status = { offline: '停止中', connecting: '接続中', online: '接続済み', reconnecting: '再接続中' }[state.bot.status] || state.bot.status;
@@ -105,7 +112,7 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
       $('hourly-model-state').textContent = h.model.progress || (h.model.installed ? '実行環境は導入済み' : '未導入。PC内の既存SLMも利用できます。'); $('hourly-model-setup').disabled = h.model.busy; $('hourly-model-cancel').disabled = !h.model.busy;
       $('hourly-history-state').textContent = `${h.history.messages}件 · ${h.history.progress || '未取得'}${h.history.errors.length ? ' · ' + h.history.errors.join(' / ') : ''}`; $('hourly-sync').disabled = h.history.syncing || state.bot.status !== 'online'; $('hourly-sync-cancel').disabled = !h.history.syncing; $('hourly-history-clear').disabled = h.history.syncing;
       $('hourly-test').disabled = h.busy; $('hourly-cancel').disabled = !h.busy;
-      if (h.active) { if (!current.length) now.replaceChildren(); now.append(node('strong', h.active.text), node('small', `${h.phase} · 3点目: ${new Date(h.active.thirdAt).toLocaleTimeString('ja-JP')}`)); for (const s of h.active.servers) now.append(node('strong', s.text), node('small', `サーバー ${s.guildId} · ${s.phase}`)); }
+      if (h.active) { if (!current.length) now.replaceChildren(); now.append(node('strong', h.active.text), node('small', `${h.phase} · 4点目: ${new Date(h.active.fourthAt).toLocaleTimeString('ja-JP')}`)); for (const s of h.active.servers) now.append(node('strong', s.text), node('small', `サーバー ${s.guildId} · ${s.phase}`)); }
     }
     renderJobs(); renderCollections(); const logs = $('log-list'); logs.replaceChildren(); for (const entry of state.logs) logs.append(row(entry.text, `${new Date(entry.time).toLocaleTimeString('ja-JP')} · ${entry.level}`)); if (!state.logs.length) empty(logs, 'イベントはまだありません。');
     if (state.bouyomi) {
@@ -176,5 +183,16 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   document.querySelectorAll('button[data-icon]').forEach(e => decorateButton(e, e.dataset.icon));
   document.querySelector('nav .active').setAttribute('aria-current', 'page');
   api.subscribe(render);
-  task(async () => { render(await invoke('state')); if (navigator.mediaDevices?.enumerateDevices) { const devices = await navigator.mediaDevices.enumerateDevices(); for (const device of devices.filter(d => d.kind === 'audiooutput' && d.deviceId)) { const option = node('option', device.label || device.deviceId); option.value = device.deviceId; $('output-device').append(option); } fillConfig(); } })();
+  async function refreshDevices() {
+    const picker = $('output-device'), value = picker.dataset.populated ? picker.value : state.config.desktop.outputDevice;
+    picker.dataset.populated = 'true';
+    picker.replaceChildren(node('option', '既定のデバイス')); picker.firstChild.value = '';
+    const devices = await navigator.mediaDevices?.enumerateDevices() || [];
+    for (const device of devices.filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default')) { const option = node('option', device.label || device.deviceId); option.value = device.deviceId; picker.append(option); }
+    if (value && ![...picker.options].some(o => o.value === value)) { const option = node('option', '保存済みのデバイス（現在未接続）'); option.value = value; picker.append(option); }
+    picker.value = value;
+  }
+  $('refresh-devices').addEventListener('click', task(refreshDevices));
+  navigator.mediaDevices?.addEventListener('devicechange', () => void refreshDevices().catch(e => toast(e.message, true)));
+  task(async () => { render(await invoke('state')); await refreshDevices(); fillConfig(); })();
 })();

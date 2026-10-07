@@ -24,10 +24,27 @@ const wav = readFileSync(join(directory, 'speech.wav'));
 const synthesisTexts = [];
 const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query')) { synthesisTexts.push(new URL(req.url, 'http://localhost').searchParams.get('text')); res.end('{}'); } else if (req.url.startsWith('/synthesis')) { res.setHeader('Content-Type', 'audio/wav'); res.end(wav); } else { res.statusCode = 404; res.end(); } });
 engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
-const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'local', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'local', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
+const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'both', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'both', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
 writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
 writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'nyan-audio-verification', type: 'module', main: 'audio-bootstrap.mjs', version: JSON.parse(readFileSync(join(root, 'package.json'))).version }));
 writeFileSync(join(directory, 'audio-bootstrap.mjs'), `
+import { app, session } from 'electron';
+app.whenReady().then(() => { const originalDisplayHandler = session.defaultSession.setDisplayMediaRequestHandler;
+session.defaultSession.setDisplayMediaRequestHandler = function(handler, ...args) { globalThis.nyanProductionDisplayHandler = handler; this.setDisplayMediaRequestHandler = originalDisplayHandler; return originalDisplayHandler.call(this, handler, ...args); }; });
+import { VoiceOutput, PcmMixer } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/voice-output.mjs')).href)};
+import { EventEmitter } from 'node:events'; import { PassThrough } from 'node:stream';
+const originalVoiceConnect = VoiceOutput.prototype.connect, originalDisconnect = VoiceOutput.prototype.disconnect;
+VoiceOutput.prototype.connect = async function(guildId, ...args) {
+  if (guildId !== '99998') return originalVoiceConnect.call(this, guildId, ...args);
+  if (!this.connections.has(guildId)) {
+    const speaking = new EventEmitter(); speaking.users = new Map(); const streams = new Map();
+    const connection = new EventEmitter(); Object.assign(connection, { state: { status: 'ready' }, joinConfig: { selfDeaf: false }, rejoin: () => true, destroy: () => { connection.state.status = 'destroyed'; }, receiver: { speaking, subscribe: id => { const stream = new PassThrough({ objectMode: true }); streams.set(id, stream); return stream; } } });
+    this.monitorFixtureClient = this.getClient; this.getClient = () => ({ user: { id: '99999' }, isReady: () => true });
+    const entry = { channelId: '33333', connection, mixer: new PcmMixer(), player: { stop() {} } }; this.connections.set(guildId, entry); globalThis.nyanMonitorFixture = { speaking, streams };
+  }
+  this.syncMonitor(); this.changed(); return this.connections.get(guildId);
+};
+VoiceOutput.prototype.disconnect = function(guildId, ...args) { const result = originalDisconnect.call(this, guildId, ...args); if (guildId === '99998' && this.monitorFixtureClient) { this.getClient = this.monitorFixtureClient; this.monitorFixtureClient = null; } return result; };
 import { MediaStreamResolver } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href)};
 import { HourlyHistory } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/hourly-history.mjs')).href)};
 const historyRows = Array.from({length:5000},(_,i)=>({id:String(10000+i),guildId:'11111',channelId:'22222',createdTimestamp:i+1,content:'猫が時計を眺める。森の太陽は月の料理を運ぶ。'.repeat(70)}));
@@ -137,6 +154,8 @@ try {
     const ui = BrowserWindow.getAllWindows()[0];
     const probe = globalThis.nyanAudioProbe = { ui, target: ui, active: 'speech', metrics: {}, chunks: {} };
     ui.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+      if (!probe.capture) return globalThis.nyanProductionDisplayHandler(request, callback);
+      probe.capture = false;
       if (request.frame !== ui.webContents.mainFrame || probe.target.isDestroyed()) return callback({});
       callback({ video: probe.target.webContents.mainFrame, audio: probe.target.webContents.mainFrame, enableLocalEcho: true });
     });
@@ -145,11 +164,11 @@ try {
       const label = probe.active, buffer = Buffer.from(bytes);
       const metrics = probe.metrics[label] ||= { frames: 0, nonSilentSamples: 0, peak: 0 };
       metrics.frames++;
-      if (label === 'hourly' && !metrics.thirdToneAt) {
+      if (label === 'hourly' && !metrics.fourthToneAt) {
         let crossings = 0, previous = 0, peak = 0;
         for (let i = 0; i + 3 < buffer.length; i += 4) { const sample = buffer.readInt16LE(i); peak = Math.max(peak, Math.abs(sample)); if (i && (sample >= 0) !== (previous >= 0)) crossings++; previous = sample; }
         const frequency = crossings * 48000 / (2 * (buffer.length / 4));
-        if (peak > 500 && frequency >= 800 && frequency <= 950) metrics.thirdToneAt = Date.now();
+        if (peak > 500 && frequency >= 800 && frequency <= 950) metrics.fourthToneAt = Date.now();
       }
       for (let i = 0; i + 1 < buffer.length; i += 2) { const v = Math.abs(buffer.readInt16LE(i)); metrics.peak = Math.max(metrics.peak, v); if (v > 100) { metrics.nonSilentSamples++; if(globalThis.nyanAudioHistory?.syncing) metrics.samplesDuringHistory=(metrics.samplesDuringHistory||0)+1; } }
       if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
@@ -166,6 +185,7 @@ try {
     });
     ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture'].includes(permission)));
   }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
+  await application.evaluate(() => { globalThis.nyanAudioProbe.capture = true; });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
   const historyConfig=(await call(page,'state')).config; historyConfig.hourly.servers=[{guildId:'11111',channelIds:['22222'],enabled:true,bgm:false}];
@@ -199,7 +219,7 @@ try {
       const until = Date.now() + 8000;
       while (Date.now() < until) {
         const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
-        if (target) { probe.target = target; probe.active = kind; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+        if (target) { probe.target = target; probe.active = kind; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       throw new Error('Playback window did not open');
@@ -240,27 +260,55 @@ try {
   report.discordEncoder = { packets: decoded.length, peak, bytes: bytes.length };
   assert.ok(report.discordEncoder.peak > 100);
   report.mediaEffects.opus = { ...report.discordEncoder, passed: true };
-  // Exercise the actual timed AudioContext playback and capture its long 880-Hz third beep.
-  const hourlyConfig = (await call(page, 'state')).config; hourlyConfig.hourly.output = 'local'; hourlyConfig.hourly.enabled = false; hourlyConfig.hourly.servers=[];
+  // Exercise the actual timed AudioContext playback and capture its long 880-Hz fourth beep.
+  const hourlyConfig = (await call(page, 'state')).config; hourlyConfig.hourly.output = 'both'; hourlyConfig.hourly.enabled = false; hourlyConfig.hourly.servers=[];
   await call(page, 'config:save', hourlyConfig);
   await application.evaluate(async () => {
     const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'hourly';
-    await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+    probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
   });
   const clockTask = call(page, 'hourly:test', {}); clockTask.catch(() => {}); let targetAt;
   const clockUntil = Date.now() + 20000;
   while (Date.now() < clockUntil) {
-    const active = (await call(page, 'state')).hourly.active; if (active) { targetAt = active.thirdAt; break; }
+    const active = (await call(page, 'state')).hourly.active; if (active) { targetAt = active.fourthAt; break; }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   await clockTask;
   const clockMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.hourly);
-  assert.ok(targetAt && clockMetrics?.thirdToneAt && clockMetrics.nonSilentSamples > 4800, 'The real timed chime did not produce the third tone');
-  report.hourly = { ...clockMetrics, targetAt, measuredCaptureDelayMs: clockMetrics.thirdToneAt - targetAt };
-  assert.ok(Math.abs(report.hourly.measuredCaptureDelayMs) < 750, 'The third tone was not aligned with the scheduled PC hour');
+  assert.ok(targetAt && clockMetrics?.fourthToneAt && clockMetrics.nonSilentSamples > 4800, 'The real timed chime did not produce the fourth tone');
+  report.hourly = { ...clockMetrics, targetAt, measuredCaptureDelayMs: clockMetrics.fourthToneAt - targetAt };
+  assert.ok(Math.abs(report.hourly.measuredCaptureDelayMs) < 750, 'The fourth tone was not aligned with the scheduled PC hour');
   const clockPcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks.hourly.slice(-250))]));
   report.hourly.discordEncoder = await encodedAudio(clockPcm); assert.ok(report.hourly.discordEncoder.nonSilentSamples > 4800);
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  // Actual Opus receiver -> IPC -> local worklet -> captured PC audio, with a
+  // simulated Discord receiver (no Bot credential or real VC is used here).
+  const monitorConfig = (await call(page, 'state')).config;
+  monitorConfig.bot.bindings.push({ guildId: '99998', voiceChannelId: '33333', textChannelIds: [] });
+  monitorConfig.desktop.voiceMonitorGuildId = '99998'; monitorConfig.desktop.voiceMonitorVolume = 0.65;
+  monitorConfig.desktop.outputDevice = 'unavailable-speaker-verification';
+  await call(page, 'config:save', monitorConfig); await call(page, 'voice:join', '99998');
+  await application.evaluate(async () => {
+    const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'voice-monitor'; probe.capture = true;
+    await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+    globalThis.nyanMonitorFixture.speaking.emit('start', '99999'); globalThis.nyanMonitorFixture.speaking.emit('start', '44444');
+  });
+  const monitorEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO), monitorPcm = wav.subarray(44), monitorPackets = [];
+  try { for (let i = 0; i < 100; i++) { const offset = i * 3840 % (Math.floor(monitorPcm.length / 3840) * 3840); monitorPackets.push([...monitorEncoder.encode(monitorPcm.subarray(offset, offset + 3840), 960)]); } } finally { monitorEncoder.delete(); }
+  const voiceResult = await application.evaluate(async (_electron, packets) => {
+    const fixture = globalThis.nyanMonitorFixture;
+    for (const packet of packets) { fixture.streams.get('44444').write(Buffer.from(packet)); await new Promise(resolve => setTimeout(resolve, 20)); }
+    await new Promise(resolve => setTimeout(resolve, 300));
+    return { selfExcluded: !fixture.streams.has('99999'), receivedUsers: fixture.streams.size, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'] };
+  }, monitorPackets);
+  assert.equal(voiceResult.selfExcluded, true); assert.ok(voiceResult.metrics.nonSilentSamples > 1000);
+  await page.locator('[data-view="settings"]').click(); await page.screenshot({ path: join(reports, 'voice-monitor-settings.png'), fullPage: true });
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  const speakerState = await call(page, 'state'); assert.equal(speakerState.config.desktop.outputDevice, 'unavailable-speaker-verification');
+  assert.ok(speakerState.logs.some(log => log.text.includes('指定のスピーカーが利用できない')));
+  report.voiceMonitor = { ...voiceResult, deviceConfigSaved: true, unavailableDeviceFallback: true, passed: true };
+  await call(page, 'voice:leave', '99998');
+  const cleanConfig = (await call(page, 'state')).config; cleanConfig.desktop.voiceMonitorGuildId = ''; cleanConfig.desktop.outputDevice = ''; cleanConfig.bot.bindings = []; await call(page, 'config:save', cleanConfig);
   if (monitor) {
     monitor.kill(); await once(monitor, 'close'); monitor = null;
     const output = Buffer.concat(monitorChunks); let outputPeak = 0;
@@ -268,6 +316,7 @@ try {
     report.pcOutput = { bytes: output.length, peak: outputPeak, virtualOutputDevice: true };
     assert.ok(outputPeak > 100, 'PC output device received no audible samples');
   }
+  report.localFallback = { speech: true, media: true, hourly: true, botInVC: false, passed: true };
   report.passed = true;
   report.liveMedia = [];
   // Public sites can require login, consent or block hosted CI. Record failures explicitly.
@@ -284,7 +333,7 @@ try {
         const until = Date.now() + 180000;
         while (Date.now() < until) {
           const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
-          if (target) { probe.target = target; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+          if (target) { probe.target = target; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         throw new Error('Playback window did not open');

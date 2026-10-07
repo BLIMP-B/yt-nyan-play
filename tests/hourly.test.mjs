@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { GainEnvelope, hourlyProgram, threePointPcm, pcmWav, nextHour } from '../apps/desktop/core/hourly-audio.mjs';
-import { SmallWordModel, lexicalTokens, tokenizer, generateSlm } from '../apps/desktop/core/hourly-language.mjs';
+import { GainEnvelope, hourlyProgram, fourPointPcm, pcmWav, nextHour } from '../apps/desktop/core/hourly-audio.mjs';
+import { SmallWordModel, lexicalTokens, tokenizer, generateSlm, withNoda } from '../apps/desktop/core/hourly-language.mjs';
 import { HourlyHistory } from '../apps/desktop/runtime/hourly-history.mjs';
 import { HourlyRuntime } from '../apps/desktop/runtime/hourly.mjs';
 import { PcmMixer } from '../apps/desktop/runtime/voice-output.mjs';
@@ -16,25 +16,43 @@ import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { mediaScript } from '../apps/desktop/core/media-script.mjs';
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const temp = t => { const path = mkdtempSync(join(tmpdir(), 'nyan-hourly-')); t.after(() => rmSync(path, { recursive: true, force: true })); return path; };
-test('third beep begins exactly at the selected hour regardless of announcement duration and the short beeps stay one second apart', () => {
+test('fourth beep begins exactly at the selected hour regardless of announcement duration and the three short beeps stay one second apart', () => {
   const target = new Date(2026, 9, 5, 12, 0, 0, 0).getTime();
   for (const duration of [700, 3600, 12340]) {
     const announcement = Buffer.alloc(duration * 192), program = hourlyProgram(announcement, target);
-    assert.equal(program.startAt + program.thirdOffsetMs, target); assert.equal(program.pcm.length / 192 + program.startAt, target + 1000);
+    assert.equal(program.startAt + program.fourthOffsetMs, target); assert.equal(program.pcm.length / 192 + program.startAt, target + 2000);
     const beepStart = announcement.length + 250 * 192;
-    for (const second of [0, 1, 2]) assert.ok(program.pcm.subarray(beepStart + second * 192000 + 4, beepStart + second * 192000 + 4800).some(v => v !== 0));
+    for (const second of [0, 1, 2, 3]) assert.ok(program.pcm.subarray(beepStart + second * 192000 + 4, beepStart + second * 192000 + 4800).some(v => v !== 0));
     assert.ok(program.pcm.subarray(beepStart + 100 * 192, beepStart + 1000 * 192).every(v => v === 0));
     assert.equal(pcmWav(program.pcm).readUInt32LE(40), program.pcm.length);
   }
   assert.equal(nextHour(target), target + 3600000);
 });
-test('scheduled Discord PCM waits for its wall-clock slot and keeps the third beep aligned after a delayed frame', async t => {
-  const mixer = new PcmMixer(); t.after(() => mixer.destroy()); const at = 100000, pcm = threePointPcm();
+test('scheduled Discord PCM waits for its wall-clock slot and keeps the fourth beep aligned after a delayed frame', async t => {
+  const mixer = new PcmMixer(); t.after(() => mixer.destroy()); const at = 100000, pcm = fourPointPcm();
   const finished = mixer.addSpeech(pcm, 1, undefined, at);
   assert.ok(mixer.takeFrame(at - 20).every(v => v === 0));
-  mixer.takeFrame(at); mixer.takeFrame(at + 1980);
-  const third = mixer.takeFrame(at + 2000); assert.ok(third.some(v => v !== 0));
-  assert.deepEqual(third, pcm.subarray(384000, 387840)); mixer.takeFrame(at + 2980); await finished;
+  mixer.takeFrame(at); mixer.takeFrame(at + 2980);
+  const fourth = mixer.takeFrame(at + 3000); assert.ok(fourth.some(v => v !== 0));
+  assert.deepEqual(fourth, pcm.subarray(576000, 579840)); mixer.takeFrame(at + 4980); await finished;
+});
+test('fourth tone lasts two seconds with an 800-ms release and sentences end with one のだ', () => {
+  const pcm = fourPointPcm(); assert.equal(pcm.length / 192, 5000);
+  const peak = (start, duration) => { let peak = 0; const bytes = pcm.subarray(start * 192, (start + duration) * 192); for (let i = 0; i < bytes.length; i += 2) peak = Math.max(peak, Math.abs(bytes.readInt16LE(i))); return peak; };
+  assert.ok(peak(4180, 20) > 8900); assert.ok(peak(4590, 20) > 4300 && peak(4590, 20) < 4700); assert.ok(peak(4980, 20) < 250);
+  assert.equal(withNoda('猫は時計を運ぶ。'), '猫は時計を運ぶのだ。'); assert.equal(withNoda('猫は時計を運ぶのだ。'), '猫は時計を運ぶのだ。');
+});
+test('both mode plays common and custom chimes locally without a VC and prepares muted BGM/synthesis before the common audio ends', async t => {
+  const c = normalizeConfig({ hourly: { output: 'both', servers: [{ guildId: '11111', channelIds: ['22222'], enabled: true, bgm: true }] } });
+  let time = 100000, finishChime, notifyReady; const ready = new Promise(resolve => { notifyReady = resolve; }); const events = [];
+  const handlers = { targets: () => [], reserve: () => () => {}, hold: () => {}, fadeMedia: () => {}, log: () => {}, history: { model: async () => new SmallWordModel() }, model: { start: async () => {} }, generate: async () => { events.push('generate'); return { text: '猫は時計を運ぶ。', nouns: ['猫', '時計'] }; },
+    synthesize: async text => { events.push(text); notifyReady(); return Buffer.alloc(700 * 192); },
+    background: async () => { events.push('bgm-ready'); return { start: () => events.push('bgm-start'), stop: async () => events.push('bgm-stop'), fade: async () => {} }; },
+    play: async (_pcm, _targets, _signal, startAt) => { if (startAt) { events.push('chime'); await new Promise(resolve => { finishChime = resolve; }); events.push('chime-end'); } else events.push('custom'); } };
+  const runtime = new HourlyRuntime(temp(t), () => c, handlers, { now: () => time, delay: async ms => { time += ms; await turn(); } });
+  const task = runtime.execute({ ...hourlyProgram(Buffer.alloc(700 * 192), time + 4000), text: '時報' }, { test: true });
+  await ready; await turn(); assert.ok(events.includes('bgm-ready')); assert.ok(events.includes('猫は時計を運ぶのだ。')); assert.equal(events.includes('bgm-start'), false); assert.equal(events.includes('custom'), false);
+  finishChime(); await task; assert.ok(events.indexOf('generate') < events.indexOf('chime-end')); assert.ok(events.indexOf('bgm-start') > events.indexOf('chime-end')); assert.ok(events.indexOf('custom') > events.indexOf('chime-end')); runtime.close();
 });
 test('clock reservations preempt active speech including stop announcements, preserve waiting items and release per-server independently', async t => {
   const store = new Store(temp(t)), started = [];
@@ -80,8 +98,8 @@ test('all selected channel history is paginated, persisted, updated, deleted and
 test('the local SLM receives words, produces a subject and predicate, and supplies two nouns actually present in its output', async () => {
   const analyzer = await tokenizer(), model = new SmallWordModel(() => 0); model.train(lexicalTokens('猫が時計を眺める。', analyzer));
   let body;
-  const result = await generateSlm(model, normalizeConfig().hourly, undefined, async (url, options) => { assert.equal(url.hostname, '127.0.0.1'); body = JSON.parse(options.body); return new Response(JSON.stringify({ response: JSON.stringify({ subject: '猫', object: '時計', verb: '眺める', adjective: '' }) })); });
-  assert.equal(body.model, 'qwen3:0.6b'); assert.equal(body.think, false); assert.deepEqual(result.nouns, ['猫', '時計']); assert.equal(result.text, '猫は、時計を眺める。');
+  const result = await generateSlm(model, normalizeConfig({ hourly: { sentenceStyle: 'brief' } }).hourly, undefined, async (url, options) => { assert.equal(url.hostname, '127.0.0.1'); body = JSON.parse(options.body); return new Response(JSON.stringify({ response: JSON.stringify({ subject: '猫', object: '時計', verb: '眺める', adjective: '' }) })); });
+  assert.equal(body.model, 'qwen3:0.6b'); assert.equal(body.think, false); assert.deepEqual(result.nouns, ['猫', '時計']); assert.equal(result.text, '猫は、時計を眺めるのだ。');
   await assert.rejects(generateSlm(model, normalizeConfig().hourly, undefined, async () => new Response(JSON.stringify({ response: '{"text":"猫と時計。"}' }))), /主語・述語/);
   assert.throws(() => normalizeConfig({ hourly: { slmUrl: 'https://example.com' } }), /PC内/);
 });

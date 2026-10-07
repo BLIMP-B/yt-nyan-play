@@ -83,6 +83,11 @@ test('automatic audio cannot reopen an empty VC; other guild listeners cannot sa
   const c = normalizeConfig({ bot: { bindings: [{ guildId: '11111', voiceChannelId: '33333', textChannelIds: [] }] } }), output = new VoiceOutput(() => client, () => c, () => {});
   await assert.rejects(output.connect('11111'), /人がいる/); assert.equal(output.connections.size, 0);
 });
+test('selecting a PC monitor joins its occupied VC even with autoJoin disabled, and autoLeave still removes it', async t => {
+  const s = setup(t), g = s.guild('11111', '33333', 1); s.store.config.bot.autoJoin = false; s.store.config.desktop.voiceMonitorGuildId = '11111';
+  await s.bot.reconcileVoices(); assert.deepEqual(s.joined, ['11111']);
+  g.voiceStates.cache.clear(); g.channels.cache.get('33333').members.clear(); await s.bot.reconcileVoices(); assert.deepEqual(s.left, ['11111']);
+});
 test('leaving one VC detaches its scheduled chime while the other guild continues; global cancellation still propagates', async () => {
   const output = new VoiceOutput(() => null, () => normalizeConfig(), () => {}), finished = new Map();
   output.connect = async guildId => ({ mixer: { addSpeech: (_pcm, _volume, signal) => new Promise((resolve, reject) => { finished.set(guildId, resolve); signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }) } });

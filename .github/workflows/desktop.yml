@@ -167,6 +167,8 @@ jobs:
       - run: npm ci
       - name: Verify managed local SLM and real Japanese generation
         run: npm run verify:hourly-model
+      - name: Measure generation, YouTube search and player preparation on Windows
+        run: node scripts/verify-hourly-timing.mjs dist/hourly-model-verification/model-report.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

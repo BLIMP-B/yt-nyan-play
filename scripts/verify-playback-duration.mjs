@@ -39,7 +39,7 @@ try {
   const call = async (action, data) => { const r = await page.evaluate(async ({action,data}) => window.nyan.invoke(action,data),{action,data}); assert.equal(r.ok,true,r.error); return r.value; };
   await application.evaluate(async ({BrowserWindow,ipcMain,session,net}, video) => {
     const probe = globalThis.nyanLongProbe; probe.ui = BrowserWindow.getAllWindows()[0];
-    probe.ui.webContents.session.setDisplayMediaRequestHandler((request, callback) => { const target = probe.window; if (request.frame !== probe.ui.webContents.mainFrame || !target || target.isDestroyed()) return callback({}); callback({video: target.webContents.mainFrame, audio: target.webContents.mainFrame, enableLocalEcho:true}); });
+
     probe.ui.webContents.session.setPermissionRequestHandler((web,p,callback) => callback(web === probe.ui.webContents && ['media','display-capture'].includes(p)));
     ipcMain.on('nyan:pcm',(event,id,bytes) => {
       if(event.sender !== probe.ui.webContents || !probe.metrics[id]) return;
@@ -74,7 +74,7 @@ try {
       const windowId = await application.evaluate(async (_electron,{id,previous}) => {
         const probe = globalThis.nyanLongProbe, target = probe.browsers.get(id)?.window;
         if(!target || target.isDestroyed() || target.id===previous || !target.webContents.getURL()) return previous;
-        probe.window=target; await probe.ui.webContents.executeJavaScript('window.nyanCapture('+JSON.stringify({type:'capture:start',id})+')',true); return target.id;
+        return target.id;
       },{id:fixture.id,previous:fixture.windowIds.at(-1)||0});
       if(windowId && windowId!==fixture.windowIds.at(-1)) fixture.windowIds.push(windowId);
     }

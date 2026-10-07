@@ -65,6 +65,6 @@ test('old configurations gain safe limits and invalid history settings are rejec
 test('SLM sentence validation uses the asynchronous history worker with cancellation propagated', async t => {
   const f=fixture(t,{length:50}),h=f.open(),controller=new AbortController(); await h.sync();
   const model=await h.model(f.config.hourly.servers[0],1000); let analyzed=false;
-  const result=await generateSlm(model,f.config.hourly,controller.signal,async()=>new Response(JSON.stringify({response:JSON.stringify({subject:'猫',object:'時計',verb:'眺める',adjective:''})})),(text,signal)=>{assert.equal(signal,controller.signal);analyzed=true;return h.tokens(text,signal);});
+  const result=await generateSlm(model,{...f.config.hourly,sentenceStyle:'brief'},controller.signal,async()=>new Response(JSON.stringify({response:JSON.stringify({subject:'猫',object:'時計',verb:'眺める',adjective:''})})),(text,signal)=>{assert.equal(signal,controller.signal);analyzed=true;return h.tokens(text,signal);});
   assert.equal(analyzed,true); assert.deepEqual(result.nouns.sort(),['時計','猫']);
 });

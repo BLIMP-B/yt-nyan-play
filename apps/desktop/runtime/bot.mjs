@@ -57,7 +57,7 @@ export class DiscordBot {
       let occupied = hasHumanListeners(guild, binding.voiceChannelId);
       if (occupied === null && transition) occupied = hasHumanListeners(guild, binding.voiceChannelId, transition);
       if (occupied === false && c.bot.autoLeave) await this.handlers.leave(guildId, { automatic: true });
-      else if (occupied && c.bot.autoJoin) await this.handlers.join(guildId, { automatic: true });
+      else if (occupied && (c.bot.autoJoin || c.desktop.voiceMonitorGuildId === guildId)) await this.handlers.join(guildId, { automatic: true });
       if (this.client === client) this.store.emit('change');
     });
     this.voiceTasks.set(guildId, task);
@@ -179,7 +179,7 @@ export class DiscordBot {
       return;
     }
     if (next.member?.user.bot) return;
-    if (c.bot.autoJoin || c.bot.autoLeave) await this.reconcileVoice(binding.guildId, { previous, next });
+    if (c.bot.autoJoin || c.bot.autoLeave || c.desktop.voiceMonitorGuildId === binding.guildId) await this.reconcileVoice(binding.guildId, { previous, next });
     if (c.speech.enabled && (binding.announceJoinLeave ?? c.bot.announceJoinLeave) && next.member && !c.speech.ignoredUserIds.includes(next.id) && [previous.channelId, next.channelId].includes(binding.voiceChannelId)) {
       const template = !previous.channelId ? c.speech.joinTemplate : !next.channelId ? c.speech.leaveTemplate : c.speech.moveTemplate;
       const text = formatTemplate(template, { nickname: next.member.displayName, username: next.member.user.username, server: next.guild.name,

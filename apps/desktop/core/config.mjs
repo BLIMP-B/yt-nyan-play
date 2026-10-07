@@ -1,12 +1,13 @@
 import { isIP } from 'node:net';
 import { DEFAULT_EQUALIZER, DEFAULT_COMPRESSOR, EQ_PRESETS, COMPRESSOR_PRESETS, effectPreset } from './media-effects-settings.mjs';
+import { SENTENCE_PRESETS } from './hourly-sentence.mjs';
 
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
-  desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light' },
+  desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light', outputDevice: '', voiceMonitorGuildId: '', voiceMonitorVolume: 0.8 },
   android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720 },
   hourly: { enabled: false, output: 'discord', volume: 0.8, mediaGain: 0.15, fadeMs: 1000, bgmVolume: 0.18, bgmFadeInMs: 3000, bgmFadeOutMs: 3000,
-    slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60,
+    slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60, sentenceStyle: 'random', sentenceMaxChars: 200,
     historySyncMessages: 500, historyPageDelayMs: 500, historyCorpusMessages: 2000, servers: [] },
   twitter: { accounts: [], clientId: '', callbackPort: 11488, pollSeconds: 60, readRetweets: true, readReplies: true, readExisting: false, guildId: '' },
   bot: {
@@ -60,6 +61,8 @@ const strings = (value, label, ids = false) => {
 };
 export function normalizeConfig(patch) {
   const c = mergeKnown(DEFAULT_CONFIG, patch);
+  if (!Object.hasOwn(patch?.desktop || {}, 'outputDevice')) c.desktop.outputDevice = patch?.speech?.outputDevice || '';
+  c.speech.outputDevice = c.desktop.outputDevice; // Preserve old settings/backups.
   c.schemaVersion = 1;
   for (const group of ['desktop', 'bot', 'speech', 'media', 'android', 'twitter', 'hourly']) {
     for (const [key, value] of Object.entries(DEFAULT_CONFIG[group])) {
@@ -68,6 +71,8 @@ export function normalizeConfig(patch) {
     }
   }
   if (!['light', 'dark'].includes(c.desktop.theme)) fail('配色');
+  if (c.desktop.voiceMonitorGuildId && !/^\d{5,22}$/.test(c.desktop.voiceMonitorGuildId)) fail('通話音声を聞くサーバー');
+  number(c.desktop.voiceMonitorVolume, 0, 1, 'PCの通話音量');
   if (!/^system-images;android-\d{2,3};google_apis_playstore;x86_64$/.test(c.android.image) || !/^[a-zA-Z0-9_-]{1,40}$/.test(c.android.avdName)) fail('Android端末・イメージ');
   number(c.android.port, 5554, 5682, 'Emulatorポート', true); if (c.android.port % 2) fail('Emulatorポートは偶数');
   number(c.android.ramMb, 1024, 8192, 'Androidメモリ', true); if (!['auto', 'software'].includes(c.android.gpu)) fail('Android描画');
@@ -77,6 +82,8 @@ export function normalizeConfig(patch) {
   for (const key of ['bgmFadeInMs', 'bgmFadeOutMs']) number(c.hourly[key], 0, 30000, 'BGMフェード時間', true);
   number(c.hourly.historySyncMessages, 50, 2000, '1回の履歴取得件数', true); number(c.hourly.historyPageDelayMs, 200, 5000, '履歴取得の間隔', true); number(c.hourly.historyCorpusMessages, 100, 10000, '文章生成に使う履歴件数', true);
   if (!['local', 'discord', 'both'].includes(c.hourly.output) || !['auto', 'live', 'daily'].includes(c.hourly.generationMode)) fail('時報出力・生成方法');
+  if (c.hourly.sentenceStyle !== 'random' && !Object.hasOwn(SENTENCE_PRESETS, c.hourly.sentenceStyle)) fail('時報の文体');
+  number(c.hourly.sentenceMaxChars, 40, 200, '時報の生成文の文字数上限', true);
   const slm = new URL(c.hourly.slmUrl);
   if (slm.protocol !== 'http:' || !['127.0.0.1', '[::1]', 'localhost'].includes(slm.hostname) || slm.username || slm.password || slm.search || slm.hash || slm.pathname !== '/') fail('PC内のSLM URL');
   if (!/^[a-zA-Z0-9_./:-]{1,150}$/.test(c.hourly.slmModel)) fail('SLMモデル名');

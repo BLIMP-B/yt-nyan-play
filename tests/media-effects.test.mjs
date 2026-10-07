@@ -80,7 +80,7 @@ test('mixer applies effects before media ducking/fades and background fade; spee
 test('saving updates all active guilds without reconnecting or resetting unchanged effects', () => {
   let config = normalizeConfig(); const output = new VoiceOutput(() => null, () => config, () => {}), mixers = [new PcmMixer(), new PcmMixer()];
   try {
-    mixers.forEach((mixer, i) => output.connections.set(String(i), { mixer })); output.updateSettings(); assert.ok(mixers.every(m => !m.mediaEffects.active));
+    mixers.forEach((mixer, i) => output.connections.set(String(i), { mixer, connection: { joinConfig: { selfDeaf: true } } })); output.updateSettings(); assert.ok(mixers.every(m => !m.mediaEffects.active));
     config = normalizeConfig({ media: { equalizer: { enabled: true, preset: 'bassCut' }, compressor: { enabled: true, preset: 'gentle' } } }); output.updateSettings();
     assert.ok(mixers.every(m => m.mediaEffects.active && m.backgroundEffects.active));
     const filters = mixers[0].mediaEffects.filters; output.updateSettings(); assert.equal(filters, mixers[0].mediaEffects.filters);

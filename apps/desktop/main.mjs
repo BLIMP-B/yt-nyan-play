@@ -15,6 +15,7 @@ import { HourlyRuntime } from './runtime/hourly.mjs';
 import { HourlyHistory } from './runtime/hourly-history.mjs';
 import { HourlyModel } from './runtime/hourly-model.mjs';
 import { searchHourlyBgm } from './runtime/hourly-bgm.mjs';
+import { hourlyBgmChoice } from './core/hourly-bgm-history.mjs';
 import { pcmWav } from './core/hourly-audio.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
 import { MediaAccounts } from './runtime/media-accounts.mjs';
@@ -30,7 +31,7 @@ import { AndroidRuntime } from './runtime/android.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
 import { MediaPool } from './core/media-pool.mjs';
 import { speechTargets, prepareSpeech, prepareNativeText } from './core/text.mjs';
-import { resolveDestination } from './core/destination.mjs';
+import { resolveDestination, outputTargets, discordOutput } from './core/destination.mjs';
 import { AudioBridge } from './runtime/audio-bridge.mjs';
 import { browserUserAgent } from './core/browser-user-agent.mjs';
 import { MediaStreamResolver } from './runtime/media-streams.mjs';
@@ -57,7 +58,7 @@ else {
   };
   const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
-    voices: voice.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })), accountLink: accounts.snapshot(),
+    voices: voice.snapshot(), voiceMonitor: voice.monitor.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })), accountLink: accounts.snapshot(),
     paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot(),
     hourly: hourly ? { ...hourly.snapshot(), history: hourlyHistory.snapshot(), model: hourlyModel.snapshot() } : null });
   const audioCommand = (...args) => audioBridge.command(...args);
@@ -67,8 +68,8 @@ else {
     if (name === 'stop') { speechRunner.clear(guildId); media.clear(guildId); }
   };
   function leaveVoice(guildId) {
-    if (getConfig().speech.output !== 'local') speechRunner?.clear(guildId); voice?.interruptSpeech(guildId);
-    if (getConfig().media.output !== 'local' && media?.lanes.has(guildId)) media.clear(guildId);
+    if (getConfig().speech.output === 'discord') speechRunner?.clear(guildId); voice?.interruptSpeech(guildId);
+    if (getConfig().media.output === 'discord' && media?.lanes.has(guildId)) media.clear(guildId);
     voice?.disconnect(guildId); emitState();
   }
   async function stopRequested({ guildId, master }) {
@@ -92,7 +93,7 @@ else {
     if (hourlyHistory.syncing) return;
     void hourlyHistory.sync(historyController.signal).catch(error => { if (error.name !== 'AbortError') store.log('warn', `時報履歴: ${error.message}`); });
   }
-  function stopBot() { hourly?.cancel(); historyController?.abort(); historyController = null; speechRunner?.pause(true); speechRunner?.halt(true); media?.pause(true); media?.skip(); bot?.stop(); }
+  function stopBot() { if (getConfig().hourly.output === 'discord') hourly?.cancel(); historyController?.abort(); historyController = null; if (getConfig().speech.output === 'discord') { speechRunner?.pause(true); speechRunner?.halt(true); } if (getConfig().media.output === 'discord') { media?.pause(true); media?.skip(); } bot?.stop(); }
   async function action(name, data) {
     if (name === 'state') return snapshot();
     if (name === 'config:save') {
@@ -130,14 +131,14 @@ else {
       const c = getConfig(), guildId = String(data.guildId || '');
       const text = prepareSpeech({ content: data.text, guildId, userId: '' }, { ...c, speech: { ...c.speech, readNames: false } });
       const payload = resolveDestination({ text, guildId, userId: '', styleId: Number(data.styleId ?? c.speech.styleId) }, c.speech.output, c.bot.bindings, voice.snapshot());
-      if (getConfig().speech.output !== 'local') await voice.connect(payload.guildId);
+      if (getConfig().speech.output === 'discord') await voice.connect(payload.guildId);
       return speechRunner.enqueue(payload);
     }
     if (name === 'media:add') {
       const command = parseMediaCommand(`${String(data?.url || '')}${{ preview: '再生', full: '無限', direct: '直接' }[data?.mode] || (data?.loop ? '無限' : '再生')}`, getConfig());
       if (!command) throw new Error('再生URLを入力してください');
       const payload = resolveDestination({ ...command, master: data?.master === true, guildId: String(data.guildId || ''), startSeconds: Math.max(0, Math.min(86400, Number(data.startSeconds) || command.startSeconds)), title: command.title }, getConfig().media.output, getConfig().bot.bindings, voice.snapshot());
-      if (getConfig().media.output !== 'local' && !payload.master) await voice.connect(payload.guildId);
+      if (getConfig().media.output === 'discord' && !payload.master) await voice.connect(payload.guildId);
       return media.enqueue(payload, { interrupt: true });
     }
     if (name === 'control') { if (!['pause', 'resume', 'skip', 'stop'].includes(data)) throw new Error('未対応の操作です'); control(data); return snapshot(); }
@@ -223,15 +224,17 @@ else {
       ready: () => syncHourlyHistory(),
       history: message => hourlyHistory?.record(message), historyDelete: id => hourlyHistory?.deleted(id),
     });
-    voice = new VoiceOutput(() => bot.client, getConfig, (l, t) => store.log(l, t));
+    voice = new VoiceOutput(() => bot.client, getConfig, (l, t) => store.log(l, t), { changed: emitState, monitorSend: message => { if (window && !window.isDestroyed()) window.webContents.send('nyan:voice-monitor', message); } });
     const createBrowser = (scope, bed = false) => {
       let browser;
       const browserConfig = bed ? () => ({ ...getConfig(), media: { ...getConfig().media, output: getConfig().hourly.output, volume: getConfig().hourly.bgmVolume, showWindow: false } }) : getConfig;
       browser = new MediaBrowser(browserConfig, {
         changed: emitState,
+        played: job => { if (store.jobs.some(j => j.id === job.id)) store.changeJob(job.id, { mediaStartedAt: new Date().toISOString() }); },
         captureError: id => {
           const capture = captures.get(id); if (!capture) return;
           if (capture.error) return capture.error;
+          if (capture.output !== 'discord') return;
           if (!capture.master && !voice.connections.has(capture.guildId)) return 'Discordの音声接続が終了しました。再試行すると再接続します';
           if (capture.master && !voice.connections.size) return 'マスタ再生の送信先VCがありません';
         },
@@ -239,11 +242,12 @@ else {
           const master = scope === 'master';
           captureChain = captureChain.catch(() => {}).then(async () => {
             signal.throwIfAborted();
-            if (bed) await voice.beginBackground(guildId);
-            else if (master) { for (const key of [...voice.connections.keys()]) { voice.endMedia(key); await voice.beginMedia(key); } } else await voice.beginMedia(guildId);
+            const output = browserConfig().media.output;
+            const targets = outputTargets(output, master ? [...voice.connections.keys()] : [guildId], voice.snapshot());
+            for (const key of targets) await discordOutput(output, async () => { if (bed) await voice.beginBackground(key); else { voice.endMedia(key); await voice.beginMedia(key); } }, signal, (l, t) => store.log(l, t));
             signal.throwIfAborted();
             captures.set(id, { guildId, master, bed, output: browserConfig().media.output, window: browser.window }); captureRequest = id;
-            try { await audioCommand('capture:start', { id }, signal, 20000); }
+            try { await audioCommand('capture:start', { id, local: output !== 'discord', device: getConfig().desktop.outputDevice }, signal, 20000); }
             catch (e) { captures.delete(id); window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (bed) voice.endBackground(guildId); else if (master) for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); throw e; }
             finally { captureRequest = null; }
           }); return captureChain;
@@ -264,20 +268,23 @@ else {
         settings = nativeSpeechDefaults(settings, inspectBouyomi(bouyomi.directory).settings, pending);
       }
       if (job.payload.privateOwnerId) { await twitter.userSession(); if (twitter.owner()?.id !== job.payload.privateOwnerId) throw new Error('非公開投稿は本人のXログイン中だけ読み上げます'); }
-      const targets = job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
-      if (settings.output !== 'local' && !targets.length) throw new Error('Discordへの読み上げにはサーバーを選択し、マスタ再生にはVCへ接続してください');
-      if (settings.output !== 'local') await Promise.all(targets.map(id => voice.connect(id)));
-      if (settings.provider === 'bouyomi') { if (settings.output !== 'local') throw new Error('棒読みちゃん出力はローカル再生です。Discord音声にはVOICEVOXを選んでください'); await bouyomiSpeak(job.payload.text, settings, signal); return; }
+      const candidates = job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
+      const targets = outputTargets(settings.output, candidates, voice.snapshot());
+      if (settings.output === 'discord' && !targets.length) throw new Error('Discordへの読み上げにはサーバーを選択し、マスタ再生にはVCへ接続してください');
+      if (settings.output === 'discord') await Promise.all(targets.map(id => voice.connect(id)));
+      if (settings.provider === 'bouyomi') { if (settings.output === 'discord' || targets.length) throw new Error('棒読みちゃん出力はローカル再生です。Discord音声にはVOICEVOXを選んでください'); await bouyomiSpeak(job.payload.text, settings, signal); return; }
       const output = async (text, outputSettings, outputJobSignal, clipPath) => {
       const audio = clipPath ? readFileSync(clipPath) : await new Voicevox(outputSettings.engineUrl).synthesize(text, outputSettings, outputJobSignal);
       if (audio.length > 30 * 1024 * 1024) throw new Error('音声クリップが大きすぎます');
-      for (const target of targets.length ? targets : ['']) media.setDucked(true, target);
+      const duckTargets = new Set([...candidates, ...targets, ...(settings.output !== 'discord' ? [...media.lanes.keys()] : [])]);
+      if (!duckTargets.size) duckTargets.add('');
+      for (const target of duckTargets) media.setDucked(true, target);
       const outputController = new AbortController(); const outputSignal = AbortSignal.any([outputJobSignal, outputController.signal]); const outputs = [];
       try {
-        if (outputSettings.output !== 'discord') outputs.push(audioCommand('play', { bytes: audio, volume: outputSettings.volume, device: outputSettings.outputDevice }, outputSignal));
-        if (outputSettings.output !== 'local') for (const target of targets) outputs.push(voice.speech(target, audio, outputSettings.volume, outputSignal, job.payload.priority || 0));
+        if (outputSettings.output !== 'discord') outputs.push(audioCommand('play', { bytes: audio, volume: outputSettings.volume, device: c.desktop.outputDevice }, outputSignal));
+        for (const target of outputTargets(outputSettings.output, targets, voice.snapshot())) outputs.push(discordOutput(outputSettings.output, () => voice.speech(target, audio, outputSettings.volume, outputSignal, job.payload.priority || 0), outputSignal, (l, t) => store.log(l, t)));
         await Promise.all(outputs);
-      } catch (e) { outputController.abort(); await Promise.allSettled(outputs); throw e; } finally { for (const target of targets.length ? targets : ['']) media.setDucked(false, target); }
+      } catch (e) { outputController.abort(); await Promise.allSettled(outputs); throw e; } finally { for (const target of duckTargets) media.setDucked(false, target); }
       };
       if (settings.bouyomiPreprocess && !job.payload.system && !job.payload.literal && !job.payload.clipPath) {
         if (bouyomi.child) throw new Error('辞書への同時書き込みを防ぐため元アプリを終了してください');
@@ -306,12 +313,12 @@ else {
       fadeMedia: (gain, ms, scope) => { media.fadeOverlay(gain, ms, scope); for (const id of voice.connections.keys()) voice.fadeMedia(id, Math.min(media.overlayGains.get('*') ?? 1, media.overlayGains.get(id) ?? 1), ms); },
       play: async (pcm, targets, signal, startAt = 0) => {
         const c = getConfig(); const outputs = []; const controller = new AbortController(), outputSignal = AbortSignal.any([signal, controller.signal]);
-        if (c.hourly.output !== 'discord') outputs.push(audioCommand('play:timed', { bytes: pcmWav(pcm), volume: c.hourly.volume, device: c.speech.outputDevice, startAt: startAt || Date.now() }, outputSignal));
-        if (c.hourly.output !== 'local') for (const id of targets) outputs.push(voice.pcm(id, pcm, c.hourly.volume, outputSignal, startAt));
+        if (c.hourly.output !== 'discord') outputs.push(audioCommand(startAt ? 'play:timed' : 'play', { bytes: pcmWav(pcm), volume: c.hourly.volume, device: c.desktop.outputDevice, ...(startAt ? { startAt } : {}) }, outputSignal));
+        for (const id of outputTargets(c.hourly.output, targets, voice.snapshot())) outputs.push(discordOutput(c.hourly.output, () => voice.pcm(id, pcm, c.hourly.volume, outputSignal, startAt), outputSignal, (l, t) => store.log(l, t)));
         try { await Promise.all(outputs); } catch (error) { controller.abort(); await Promise.allSettled(outputs); throw error; }
       },
       background: async (nouns, guildId, signal) => {
-        const found = await searchHourlyBgm(nouns, getConfig, signal); const browser = createBrowser(guildId, true), controller = new AbortController();
+        const found = await hourlyBgmChoice(() => searchHourlyBgm(nouns, getConfig, signal), store.jobs, signal, (l, t) => store.log(l, t)); const browser = createBrowser(guildId, true), controller = new AbortController();
         browser.setOverlayGain(0);
         const bgmSignal = AbortSignal.any([signal, controller.signal]); let error, done = false;
         const task = browser.play({ id: crypto.randomUUID(), payload: { ...found, mode: 'direct', guildId, background: true } }, bgmSignal).catch(e => { if (!bgmSignal.aborted) error = e; }).finally(() => { done = true; });
@@ -320,8 +327,8 @@ else {
           const until = Date.now() + 15000;
           while (Date.now() < until) { signal.throwIfAborted(); if (error) throw error; if (browser.status?.loginRequired) throw new Error(browser.status.blockedReason || 'YouTubeへのログインが必要です'); if (browser.status?.startedAt && browser.status.currentTime > 0) break; if (done) throw new Error('BGMが開始前に終了しました'); await new Promise(resolve => setTimeout(resolve, 100)); }
           if (!browser.status?.startedAt || !(browser.status.currentTime > 0)) throw new Error('BGMの再生開始を確認できません');
-          browser.setOverlayGain(1, getConfig().hourly.bgmFadeInMs); voice.fadeBackground(guildId, 1, getConfig().hourly.bgmFadeInMs);
-          return { stop, fade: async (ms, fadeSignal) => { browser.setOverlayGain(0, ms); voice.fadeBackground(guildId, 0, ms); await new Promise((resolve, reject) => { const timer = setTimeout(finished, ms); const abort = () => { clearTimeout(timer); fadeSignal?.removeEventListener('abort', abort); reject(fadeSignal.reason); }; function finished() { fadeSignal?.removeEventListener('abort', abort); resolve(); } fadeSignal?.addEventListener('abort', abort, { once: true }); }); } };
+          browser.setPaused(true);
+          return { start: () => { browser.setPaused(false); browser.setOverlayGain(1, getConfig().hourly.bgmFadeInMs); voice.fadeBackground(guildId, 1, getConfig().hourly.bgmFadeInMs); }, stop, fade: async (ms, fadeSignal) => { browser.setOverlayGain(0, ms); voice.fadeBackground(guildId, 0, ms); await new Promise((resolve, reject) => { const timer = setTimeout(finished, ms); const abort = () => { clearTimeout(timer); fadeSignal?.removeEventListener('abort', abort); reject(fadeSignal.reason); }; function finished() { fadeSignal?.removeEventListener('abort', abort); resolve(); } fadeSignal?.addEventListener('abort', abort, { once: true }); }); } };
         } catch (e) { await stop(); throw e; }
       },
     }); hourly.on('change', emitState);
@@ -341,18 +348,20 @@ else {
       const capture = captures.get(captureRequest);
       if (request.frame !== window.webContents.mainFrame || !capture || !capture.window || capture.window.isDestroyed()) return callback({});
       const frame = capture.window.webContents.mainFrame;
-      callback({ video: frame, audio: frame, enableLocalEcho: capture.output === 'both' });
+      callback({ video: frame, audio: frame, enableLocalEcho: false });
     });
     ipcMain.handle('nyan:action', async (event, name, data) => { if (!trusted(event)) throw new Error('操作元を確認できません'); try { return { ok: true, value: await action(name, data) }; } catch (e) { store.log('error', e.message); return { ok: false, error: e.message }; } });
     ipcMain.on('nyan:audio-result', (event, data) => {
       if (!trusted(event)) return;
+      if (data?.type === 'device:warning') { store.log('warn', '指定のスピーカーが利用できないため既定のデバイスで再生します'); return; }
+      if (data?.type === 'monitor:error') { voice.monitor.stop(String(data.error || 'PC通話モニターの再生に失敗しました').slice(0, 300)); store.log('warn', voice.monitor.error); return; }
       if (data?.type === 'capture:error' && captures.has(data.id)) captures.get(data.id).error = String(data.error || 'メディア音声の転送が停止しました').slice(0, 300);
       else audioBridge.result(data);
     });
-    ipcMain.on('nyan:pcm', (event, id, bytes) => { const capture = captures.get(id); if (!trusted(event) || !capture || !(bytes instanceof Uint8Array) || bytes.length > 32768 || bytes.length % 4) return; if (capture.bed) voice.background(capture.guildId, Buffer.from(bytes)); else if (capture.master) { for (const key of [...voice.connections.keys()]) voice.media(key, Buffer.from(bytes)); } else if (!media.masterActive) voice.media(capture.guildId, Buffer.from(bytes)); });
+    ipcMain.on('nyan:pcm', (event, id, bytes) => { const capture = captures.get(id); if (!trusted(event) || !capture || !(bytes instanceof Uint8Array) || bytes.length > 32768 || bytes.length % 4) return; if (capture.output === 'local') return; if (capture.bed) voice.background(capture.guildId, Buffer.from(bytes)); else if (capture.master) { for (const key of [...voice.connections.keys()]) voice.media(key, Buffer.from(bytes)); } else if (!media.masterActive) voice.media(capture.guildId, Buffer.from(bytes)); });
     window.on('close', event => { if (!quitting && store.config.desktop.closeToTray) { event.preventDefault(); window.hide(); } });
     window.on('closed', () => { if (!quitting) app.quit(); });
-    window.webContents.on('render-process-gone', () => audioBridge.close());
+    window.webContents.on('render-process-gone', () => { voice.monitor.stop(); audioBridge.close(); });
     store.on('change', emitState);
     store.on('change', () => { const entry = store.logs[0]; if (entry?.level === 'error' && entry !== notifiedEntry && getConfig().desktop.notifications && Date.now() - notificationAt > 15000 && Notification.isSupported()) { notificationAt = Date.now(); notifiedEntry = entry; new Notification({ title: 'にゃんとーく〜Damare〜', body: entry.text }).show(); } });
     await window.loadFile(join(directory, 'renderer/index.html'));

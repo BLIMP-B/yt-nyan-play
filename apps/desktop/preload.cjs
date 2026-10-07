@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('nyan', {
   invoke: (action, data) => ipcRenderer.invoke('nyan:action', action, data),
   subscribe: callback => subscribe('nyan:state', callback),
   onAudio: callback => subscribe('nyan:audio', callback),
+  onVoiceMonitor: callback => subscribe('nyan:voice-monitor', callback),
   onAndroidFrame: callback => subscribe('nyan:android-frame', callback),
   audioResult: data => ipcRenderer.send('nyan:audio-result', data),
   pcm: (id, bytes) => ipcRenderer.send('nyan:pcm', id, bytes),

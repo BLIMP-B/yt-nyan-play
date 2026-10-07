@@ -16,7 +16,7 @@ export class AudioBridge {
       const abort = () => finish(new DOMException('Cancelled', 'AbortError'));
       this.pending.set(id, finish); signal?.addEventListener('abort', abort, { once: true });
       try {
-        if (type === 'capture:start') window.webContents.executeJavaScript(`window.nyanCapture(${JSON.stringify({ type, id })})`, true).catch(finish);
+        if (type === 'capture:start') window.webContents.executeJavaScript(`window.nyanCapture(${JSON.stringify({ ...data, type, id })})`, true).catch(finish);
         else window.webContents.send('nyan:audio', { ...data, type, id });
       } catch (error) { finish(error); }
     });

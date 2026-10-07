@@ -5,6 +5,7 @@ import OpusScript from 'opusscript';
 import { GainEnvelope } from '../core/hourly-audio.mjs';
 import { MediaEffects } from './media-effects.mjs';
 import { hasHumanListeners } from '../core/voice-audience.mjs';
+import { VoiceMonitor } from './voice-monitor.mjs';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
   createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus,
@@ -106,7 +107,7 @@ export function decodeAudio(buffer, signal, executable = ffmpegPath) {
 }
 
 export class VoiceOutput {
-  constructor(getClient, getConfig, log) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.connections = new Map(); this.connecting = new Map(); this.connectionEpochs = new Map(); this.speechControllers = new Map(); this.pcmControllers = new Map(); this.heldSpeech = new Map(); }
+  constructor(getClient, getConfig, log, { monitorSend = () => {}, changed = () => {} } = {}) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.changed = changed; this.connections = new Map(); this.connecting = new Map(); this.connectionEpochs = new Map(); this.speechControllers = new Map(); this.pcmControllers = new Map(); this.heldSpeech = new Map(); this.monitor = new VoiceMonitor(monitorSend, changed, log); }
   async connect(guildId, overrideChannel, allowEmpty = false) {
     if (this.connecting.has(guildId)) return this.connecting.get(guildId);
     const epoch = this.connectionEpochs.get(guildId) || 0;
@@ -126,9 +127,10 @@ export class VoiceOutput {
     if (this.getClient() !== client || !client.isReady()) throw new Error('Discord接続が終了しました');
     if (!channel?.isVoiceBased() || channel.guildId !== guildId) throw new Error('指定した音声チャンネルを利用できません');
     if (!allowEmpty && this.getConfig().bot.autoLeave && hasHumanListeners(channel.guild, channelId) === false) throw new Error('人がいる音声チャンネルへ接続してください');
-    const connection = joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: true });
+    const connection = joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: this.getConfig().desktop.voiceMonitorGuildId !== guildId });
     const mixer = new PcmMixer(); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
     const entry = { connection, mixer, player, channelId }; this.connections.set(guildId, entry);
+    connection.on('stateChange', () => { this.syncMonitor(); this.changed(); });
     connection.on('error', error => this.log('error', `音声接続: ${error.message}`));
     const failed = error => {
       if (this.connections.get(guildId) !== entry) return;
@@ -150,7 +152,7 @@ export class VoiceOutput {
     if ((this.connectionEpochs.get(guildId) || 0) !== epoch || this.connections.get(guildId) !== entry) throw new DOMException('Cancelled', 'AbortError');
     try { connection.subscribe(player); player.play(createDiscordAudioResource(mixer)); }
     catch (error) { this.disconnect(guildId); throw error; }
-    return entry;
+    this.syncMonitor(); this.changed(); return entry;
   }
   async speech(guildId, buffer, volume, signal, priority = 0) {
     const controller = new AbortController(); const playbackSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -189,15 +191,20 @@ export class VoiceOutput {
   }
   async beginMedia(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); this.mediaSettings(entry.mixer, c); return entry; }
   mediaSettings(mixer, c) { mixer.configureEffects(c.media); mixer.mediaVolume = c.media.output === 'both' ? 1 : c.media.volume; mixer.ducking = c.media.output === 'both' ? 1 : c.media.ducking; mixer.duckFadeInMs = c.media.duckFadeInMs; mixer.duckFadeOutMs = c.media.duckFadeOutMs; }
-  updateSettings() { const c = this.getConfig(); for (const { mixer } of this.connections.values()) this.mediaSettings(mixer, c); }
+  updateSettings() { const c = this.getConfig(); for (const [id, { mixer, connection }] of this.connections) { this.mediaSettings(mixer, c); const selfDeaf = c.desktop.voiceMonitorGuildId !== id; if (connection.joinConfig.selfDeaf !== selfDeaf) connection.rejoin({ selfDeaf }); } this.syncMonitor(); }
+  syncMonitor() {
+    const c = this.getConfig(), guildId = c.desktop.voiceMonitorGuildId, entry = this.connections.get(guildId);
+    if (entry?.connection.state.status === VoiceConnectionStatus.Ready && c.bot.bindings.some(b => b.guildId === guildId && b.voiceChannelId === entry.channelId)) this.monitor.attach(entry, guildId, this.getClient()?.user?.id);
+    else if (this.monitor.entry) this.monitor.stop();
+  }
   media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; this.mediaSettings(entry.mixer, this.getConfig()); entry.mixer.addMedia(chunk); }
   endMedia(guildId) { this.connections.get(guildId)?.mixer.clearMedia(); }
   fadeMedia(guildId, gain, ms) { this.connections.get(guildId)?.mixer.mediaGain.fade(gain, ms); }
   async beginBackground(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.configureEffects(c.media); entry.mixer.backgroundVolume = c.hourly.output === 'both' ? 1 : c.hourly.bgmVolume; entry.mixer.backgroundGain.fade(0); entry.mixer.clearBackground(); }
-  background(guildId, bytes) { this.connections.get(guildId)?.mixer.addBackground(bytes); }
+  background(guildId, bytes) { const mixer = this.connections.get(guildId)?.mixer; if (!mixer) return; const c = this.getConfig(); mixer.configureEffects(c.media); mixer.backgroundVolume = c.hourly.output === 'both' ? 1 : c.hourly.bgmVolume; mixer.addBackground(bytes); }
   fadeBackground(guildId, gain, ms) { this.connections.get(guildId)?.mixer.backgroundGain.fade(gain, ms); }
   endBackground(guildId) { this.connections.get(guildId)?.mixer.clearBackground(); }
-  disconnect(guildId, cancelPending = true) { if (cancelPending) { this.connectionEpochs.set(guildId, (this.connectionEpochs.get(guildId) || 0) + 1); this.connecting.delete(guildId); for (const controller of this.pcmControllers.get(guildId) || []) controller.abort(); } const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); }
-  close() { for (const id of new Set([...this.connections.keys(), ...this.connecting.keys()])) this.disconnect(id); }
+  disconnect(guildId, cancelPending = true) { if (cancelPending) { this.connectionEpochs.set(guildId, (this.connectionEpochs.get(guildId) || 0) + 1); this.connecting.delete(guildId); for (const controller of this.pcmControllers.get(guildId) || []) controller.abort(); } const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); this.syncMonitor(); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); this.changed(); }
+  close() { for (const id of new Set([...this.connections.keys(), ...this.connecting.keys()])) this.disconnect(id); this.monitor.stop(); }
   snapshot() { return [...this.connections].map(([guildId, e]) => ({ guildId, channelId: e.channelId, status: e.connection.state.status })); }
 }

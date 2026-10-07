@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveDestination } from '../apps/desktop/core/destination.mjs';
+import { resolveDestination, outputTargets, discordOutput } from '../apps/desktop/core/destination.mjs';
 import { browserUserAgent } from '../apps/desktop/core/browser-user-agent.mjs';
 import { validateMediaNavigation } from '../apps/desktop/core/media-navigation.mjs';
 import { mediaAccount, MEDIA_ACCOUNTS } from '../apps/desktop/core/media-accounts.mjs';
@@ -16,6 +16,19 @@ test('service sign-in routes are explicit and auth navigation remains service-sc
   }
   assert.throws(() => mediaAccount('https://evil.test'));
   assert.throws(() => validateMediaNavigation('https://accounts.google.com:444/login', ['youtube.com'], mediaAccount('youtube').url));
+});
+test('both outputs keep PC routes without a VC or guild, including master and ambiguous configured guilds', () => {
+  for (const payload of [{}, { master: true }, { guildId: '11111' }]) assert.doesNotThrow(() => resolveDestination(payload, 'both', bindings, []));
+  assert.equal(resolveDestination({}, 'both', bindings, []).guildId, '');
+  assert.deepEqual(outputTargets('both', ['11111', '22222', ''], [{ guildId: '11111', status: 'connecting' }, { guildId: '22222', status: 'ready' }]), ['22222']);
+  assert.deepEqual(outputTargets('local', ['11111'], [{ guildId: '11111', status: 'ready' }]), []);
+  assert.deepEqual(outputTargets('discord', ['11111'], []), ['11111']);
+});
+test('Discord failures in both mode preserve local playback while explicit cancellation and Discord-only errors propagate', async () => {
+  const warnings = [], failure = async () => { throw new Error('VC disconnected'); };
+  await discordOutput('both', failure, undefined, (...args) => warnings.push(args)); assert.equal(warnings.length, 1);
+  await assert.rejects(discordOutput('discord', failure), /VC disconnected/);
+  await assert.rejects(discordOutput('both', failure, AbortSignal.abort()), /VC disconnected/);
 });
 test('YouTube playback permits official sign-in and consent while blocking unrelated and local destinations', () => {
   const hosts = ['youtube.com', 'youtu.be'];

@@ -29,8 +29,9 @@ export class MediaBrowser {
     try { window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
       icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } }); }
     catch (error) { stream?.close(); throw error; }
+    window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
-    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: c.media.output === 'discord' ? 1 : c.media.volume, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream };
+    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: c.media.output === 'discord' ? 1 : c.media.volume * this.overlayGain, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream };
     guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
@@ -42,10 +43,15 @@ export class MediaBrowser {
       const target = stream ? 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src http://127.0.0.1:*; style-src 'unsafe-inline'"><title>にゃんとーく 音声配信</title><body style="font:16px sans-serif;padding:24px;background:#202020;color:#eee"><p>${selected.audioOnly ? '音声のみの配信' : '最低画質から音声を配信'}を再生しています。</p><audio controls autoplay src="${stream.url}"></audio></body></html>`) : url;
       try { await Promise.race([window.loadURL(target, stream ? {} : loadOptions), new Promise((_, reject) => { loadingTimer = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); })]); }
       finally { clearTimeout(loadingTimer); }
-      if (c.media.output !== 'local') {
-        if (!payload.guildId && !payload.master) throw new Error('Discord送信にはサーバーと音声チャンネルを指定してください');
+      const initial = await window.webContents.executeJavaScript(mediaScript(this.playOptions), true);
+      if (!initial.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
+        try { await frame.executeJavaScript(mediaScript(this.playOptions), true); } catch {}
+      }
+      {
+        if (c.media.output === 'discord' && !payload.guildId && !payload.master) throw new Error('Discord送信にはサーバーと音声チャンネルを指定してください');
         captureStarted = true; await this.bridge.startCapture(job.id, payload.guildId, signal);
       }
+      window.webContents.setAudioMuted(false);
       const startedAt = Date.now(); let seen = false, playbackStartedAt = null, reportedBlock = '', qualityReported = false;
       while (!signal.aborted && !window.isDestroyed()) {
         const captureError = this.bridge.captureError?.(job.id);
@@ -56,7 +62,7 @@ export class MediaBrowser {
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
         }
-        if (state.found && !state.advertisement && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); }
+        if (state.found && !state.advertisement && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); this.bridge.played?.(job); }
         if (seen && !qualityReported && c.media.bandwidthSaving && !stream) { qualityReported = true; this.log(state.lowestQuality ? 'info' : 'warn', state.lowestQuality ? 'ブラウザの最低画質を指定しました' : 'このページは画質制御APIを公開していません。再生画面の画質設定をご確認ください'); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
         this.status = { ...state, title, service: mediaServiceName(url), mode, limitSeconds, startedAt: playbackStartedAt, paused: this.paused, delivery: stream ? selected.audioOnly ? 'audio-only' : 'lowest-video' : 'browser' }; this.bridge.changed();
@@ -88,7 +94,7 @@ export class MediaBrowser {
     }
     return this.play({ ...job, payload: continuation }, signal, { browserOnly: true });
   }
-  setPaused(value) { this.paused = value; }
+  setPaused(value) { this.paused = value; if (this.playOptions && this.window && !this.window.isDestroyed()) void this.window.webContents.executeJavaScript(mediaScript({ ...this.playOptions, paused: value }), true).catch(() => {}); }
   setDucked(value) { if (this.ducked === value) return; this.ducked = value; this.applyVolume(value ? this.getConfig().media.duckFadeOutMs : this.getConfig().media.duckFadeInMs); }
   applyVolume(ms) {
     this.volumeRampMs = ms;
