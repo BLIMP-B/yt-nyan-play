@@ -105,13 +105,33 @@ jobs:
           assert.equal(model.platform, 'win32');
           assert.equal(model.passed, true);
           assert.equal(model.samples.length, 3);
-          for (const sample of model.samples) assert.ok(sample.text && sample.nouns.length === 2);
+          for (const sample of model.samples) {
+            assert.ok(sample.text.endsWith('のだ。') && sample.text.length <= 200 && sample.nouns.length === 2);
+            assert.ok(sample.plan.clauseCount >= 1 && sample.plan.maxChars <= 200);
+          }
+          assert.ok(model.samples.some(sample => sample.plan.preset === 'extended' && sample.text.length >= 150));
+          assert.equal(model.timing.platform, 'win32');
+          assert.equal(model.timing.passed, true);
+          assert.equal(model.timing.searchPerformed, true);
+          assert.ok(model.timing.totalMs >= 0);
+          assert.equal(model.timing.decision, model.timing.playbackReady && model.timing.totalMs + 1000 <= model.timing.budgetMs ? 'with-chime' : 'before-chime');
           const duration = JSON.parse(readFileSync('verification/duration/duration-report.json'));
           assert.equal(duration.platform, 'win32');
           assert.equal(duration.passed, true);
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
           assert.equal(audio.passed, true);
+          assert.equal(audio.localFallback.passed, true);
+          assert.equal(audio.localFallback.speech, true);
+          assert.equal(audio.localFallback.media, true);
+          assert.equal(audio.localFallback.hourly, true);
+          assert.equal(audio.localFallback.botInVC, false);
+          assert.equal(audio.voiceMonitor.passed, true);
+          assert.equal(audio.voiceMonitor.selfExcluded, true);
+          assert.equal(audio.voiceMonitor.deviceConfigSaved, true);
+          assert.equal(audio.voiceMonitor.unavailableDeviceFallback, true);
+          assert.ok(audio.voiceMonitor.metrics.nonSilentSamples > 1000);
+          assert.ok(audio.hourly.fourthToneAt && Math.abs(audio.hourly.measuredCaptureDelayMs) < 750);
           assert.equal(audio.latinReading.passed, true);
           assert.equal(audio.latinReading.singleLetters, true);
           assert.equal(audio.latinReading.romaji, true);
