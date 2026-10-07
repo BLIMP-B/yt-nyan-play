@@ -10,7 +10,8 @@ export function sentencePlan(config, nouns, random = Math.random) {
   const style = SENTENCE_PRESETS[preset]; if (!style) throw new Error('時報の文体を選択してください');
   const maxChars = Math.min(config.sentenceMaxChars || 200, 200);
   const targetChars = Math.min(maxChars, Math.round(style.min + random() * (style.max - style.min)));
-  const estimate = nouns.reduce((sum, word) => sum + [...word].length, 0) + 7;
+  // The two nouns, particles, shortest allowed verb and clause separator.
+  const estimate = nouns.reduce((sum, word) => sum + [...word].length, 0) + 6;
   return { preset, targetChars, maxChars, clauseCount: preset === 'brief' ? 1 : Math.max(1, Math.min(20, Math.round((targetChars - 3) / estimate))) };
 }
 export function sentenceFromClauses(clauses, plan) {
