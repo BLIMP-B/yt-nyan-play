@@ -67,27 +67,51 @@ jobs:
           for (const name of ['tests', 'windows', 'android-install', 'hourly-model', 'tag-verified-source']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
           assert.equal(run.conclusion, 'success');
           JS
+      - name: Select the latest artifacts from the verified run
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ steps.selection.outputs.run }}
+        run: |
+          gh api "repos/$RELEASE_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/nyan-release-artifacts.json"
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import assert from 'node:assert/strict';
+          const { artifacts } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-artifacts.json')));
+          const names = { android: 'android-verification-windows', model: 'hourly-model-verification-windows', duration: 'playback-duration-verification-windows', audio: 'audio-verification-windows', windows: 'nyan-talk-damare-windows-x64' };
+          for (const [key, name] of Object.entries(names)) {
+            const latest = artifacts.filter(a => a.name === name && !a.expired).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            assert.ok(latest && Number.isSafeInteger(latest.id) && latest.size_in_bytes > 0, `${name} is required`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${latest.id}\n`);
+          }
+          JS
       - uses: actions/download-artifact@v4
         with:
-          name: android-verification-windows
+          artifact-ids: ${{ steps.artifacts.outputs.android }}
+          merge-multiple: true
           path: verification/android
           github-token: ${{ github.token }}
           run-id: ${{ steps.selection.outputs.run }}
       - uses: actions/download-artifact@v4
         with:
-          name: hourly-model-verification-windows
+          artifact-ids: ${{ steps.artifacts.outputs.model }}
+          merge-multiple: true
           path: verification/model
           github-token: ${{ github.token }}
           run-id: ${{ steps.selection.outputs.run }}
       - uses: actions/download-artifact@v4
         with:
-          name: playback-duration-verification-windows
+          artifact-ids: ${{ steps.artifacts.outputs.duration }}
+          merge-multiple: true
           path: verification/duration
           github-token: ${{ github.token }}
           run-id: ${{ steps.selection.outputs.run }}
       - uses: actions/download-artifact@v4
         with:
-          name: audio-verification-windows
+          artifact-ids: ${{ steps.artifacts.outputs.audio }}
+          merge-multiple: true
           path: verification/audio
           github-token: ${{ github.token }}
           run-id: ${{ steps.selection.outputs.run }}
@@ -121,11 +145,35 @@ jobs:
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
           assert.equal(audio.passed, true);
+          for (const kind of ['stream-full', 'stream-direct']) {
+            const stream = audio.media.find(item => item.kind === kind);
+            assert.equal(stream?.status, 'completed');
+            assert.ok(stream.nonSilentSamples > 1000);
+          }
           assert.equal(audio.localFallback.passed, true);
           assert.equal(audio.localFallback.speech, true);
           assert.equal(audio.localFallback.media, true);
           assert.equal(audio.localFallback.hourly, true);
           assert.equal(audio.localFallback.botInVC, false);
+          const network = audio.network;
+          assert.equal(network.passed, true);
+          assert.equal(network.defaultProfile, 'poor');
+          assert.equal(network.bitrate, 48000);
+          assert.equal(network.cbrPacketBytes, 120);
+          assert.equal(network.customBitrate, 64000);
+          assert.equal(network.customBitrateSaved, 64);
+          assert.equal(network.settingsSaved, true);
+          assert.equal(network.recycledDecoders, 1280);
+          assert.equal(network.longPacketSamples, 5760);
+          assert.equal(network.retiredErrorsIsolated, true);
+          assert.equal(network.transport.capacityKbps, 80);
+          assert.equal(network.transport.delivered, network.transport.total);
+          assert.ok(network.transport.highBitrateDelivered < network.transport.total);
+          assert.equal(network.profiles.poor.silentFrames, 0);
+          assert.ok(network.loss.audibleFrames > 230 && network.loss.maximumBufferedMs <= 1000);
+          assert.equal(network.electronLifecycle.passed, true);
+          assert.equal(network.electronLifecycle.recycled, 992);
+          assert.equal(network.electronLifecycle.survivors, true);
           assert.equal(audio.voiceMonitor.passed, true);
           assert.equal(audio.voiceMonitor.selfExcluded, true);
           assert.equal(audio.voiceMonitor.deviceConfigSaved, true);
@@ -165,7 +213,8 @@ jobs:
           JS
       - uses: actions/download-artifact@v4
         with:
-          name: nyan-talk-damare-windows-x64
+          artifact-ids: ${{ steps.artifacts.outputs.windows }}
+          merge-multiple: true
           path: release-assets
           github-token: ${{ github.token }}
           run-id: ${{ steps.selection.outputs.run }}
