@@ -53,6 +53,20 @@ test('Play readiness never dismisses another app error and remains cancellable',
   const controller = new AbortController();
   await assert.rejects(waitForPlayWindow(async () => '', async () => {}, { signal: controller.signal, delay: async () => controller.abort(new DOMException('stop', 'AbortError')) }), { name: 'AbortError' });
 });
+test('opening Play recovers its own ANR once, preserves data and still requires stable foreground focus', async () => {
+  let clock = 0, restarted = false, launches = 0; const commands = [];
+  const state = await waitForPlayWindow(async args => {
+    commands.push(args);
+    if (args.includes('force-stop')) { restarted = true; return ''; }
+    return restarted ? 'mCurrentFocus=Window{1 u0 com.android.vending/MainActivity}' : 'mCurrentFocus=Window{1 u0 Application Not Responding: com.android.vending}';
+  }, async () => { launches++; }, { now: () => clock, delay: async ms => { clock += ms; } });
+  assert.equal(state.playRecovered, true); assert.equal(state.launcherRecovered, false); assert.equal(launches, 1);
+  assert.deepEqual(commands.filter(args => args.includes('force-stop')), [['shell', 'am', 'force-stop', 'com.android.vending']]);
+  assert.ok(!commands.some(args => args.includes('clear') || args.includes('uninstall'))); assert.ok(state.elapsedMs >= 3000);
+  let retries = 0; clock = 0;
+  await assert.rejects(waitForPlayWindow(async args => { if (args.includes('force-stop')) retries++; return 'mCurrentFocus=Window{1 u0 Application Not Responding: com.android.vending}'; }, async () => {}, { now: () => clock, maxMs: 5000, delay: async ms => { clock += ms; } }), /Google Play/);
+  assert.equal(retries, 1);
+});
 test('Play focus verification retries slow launch requests and succeeds when the Activity becomes ready', async () => {
   let clock = 0, launches = 0;
   const state = await waitForPlayWindow(async () => launches > 1 ? 'mCurrentFocus=Window{1 com.android.vending/MainActivity}' : 'mCurrentFocus=Window{1 com.google.android.apps.nexuslauncher/Main}', async () => { if (++launches === 1) throw new Error('initialization timeout'); }, { now: () => clock, maxMs: 60000, delay: async ms => { clock += ms; } });

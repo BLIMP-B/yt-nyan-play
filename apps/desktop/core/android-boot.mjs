@@ -42,21 +42,24 @@ export async function waitForPlayWindow(adb, launch, {
   signal, maxMs = 120000, now = Date.now,
   delay = ms => wait(ms, undefined, { signal }), changed = () => {},
 } = {}) {
-  const began = now(); let stable = 0, recovered = false, focus = '', lastError = '', lastLaunch = began;
+  const began = now(), recovered = new Set(); let stable = 0, focus = '', lastError = '', lastLaunch = began;
   while (now() - began < maxMs) {
     signal?.throwIfAborted();
     try {
       // Android 15 keeps current focus in DisplayContent, not the windows-only dump.
       const windows = await adb(['shell', 'dumpsys', 'window', 'displays'], { signal, timeout: 10000 });
       focus = windows.match(/mCurrentFocus[^\r\n]*/)?.[0] || '';
-      // First-boot launcher ANRs can cover an already-resumed Play activity.
-      // Recover only this launcher, never dismiss errors from arbitrary user apps.
-      if (!recovered && /Application (?:Not Responding|Error).*com\.google\.android\.apps\.nexuslauncher/.test(focus)) {
-        changed('初回起動のホーム画面を復旧しています');
-        await adb(['shell', 'am', 'force-stop', 'com.google.android.apps.nexuslauncher'], { signal, timeout: 10000 });
-        recovered = true; await launch(); stable = 0;
+      // Opening Play may reveal a first-boot launcher or Play ANR. Recover
+      // each of these packages once; keep their data and other apps untouched.
+      const failedPackage = /Application (?:Not Responding|Error)/.test(focus)
+        ? ['com.google.android.apps.nexuslauncher', 'com.android.vending'].find(id => new RegExp(id.replaceAll('.', '\\.') + '(?:[}\\s]|$)').test(focus)) : null;
+      if (failedPackage && !recovered.has(failedPackage)) {
+        changed(failedPackage === 'com.android.vending' ? '初回起動のGoogle Playを復旧しています' : '初回起動のホーム画面を復旧しています');
+        recovered.add(failedPackage);
+        await adb(['shell', 'am', 'force-stop', failedPackage], { signal, timeout: 10000 });
+        await launch(); stable = 0; lastLaunch = now();
       } else if (/com\.android\.vending\//.test(focus) && !/Application (?:Not Responding|Error)/.test(focus)) {
-        if (++stable >= 3) return { focus, launcherRecovered: recovered, elapsedMs: now() - began };
+        if (++stable >= 3) return { focus, launcherRecovered: recovered.has('com.google.android.apps.nexuslauncher'), playRecovered: recovered.has('com.android.vending'), elapsedMs: now() - began };
       } else stable = 0;
     } catch (error) { signal?.throwIfAborted(); lastError = error.message; stable = 0; }
     if (!stable && now() - lastLaunch >= 15000) {

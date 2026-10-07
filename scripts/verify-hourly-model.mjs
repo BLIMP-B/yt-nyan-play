@@ -7,7 +7,14 @@ import { generateSlm, lexicalTokens, tokenizer, SmallWordModel } from '../apps/d
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 const directory = mkdtempSync(join(tmpdir(), 'nyan-slm-')), config = normalizeConfig();
 const reports = resolve('dist/hourly-model-verification'); mkdirSync(reports, { recursive: true });
-const runtime = new HourlyModel(directory, () => config), report = { platform: process.platform, model: config.hourly.slmModel, passed: false, samples: [] };
+const fetcher = (url, options = {}) => {
+  const headers = new Headers(options.headers);
+  // CI's read-only token avoids shared runner IP rate limits. Never send it
+  // to download redirects, model registries, or the local inference server.
+  if (url === 'https://api.github.com/repos/ollama/ollama/releases/latest' && process.env.NYAN_VERIFY_GITHUB_TOKEN) headers.set('Authorization', 'Bearer ' + process.env.NYAN_VERIFY_GITHUB_TOKEN);
+  return fetch(url, { ...options, headers });
+};
+const runtime = new HourlyModel(directory, () => config, fetcher), report = { platform: process.platform, model: config.hourly.slmModel, passed: false, samples: [] };
 let last = 0; runtime.on('change', () => { if (Date.now() - last > 10000) { last = Date.now(); console.log(runtime.progress); } });
 try {
   await runtime.setup(); report.runtime = runtime.snapshot();

@@ -167,6 +167,8 @@ jobs:
       - run: npm ci
       - name: Verify managed local SLM and real Japanese generation
         run: npm run verify:hourly-model
+        env:
+          NYAN_VERIFY_GITHUB_TOKEN: ${{ github.token }}
       - name: Measure generation, YouTube search and player preparation on Windows
         run: node scripts/verify-hourly-timing.mjs dist/hourly-model-verification/model-report.json
       - uses: actions/upload-artifact@v4
