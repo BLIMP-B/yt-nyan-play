@@ -195,7 +195,16 @@ export class AndroidRuntime extends EventEmitter {
   async stopProcess() {
     clearInterval(this.frameTimer); const child = this.child; this.child = null;
     if (!child) return;
-    if (child.exitCode === null && child.signalCode === null) await this.adb(['emu', 'kill'], { timeout: 5000 }).catch(() => {});
+    if (child.exitCode === null && child.signalCode === null) {
+      await this.adb(['emu', 'kill'], { timeout: 5000 }).catch(() => {});
+      // Allow the VM to finish its requested shutdown and save its state before
+      // forcing a stuck process tree to exit.
+      if (child.exitCode === null && child.signalCode === null) await new Promise(resolve => {
+        const finish = () => { clearTimeout(timer); child.removeListener('exit', finish); resolve(); };
+        const timer = setTimeout(finish, 5000); child.once('exit', finish);
+        if (child.exitCode !== null || child.signalCode !== null) finish();
+      });
+    }
     await this.terminateChild(child);
   }
   async stop() { this.playController?.abort(new DOMException('中止しました', 'AbortError')); this.bootController?.abort(new DOMException('起動を中止しました', 'AbortError')); await this.stopProcess(); this.activeConfig = null; this.status = 'stopped'; this.change(); }
