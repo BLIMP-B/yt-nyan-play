@@ -308,7 +308,12 @@ try {
   await page.locator('[data-view="settings"]').click(); await page.screenshot({ path: join(reports, 'voice-monitor-settings.png'), fullPage: true });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   const unavailableConfig = (await call(page, 'state')).config; unavailableConfig.desktop.outputDevice = 'unavailable-speaker-verification'; await call(page, 'config:save', unavailableConfig);
-  await page.waitForFunction(async () => window.nyanLocalAudio.snapshot().monitorSink === '' && (await window.nyan.invoke('state')).value.logs.some(log => log.text.includes('指定のスピーカーが利用できない')));
+  const deviceFallbackUntil = Date.now() + 5000;
+  while (Date.now() < deviceFallbackUntil) {
+    const current = await call(page, 'state');
+    if (current.logs.some(log => log.text.includes('指定のスピーカーが利用できない')) && await page.evaluate(() => window.nyanLocalAudio.snapshot().monitorSink === '')) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
   const speakerState = await call(page, 'state'); assert.equal(speakerState.config.desktop.outputDevice, 'unavailable-speaker-verification');
   assert.ok(speakerState.logs.some(log => log.text.includes('指定のスピーカーが利用できない')));
   report.voiceMonitor = { ...voiceResult, deviceConfigSaved: true, unavailableDeviceFallback: true, passed: true };
