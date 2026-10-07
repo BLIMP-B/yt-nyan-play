@@ -12,14 +12,14 @@ export function tweetSpeech(tweet, expanded = {}, options = {}) {
 export function protectedReadable(account, owner) { return !account.protected || Boolean(owner && owner.id === account.id); }
 export class XApi {
   constructor(fetcher = fetch) { this.fetcher = fetcher; }
-  async request(path, token) {
+  async request(path, token, signal) {
     if (!token) throw new Error('XへのログインまたはAPI Bearer Tokenを設定してください');
-    const response = await this.fetcher(`https://api.x.com/2${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000), redirect: 'error' });
-    if (!response.ok) { const e = new Error(`X API: HTTP ${response.status}。API権限・利用枠・認証を確認してください`); e.status = response.status; throw e; }
+    const response = await this.fetcher(`https://api.x.com/2${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000), redirect: 'error' });
+    if (!response.ok) { const e = new Error(response.status === 402 ? 'X API: HTTP 402。X Developer PortalでAPIの利用枠・残高・課金設定を確認してください。XへのログインだけではAPIの利用枠は増えません' : `X API: HTTP ${response.status}。API権限・利用枠・認証を確認してください`); e.status = response.status; throw e; }
     return response.json();
   }
   user(username, token) { return this.request(`/users/by/username/${encodeURIComponent(username)}?user.fields=protected,name,username`, token); }
-  me(token) { return this.request('/users/me?user.fields=protected,name,username', token); }
+  me(token, signal) { return this.request('/users/me?user.fields=protected,name,username', token, signal); }
   tweets(id, sinceId, token, readReplies = true, paginationToken = '') {
     const query = new URLSearchParams({ max_results: '100', 'tweet.fields': 'author_id,referenced_tweets,attachments,note_tweet,created_at', expansions: 'referenced_tweets.id,referenced_tweets.id.author_id', 'user.fields': 'name,username' });
     if (sinceId) query.set('since_id', sinceId); if (!readReplies) query.set('exclude', 'replies'); if (paginationToken) query.set('pagination_token', paginationToken);

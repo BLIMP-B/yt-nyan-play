@@ -6,7 +6,7 @@ import { SENTENCE_PRESETS } from './hourly-sentence.mjs';
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
   desktop: { autoStart: false, startMinimized: false, closeToTray: true, notifications: true, theme: 'light', outputDevice: '', voiceMonitorGuildId: '', voiceMonitorVolume: 0.8, networkProfile: 'poor', audioBitrateKbps: 48 },
-  android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720 },
+  android: { sdkPath: '', javaPath: '', image: 'system-images;android-35;google_apis_playstore;x86_64', avdName: 'nyantalk_play', port: 5580, ramMb: 3072, gpu: 'auto', audioEnabled: true, bootTimeoutSeconds: 720, showWindow: false, readNotifications: true, notificationOutput: 'both' },
   hourly: { enabled: false, output: 'discord', volume: 0.8, mediaGain: 0.15, fadeMs: 1000, bgmVolume: 0.18, bgmFadeInMs: 3000, bgmFadeOutMs: 3000,
     slmUrl: 'http://127.0.0.1:11489', slmModel: 'qwen3:0.6b', generationMode: 'auto', generationTimeoutSeconds: 60, sentenceStyle: 'random', sentenceMaxChars: 200,
     historySyncMessages: 500, historyPageDelayMs: 500, historyCorpusMessages: 2000, servers: [] },
@@ -79,6 +79,7 @@ export function normalizeConfig(patch) {
   if (!/^system-images;android-\d{2,3};google_apis_playstore;x86_64$/.test(c.android.image) || !/^[a-zA-Z0-9_-]{1,40}$/.test(c.android.avdName)) fail('Android端末・イメージ');
   number(c.android.port, 5554, 5682, 'Emulatorポート', true); if (c.android.port % 2) fail('Emulatorポートは偶数');
   number(c.android.ramMb, 1024, 8192, 'Androidメモリ', true); if (!['auto', 'software'].includes(c.android.gpu)) fail('Android描画');
+  if (!['local', 'discord', 'both'].includes(c.android.notificationOutput)) fail('Android通知の出力先');
   number(c.android.bootTimeoutSeconds, 300, 1800, 'Android起動待ち上限', true);
   for (const key of ['volume', 'mediaGain', 'bgmVolume']) number(c.hourly[key], 0, 1, '時報音量');
   number(c.hourly.fadeMs, 100, 5000, '時報フェード時間', true); number(c.hourly.generationTimeoutSeconds, 5, 300, 'SLM生成上限', true);

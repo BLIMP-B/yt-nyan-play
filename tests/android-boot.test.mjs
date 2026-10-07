@@ -35,6 +35,8 @@ test('recovery preserves user data, disables Vulkan and snapshot loading, and on
   assert.ok(!normal.includes('-no-audio')); assert.equal(normal[normal.indexOf('-cores') + 1], '4');
   assert.ok(recovery.includes('-no-snapshot-load') && recovery.includes('-Vulkan')); assert.ok(!recovery.includes('-wipe-data'));
   assert.ok(emulatorArguments({ ...config, audioEnabled: false }).includes('-no-audio'));
+  assert.ok(normal.includes('-no-window'));
+  assert.ok(!emulatorArguments({ ...config, showWindow: true }).includes('-no-window'));
   assert.equal(bootProperties('[sys.boot_completed]: [1]\r\n')['sys.boot_completed'], '1');
   assert.equal(normalizeConfig({ android: { ramMb: 2048 } }).android.ramMb, 2048);
 });

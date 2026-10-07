@@ -72,10 +72,11 @@ export async function waitForPlayWindow(adb, launch, {
 }
 
 export function emulatorArguments(config, { recovery = false, cores = 2 } = {}) {
-  const args = ['-avd', config.avd, '-port', String(config.port), '-no-window', '-no-boot-anim',
+  const args = ['-avd', config.avd, '-port', String(config.port), '-no-boot-anim',
     '-memory', String(config.ramMb), '-cores', String(Math.max(1, Math.min(4, cores))), '-skin', '720x1280', '-dpi-device', '320', '-show-kernel',
     '-gpu', recovery ? 'software' : config.gpu, '-camera-back', 'none', '-camera-front', 'none'];
   if (!config.audioEnabled) args.push('-no-audio');
+  if (!config.showWindow) args.push('-no-window');
   if (recovery) args.push('-no-snapshot-load', '-feature', '-Vulkan');
   return args;
 }

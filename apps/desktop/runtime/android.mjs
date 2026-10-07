@@ -65,7 +65,7 @@ export class AndroidRuntime extends EventEmitter {
   javaTool(tool, args, options) { const p = this.paths(); if (!p.java) throw new Error('Java実行環境を設定してください'); const main = tool === 'sdkmanager' ? 'com.android.sdklib.tool.sdkmanager.SdkManagerCli' : 'com.android.sdklib.tool.AvdManagerCli'; return this.run(p.java, ['-Dcom.android.sdkmanager.toolsdir=' + join(p.sdk, 'cmdline-tools/latest'), '-classpath', join(p.sdk, `cmdline-tools/latest/lib/${tool}-classpath.jar`), main, ...args], options); }
   installPackages(packages, options) { const p = this.paths(), cli = join(p.sdk, 'cmdline-tools/latest/bin/android.exe'); return existsSync(cli) ? this.run(cli, ['--sdk=' + p.sdk, 'sdk', 'install', ...packages.map(id => id.replace(/;/g, '/'))], options) : this.javaTool('sdkmanager', ['--sdk_root=' + p.sdk, ...packages], options); }
   environment() { return { ...process.env, ANDROID_HOME: this.paths().sdk, ANDROID_AVD_HOME: this.paths().avds, ANDROID_USER_HOME: join(this.directory, 'user') }; }
-  run(executable, args, { input = '', timeout = 20000, signal, progress = false, binary = false } = {}) {
+  run(executable, args, { input = '', timeout = 20000, signal, progress = false, binary = false, maxOutputBytes = (binary ? 20 : 5) * 1048576 } = {}) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted(); const child = spawn(executable, args, { env: this.environment(), windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
       const chunks = []; let length = 0, errors = '', tail = '', done = false, lastProgress = 0; const timer = setTimeout(() => finish(new Error('Androidの処理がタイムアウトしました')), timeout);
@@ -80,7 +80,7 @@ export class AndroidRuntime extends EventEmitter {
         if (done) return;
         // Installers redraw progress for multi-GB archives. Retain a tail, not the entire transcript.
         if (progress && !binary) { report(b); return; }
-        length += b.length; if (length > (binary ? 20 : 5) * 1048576) return finish(new Error('Androidの応答が大きすぎます'));
+        length += b.length; if (length > maxOutputBytes) return finish(new Error('Androidの応答が大きすぎます'));
         chunks.push(b);
       });
       child.stderr.on('data', b => { if (done) return; errors = (errors + b.toString()).slice(-2000); if (progress && !binary) report(b); });

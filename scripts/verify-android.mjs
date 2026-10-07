@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { AndroidRuntime } from '../apps/desktop/runtime/android.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
+import { AndroidNotifications } from '../apps/desktop/runtime/android-notifications.mjs';
+import { shellQuote } from '../apps/desktop/core/android-packages.mjs';
 
 if (process.platform !== 'win32') throw new Error('Android導入試験はWindows x64で実行してください');
 const directory = mkdtempSync(join(tmpdir(), 'damare-android-install-'));
@@ -27,7 +29,11 @@ try {
     // Hosted Windows has no physical display adapter. Exercise the supported software renderer.
     config.android.gpu = 'software'; report.gpu = config.android.gpu;
     config.android.audioEnabled = false;
+    config.android.showWindow = true;
     await android.start(); report.bootVerified = true;
+    const windows = await android.run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match 'Android Emulator' } | Select-Object -ExpandProperty MainWindowTitle) -join [Environment]::NewLine"], { timeout: 15000 });
+    report.nativeWindowVerified = /Android Emulator/.test(windows);
+    assert.equal(report.nativeWindowVerified, true, 'The native Android window for protected authentication screens was not visible');
     report.stage = 'verify-installed-play';
     report.playInstalled = /^package:/m.test(await android.adb(['shell', 'pm', 'path', 'com.android.vending'], { timeout: 60000 }));
     assert.equal(report.playInstalled, true, 'Google Play was not installed in the AVD');
@@ -40,6 +46,25 @@ try {
     const png = await android.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 });
     assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
     writeFileSync(join(reports, 'android-play.png'), png);
+    report.stage = 'notifications';
+    const spoken = [];
+    const notifications = new AndroidNotifications(android, () => config, { speech: payload => spoken.push(payload), log: (l, t) => console.log(`${l}: ${t}`) }, { automatic: false });
+    try {
+      await notifications.poll(); await notifications.poll(); assert.equal(spoken.length, 0, 'Existing Android notifications must not be read at startup');
+      const post = async body => {
+        await android.adb(['shell', `cmd notification post -t ${shellQuote('通知試験')} -S bigtext --bigtext ${shellQuote(body)} damare_notification_probe ${shellQuote('省略本文')}`], { timeout: 10000 });
+        for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 200)); await notifications.poll(); if (spoken.at(-1)?.text.includes(body)) break; }
+      };
+      await post('Androidから届いた新しい通知です');
+      assert.equal(spoken.length, 1, notifications.error || 'Native Android notification was not delivered');
+      assert.equal(spoken[0].text, '通知試験。Androidから届いた新しい通知です');
+      await notifications.poll(); assert.equal(spoken.length, 1, 'Duplicate notification was read twice');
+      await post('更新された通知です'); assert.equal(spoken.length, 2, 'Updated notification was not delivered');
+      assert.equal(spoken[1].output, 'both'); assert.equal(spoken[1].master, true); assert.equal(spoken[1].system, true);
+      config.android.notificationOutput = 'local'; await post('PCだけに送る通知です'); assert.equal(spoken.at(-1).output, 'local');
+      config.android.notificationOutput = 'discord'; await post('全VCに送る通知です'); assert.equal(spoken.at(-1).output, 'discord');
+      report.notifications = { nativePost: true, expandedText: true, initialBaselineSkipped: true, duplicateSuppressed: true, updateDelivered: true, outputChoices: ['both', 'local', 'discord'], passed: true };
+    } finally { notifications.close(); }
   }
   console.log('ANDROID_INSTALL_VERIFIED ' + JSON.stringify(report));
 } catch (e) {

@@ -28,6 +28,8 @@ import { BouyomiProcessor } from './runtime/bouyomi-processor.mjs';
 import { runNativeSpeech, nativeSpeechDefaults } from './core/bouyomi-pipeline.mjs';
 import { bouyomiSpeak } from './runtime/bouyomi.mjs';
 import { AndroidRuntime } from './runtime/android.mjs';
+import { AndroidNotifications } from './runtime/android-notifications.mjs';
+import { androidEnvironmentChanged } from './core/android-notifications.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
 import { MediaPool } from './core/media-pool.mjs';
 import { speechTargets, prepareSpeech, prepareNativeText } from './core/text.mjs';
@@ -47,7 +49,7 @@ if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, twitter, twitterAppVault, bouyomi, bouyomiProcessor, hourly, hourlyHistory, hourlyModel;
+  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, androidNotifications, twitter, twitterAppVault, bouyomi, bouyomiProcessor, hourly, hourlyHistory, hourlyModel;
   let historyController, historyTimer;
   let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const audioBridge = new AudioBridge(() => window); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
@@ -59,7 +61,7 @@ else {
   const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
     voices: voice.snapshot(), voiceMonitor: voice.monitor.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })), accountLink: accounts.snapshot(),
-    paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: android.snapshot(), twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot(),
+    paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: { ...android.snapshot(), notifications: androidNotifications?.snapshot() }, twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot(),
     hourly: hourly ? { ...hourly.snapshot(), history: hourlyHistory.snapshot(), model: hourlyModel.snapshot() } : null });
   const audioCommand = (...args) => audioBridge.command(...args);
   const control = (name, guildId) => {
@@ -98,13 +100,14 @@ else {
     if (name === 'state') return snapshot();
     if (name === 'config:save') {
       const c = normalizeConfig(data);
-      if ((android.child || android.busy) && JSON.stringify(c.android) !== JSON.stringify(store.config.android)) throw new Error('Androidの停止後に仮想環境の設定を変更してください');
+      if ((android.child || android.busy) && androidEnvironmentChanged(store.config.android, c.android)) throw new Error('Androidの停止後に仮想環境の設定を変更してください');
       if (hourlyModel.busy && JSON.stringify(c.hourly) !== JSON.stringify(store.config.hourly)) throw new Error('SLMの導入が終わるか中止してから時報設定を変更してください');
       const hourlyChanged = JSON.stringify(c.hourly) !== JSON.stringify(store.config.hourly);
       if (hourlyChanged) { hourly.cancel(); historyController?.abort(); historyController = null; }
       if (c.hourly.slmUrl !== store.config.hourly.slmUrl) await hourlyModel.stop();
       for (const d of c.dictionary) if (d.regex) new RE2(d.source, d.caseSensitive ? 'gu' : 'giu');
       store.updateConfig(c); voice.updateSettings(); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
+      androidNotifications.update();
       void bot.reconcileVoices();
       if (hourlyChanged) { hourly.update(); syncHourlyHistory(); }
       return snapshot();
@@ -186,12 +189,14 @@ else {
     if (name === 'android:setup') return android.setup(data);
     if (name === 'android:cancel') { android.cancelSetup(); return null; }
     if (name === 'android:start') return android.start();
+    if (name === 'android:window') { if (android.busy || android.bootController || android.playController) throw new Error('Androidの準備が終わってから別ウィンドウを開いてください'); await android.stop(); const c = getConfig(); store.updateConfig({ ...c, android: { ...c.android, showWindow: true } }); return android.start(); }
     if (name === 'android:stop') { await android.stop(); return android.snapshot(); }
     if (name === 'android:play') return android.openPlay(data?.packageId || '');
     if (name === 'android:input') return android.input(data);
     if (name === 'android:choose-sdk') { const selected = await dialog.showOpenDialog(window, { properties: ['openDirectory'] }); return selected.filePaths[0] || ''; }
     if (name === 'android:choose-java') { const selected = await dialog.showOpenDialog(window, { properties: ['openFile'], filters: [{ name: 'Java実行ファイル', extensions: ['exe'] }] }); return selected.filePaths[0] || ''; }
-    if (name === 'twitter:login') { const url = await twitter.login(); await shell.openExternal(url); return null; }
+    if (name === 'twitter:login') { try { const url = await twitter.login(); await shell.openExternal(url); } catch (error) { if (error.name !== 'AbortError') throw error; } return null; }
+    if (name === 'twitter:login-cancel') { await twitter.cancelLogin(); return snapshot(); }
     if (name === 'twitter:logout') { twitter.logout(); return snapshot(); }
     if (name === 'twitter:app-token') { twitterAppVault.save(data); return snapshot(); }
     if (name === 'twitter:app-token-clear') { twitterAppVault.clear(); return snapshot(); }
@@ -268,9 +273,9 @@ else {
         settings = nativeSpeechDefaults(settings, inspectBouyomi(bouyomi.directory).settings, pending);
       }
       if (job.payload.privateOwnerId) { await twitter.userSession(); if (twitter.owner()?.id !== job.payload.privateOwnerId) throw new Error('非公開投稿は本人のXログイン中だけ読み上げます'); }
-      const candidates = job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
+      const candidates = job.payload.androidNotification ? voice.snapshot().filter(v => v.status === 'ready').map(v => v.guildId) : job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
       const targets = outputTargets(settings.output, candidates, voice.snapshot());
-      if (settings.output === 'discord' && !targets.length) throw new Error('Discordへの読み上げにはサーバーを選択し、マスタ再生にはVCへ接続してください');
+      if (settings.output === 'discord' && !targets.length) { if (job.payload.androidNotification) return; throw new Error('Discordへの読み上げにはサーバーを選択し、マスタ再生にはVCへ接続してください'); }
       if (settings.output === 'discord') await Promise.all(targets.map(id => voice.connect(id)));
       if (settings.provider === 'bouyomi') { if (settings.output === 'discord' || targets.length) throw new Error('棒読みちゃん出力はローカル再生です。Discord音声にはVOICEVOXを選んでください'); await bouyomiSpeak(job.payload.text, settings, signal); return; }
       const output = async (text, outputSettings, outputJobSignal, clipPath) => {
@@ -303,6 +308,16 @@ else {
         }, pipelineSignal); } catch (error) { pipelineController.abort(); throw error; }
       } else await output(job.payload.system ? job.payload.text : [...job.payload.text].slice(0, settings.maxChars).join(''), settings, signal, job.payload.clipPath);
     });
+    androidNotifications = new AndroidNotifications(android, getConfig, {
+      speech: payload => {
+        if (payload.output === 'discord' && !voice.snapshot().some(v => v.status === 'ready')) return false;
+        if (store.jobs.filter(j => j.payload.androidNotification && ['waiting', 'running'].includes(j.status)).length >= 32) return false;
+        // System speech never executes media commands, education commands or Bouyomi tags.
+        speechRunner.enqueue({ ...payload, text: [...payload.text].slice(0, getConfig().speech.maxChars).join('') }); return true;
+      },
+      cancel: () => { for (const job of store.jobs.filter(j => j.payload.androidNotification && ['waiting', 'running'].includes(j.status))) speechRunner.cancel(job.id); },
+      log: (level, text) => store.log(level, text),
+    }); androidNotifications.on('change', emitState);
     hourlyHistory = new HourlyHistory(store.directory, () => bot.client, getConfig, emitState);
     hourlyModel = new HourlyModel(store.directory, getConfig, (url, options) => net.fetch(url, options)); hourlyModel.on('change', emitState);
     hourly = new HourlyRuntime(store.directory, getConfig, {
@@ -467,6 +482,6 @@ else {
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });
-  app.on('before-quit', () => { quitting = true; hourly?.close(); clearInterval(historyTimer); hourlyModel?.close(); if (bot) stopBot(); void hourlyHistory?.close().catch(() => {}); engine?.stop(); void bouyomi?.stop().catch(() => {}); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
+  app.on('before-quit', () => { quitting = true; hourly?.close(); clearInterval(historyTimer); hourlyModel?.close(); if (bot) stopBot(); void hourlyHistory?.close().catch(() => {}); engine?.stop(); void bouyomi?.stop().catch(() => {}); androidNotifications?.close(); android?.close(); twitter?.close(); media?.close(); accounts?.close(); audioBridge.close(); tray?.destroy(); });
   app.on('window-all-closed', () => { if (quitting) app.quit(); });
 }
