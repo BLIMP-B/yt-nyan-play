@@ -27,7 +27,8 @@ test('length and style are chosen before generation and complete grammatical cla
     const result = await generateSlm(model, c, undefined, async (_url, options) => {
       sent = JSON.parse(options.body);
       const clause = { subject: '猫', object: '時計', verb: '運ぶ', adjective: '' }, count = sent.format.properties.clauses?.minItems || 1;
-      return new Response(JSON.stringify({ response: JSON.stringify(count === 1 ? clause : { clauses: Array.from({ length: count }, () => [0, 1, 0, 0]) }) }));
+      if (count > 1) { assert.deepEqual(sent.format.properties.clauses.items.properties.s.enum, [0, 1]); assert.deepEqual(sent.format.properties.clauses.items.properties.a.enum, [0]); }
+      return new Response(JSON.stringify({ response: JSON.stringify(count === 1 ? clause : { clauses: Array.from({ length: count }, () => ({ s: 0, v: 0, a: 0 })) }) }));
     }, async () => [{ word: '猫', pos: '名詞' }, { word: '時計', pos: '名詞' }]);
     assert.ok(sent.prompt.includes(style)); assert.ok(result.text.endsWith('のだ。')); assert.ok(result.text.length <= 200); lengths.push(result.text.length);
   }
