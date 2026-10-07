@@ -27,15 +27,16 @@ export class AndroidNotifications extends EventEmitter {
     if (this.controller || this.closed || !this.getConfig().android.readNotifications || this.android.status !== 'running' || this.android.busy || this.android.bootController || this.android.playController) return;
     const controller = this.controller = new AbortController(), signal = controller.signal;
     try {
+      const until = Date.now() + 5000;
       const list = await this.android.adb(['shell', 'cmd notification list'], { signal, timeout: 3000, maxOutputBytes: 32768 }); signal.throwIfAborted();
       if (/unknown command|permission denial|error:/i.test(list)) throw new Error('このAndroidで通知の取得が許可されていません');
-      const keys = [...new Set(list.split(/\r?\n/).map(s => s.trim()).filter(s => /^\d+\|[^|\s]+\|/.test(s) && s.length <= 1000))].slice(0, 128);
+      const keys = [...new Set(list.split(/\r?\n/).map(s => s.trim()).filter(s => /^-?\d+\|[^|\s]+\|/.test(s) && s.length <= 1000))].slice(0, 128);
       const active = new Set(keys); for (const key of this.seen.keys()) if (!active.has(key)) this.seen.delete(key);
       if (!this.baselined) { for (const key of keys) this.seen.set(key, null); this.baselined = true; this.error = ''; return; }
       const fresh = keys.filter(key => !this.seen.has(key));
       const rotation = keys.filter(key => this.seen.has(key)); const offset = rotation.length ? this.cursor % rotation.length : 0;
       const pending = [...fresh, ...rotation.slice(offset), ...rotation.slice(0, offset)].slice(0, 8);
-      const until = Date.now() + 5000; let partialError = '';
+      let partialError = '';
       for (const key of pending) {
         if (Date.now() >= until) break;
         const old = this.seen.get(key), existed = this.seen.has(key);

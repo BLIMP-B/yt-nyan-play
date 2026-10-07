@@ -47,7 +47,7 @@ function fixture() {
 }
 
 test('notifications skip the initial baseline, read new/changed messages once and route selectable PC/all-VC/both output', async () => {
-  const f = fixture(); const old = '0|com.example|1|old|10123', fresh = '0|com.example|2|new|10123';
+  const f = fixture(); const old = '0|com.example|1|old|10123', fresh = '-1|com.example|2|new|10123';
   f.records.set(old, dump('既存')); await f.reader.poll(); await f.reader.poll(); assert.equal(f.spoken.length, 0);
   f.records.set(fresh, dump('新規')); await f.reader.poll(); await f.reader.poll(); assert.equal(f.spoken.length, 1);
   assert.equal(f.spoken[0].text, '受信。新規'); assert.equal(f.spoken[0].output, 'both'); assert.equal(f.spoken[0].master, true); assert.equal(f.spoken[0].system, true);
@@ -85,6 +85,19 @@ test('an oversized or vanished notification does not block subsequent notificati
   const adb = f.android.adb; f.android.adb = (args, options) => args[1].includes('|bad|') ? Promise.reject(new Error('Androidの応答が大きすぎます')) : adb(args, options);
   f.records.set(good, dump('更新')); await f.reader.poll();
   assert.equal(f.spoken.length, 1); assert.equal(f.spoken[0].text, '受信。更新'); assert.match(f.reader.error, /大きすぎ/); f.reader.close();
+});
+
+test('the five-second cycle budget includes the notification list, limiting remaining detail reads', async t => {
+  const f = fixture(); await f.reader.poll(); let clock = 1000;
+  t.mock.method(Date, 'now', () => clock);
+  for (let i = 0; i < 8; i++) f.records.set(`0|com.example|${i}|new|10123`, dump(`新規${i}`));
+  const adb = f.android.adb, timeouts = [];
+  f.android.adb = async (args, options) => {
+    if (args[1] === 'cmd notification list') clock += 2500;
+    else { timeouts.push(options.timeout); clock += options.timeout; }
+    return adb(args, options);
+  };
+  await f.reader.poll(); assert.deepEqual(timeouts, [2000, 500]); assert.equal(clock, 6000); f.reader.close();
 });
 
 test('notification preferences are validated and can change without rebuilding or stopping the VM', () => {
