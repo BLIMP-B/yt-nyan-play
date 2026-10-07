@@ -32,10 +32,11 @@ test('Android installation still supports cancellation and process timeouts whil
 });
 test('Android stop releases inherited output pipes even after the launcher exited', async t => {
   const android = runtime(t);
-  const script = `const {spawn}=require('node:child_process'); const worker=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,2]}); process.stdout.write(String(worker.pid)+'\\n'); process.exit(0);`;
+  const script = `const {spawn}=require('node:child_process'); const worker=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,2]}); process.stdout.write(String(worker.pid)+'\\n',()=>process.exit(0));`;
   const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
   const exited = once(child, 'exit');
   const [output] = await once(child.stdout, 'data'); const workerPid = Number(output.toString().trim());
+  assert.ok(Number.isInteger(workerPid) && workerPid > 1);
   t.after(() => { try { process.kill(workerPid); } catch {} child.stdout.destroy(); child.stderr.destroy(); });
   await exited; assert.equal(child.stdout.destroyed, false, 'The worker must retain the inherited pipe for this regression');
   android.child = child; android.adb = async () => { throw new Error('An exited launcher must not issue more ADB commands'); };

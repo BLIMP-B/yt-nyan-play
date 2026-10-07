@@ -65,7 +65,7 @@ MediaStreamResolver.prototype.resolve = function(url, signal) {
 import { AndroidRuntime } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/android.mjs')).href)};
 import { shellQuote } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/core/android-packages.mjs')).href)};
 const originalAdb = AndroidRuntime.prototype.adb;
-AndroidRuntime.prototype.start = async function() { this.child = {exitCode:0, kill(){}}; this.status = 'running'; globalThis.nyanNotificationRecords = new Map(); this.change(); return this.snapshot(); };
+AndroidRuntime.prototype.start = async function() { this.child = {exitCode:0, signalCode:null, kill(){}, unref(){}}; this.status = 'running'; globalThis.nyanNotificationRecords = new Map(); this.change(); return this.snapshot(); };
 AndroidRuntime.prototype.adb = function(args, options) {
   const records = globalThis.nyanNotificationRecords;
   if (records && args[1] === 'cmd notification list') return Promise.resolve([...records.keys()].join('\\n'));
