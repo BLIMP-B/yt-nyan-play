@@ -286,7 +286,7 @@ try {
   const monitorConfig = (await call(page, 'state')).config;
   monitorConfig.bot.bindings.push({ guildId: '99998', voiceChannelId: '33333', textChannelIds: [] });
   monitorConfig.desktop.voiceMonitorGuildId = '99998'; monitorConfig.desktop.voiceMonitorVolume = 0.65;
-  const availableSpeakers = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default'));
+  const availableSpeakers = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default').map(d => ({ deviceId: d.deviceId, label: d.label })));
   monitorConfig.desktop.outputDevice = availableSpeakers[0]?.deviceId || '';
   await call(page, 'config:save', monitorConfig); await call(page, 'voice:join', '99998');
   await application.evaluate(async () => {
@@ -308,7 +308,7 @@ try {
   await page.locator('[data-view="settings"]').click(); await page.screenshot({ path: join(reports, 'voice-monitor-settings.png'), fullPage: true });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   const unavailableConfig = (await call(page, 'state')).config; unavailableConfig.desktop.outputDevice = 'unavailable-speaker-verification'; await call(page, 'config:save', unavailableConfig);
-  await page.waitForFunction(() => window.nyanLocalAudio.snapshot().monitorSink === '');
+  await page.waitForFunction(async () => window.nyanLocalAudio.snapshot().monitorSink === '' && (await window.nyan.invoke('state')).value.logs.some(log => log.text.includes('指定のスピーカーが利用できない')));
   const speakerState = await call(page, 'state'); assert.equal(speakerState.config.desktop.outputDevice, 'unavailable-speaker-verification');
   assert.ok(speakerState.logs.some(log => log.text.includes('指定のスピーカーが利用できない')));
   report.voiceMonitor = { ...voiceResult, deviceConfigSaved: true, unavailableDeviceFallback: true, passed: true };
