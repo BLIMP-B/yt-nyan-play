@@ -30,7 +30,10 @@ test('Android installation still supports cancellation and process timeouts whil
   await assert.rejects(android.run(process.execPath, ['-e', "setInterval(() => process.stdout.write('download progress'), 10)"], { progress: true, signal: controller.signal }), { name: 'AbortError' });
   await assert.rejects(android.run(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { progress: true, timeout: 100 }), /タイムアウト/);
 });
-test('Android stop releases inherited output pipes even after the launcher exited', async t => {
+// Node's stdio inheritance closes differently on Windows. The test below
+// exercises actual POSIX descriptors; Windows has its own real process-tree
+// test and the native Emulator shutdown check in verify-android.
+test('POSIX Android stop releases inherited output pipes even after the launcher exited', { skip: process.platform === 'win32' }, async t => {
   const android = runtime(t);
   const script = `const {spawn}=require('node:child_process'); const worker=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:['ignore',1,2]}); process.stdout.write(String(worker.pid)+'\\n',()=>process.exit(0));`;
   const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });

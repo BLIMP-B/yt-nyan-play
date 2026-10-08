@@ -37,6 +37,10 @@ test('recovery preserves user data, disables Vulkan and snapshot loading, and on
   assert.ok(emulatorArguments({ ...config, audioEnabled: false }).includes('-no-audio'));
   assert.ok(normal.includes('-no-window'));
   assert.ok(!emulatorArguments({ ...config, showWindow: true }).includes('-no-window'));
+  for (const [host, guest] of [[1, 1], [2, 1], [4, 2], [8, 4]]) {
+    const args = emulatorArguments(config, { cores: host });
+    assert.equal(Number(args[args.indexOf('-cores') + 1]), guest, 'Windows audio and UI must retain host CPU capacity');
+  }
   assert.equal(bootProperties('[sys.boot_completed]: [1]\r\n')['sys.boot_completed'], '1');
   assert.equal(normalizeConfig({ android: { ramMb: 2048 } }).android.ramMb, 2048);
 });

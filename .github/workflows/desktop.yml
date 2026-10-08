@@ -146,6 +146,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - run: npm ci
       - name: Install official SDK and Google Play image and create AVD
         run: npm run verify:android

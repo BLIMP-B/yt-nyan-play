@@ -30,34 +30,17 @@ try {
     config.android.gpu = 'software'; report.gpu = config.android.gpu;
     config.android.audioEnabled = false;
     config.android.showWindow = true;
+    report.stage = 'native-probe-prerequisites';
+    report.pythonVersion = await android.run('python', ['--version'], { timeout: 15000 });
+    await android.run('python', ['-X', 'utf8', resolve(import.meta.dirname, 'windows-emulator-windows.py'), '0'], { timeout: 15000 });
+    report.stage = 'boot';
     await android.start(); report.bootVerified = true;
-    // Query visible top-level windows directly. Process.MainWindowHandle can
-    // wait on a busy Qt process during Android's first boot. Python is already
-    // installed on the Windows CI runner; the desktop app does not require it.
-    const windows = await android.run('python', ['-X', 'utf8', '-c', `import ctypes
-from ctypes import wintypes
-user = ctypes.WinDLL('user32', use_last_error=True)
-callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
-user.IsWindowVisible.argtypes = [wintypes.HWND]
-user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-titles = []
-@callback_type
-def visit(window, unused):
-    if user.IsWindowVisible(window):
-        size = user.GetWindowTextLengthW(window)
-        if size:
-            text = ctypes.create_unicode_buffer(size + 1)
-            user.GetWindowTextW(window, text, size + 1)
-            if 'Android Emulator' in text.value:
-                titles.append(text.value)
-    return True
-if not user.EnumWindows(visit, 0):
-    raise ctypes.WinError(ctypes.get_last_error())
-print('\\n'.join(titles))`], { timeout: 15000 });
-    report.nativeWindows = windows.trim().split(/\r?\n/).filter(Boolean);
-    report.nativeWindowVerified = /Android Emulator/.test(windows);
+    // Match our visible Qt windows by PID and cached window class. Reading
+    // titles can wait on a busy Qt thread; no WM_GETTEXT is sent here.
+    report.stage = 'native-window';
+    const windows = await android.run('python', ['-X', 'utf8', resolve(import.meta.dirname, 'windows-emulator-windows.py'), String(android.child.pid)], { timeout: 15000 });
+    report.nativeWindows = JSON.parse(windows);
+    report.nativeWindowVerified = report.nativeWindows.some(window => window.visible && window.class.startsWith('Qt'));
     assert.equal(report.nativeWindowVerified, true, 'The native Android window for protected authentication screens was not visible');
     report.stage = 'verify-installed-play';
     report.playInstalled = /^package:/m.test(await android.adb(['shell', 'pm', 'path', 'com.android.vending'], { timeout: 60000 }));
