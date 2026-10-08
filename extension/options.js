@@ -1,4 +1,20 @@
 let editId = null;
+document.getElementById('transferAccount').addEventListener('click', async () => {
+  const button = document.getElementById('transferAccount'), input = document.getElementById('accountCode'), status = document.getElementById('accountStatus');
+  try {
+    NyanAccountLink.parse(input.value);
+    // Invoke immediately in the click handler so Chrome retains the user gesture.
+    const permission = chrome.permissions.request({ permissions: ['cookies'], origins: ['http://127.0.0.1/*'] });
+    button.disabled = true; status.textContent = '接続しています…';
+    if (!await permission) throw new Error('ログイン引き継ぎが許可されませんでした。');
+    const result = await chrome.runtime.sendMessage({ type: 'TRANSFER_YOUTUBE_SESSION', code: input.value.trim() });
+    if (!result?.ok) throw new Error(result?.error || '接続を確認できませんでした。');
+    input.value = ''; status.textContent = 'YouTubeのログイン情報を引き継ぎました。にゃんとーくで再生をお試しください。';
+  } catch (e) { status.textContent = e.message; }
+  finally { button.disabled = false; }
+});
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const isWebhook = value => { try { const u = new URL(value); return u.protocol === 'https:' && !u.username && !u.password && ['discord.com','discordapp.com'].includes(u.hostname) && /^\/api\/webhooks\/\d+\/[\w-]+$/.test(u.pathname); } catch { return false; } };
 
 function uid() {
   return Date.now();
@@ -102,8 +118,8 @@ function init() {
     const label = el("label")?.value?.trim();
     const webhookUrl = el("webhookUrl")?.value?.trim();
 
-    if (!label || !webhookUrl) {
-      alert("入力してください");
+    if (!label || !isWebhook(webhookUrl)) {
+      alert("表示名とDiscordのWebhook URLを入力してください。");
       return;
     }
 
@@ -130,6 +146,8 @@ function init() {
 
     const list = await load();
 
+    if (!label || !isWebhook(webhookUrl)) { alert("表示名とDiscordのWebhook URLを入力してください。"); return; }
+
     const newList = list.map(item => {
       if (item.id === editId) {
         return { ...item, label, webhookUrl };
@@ -153,6 +171,7 @@ function init() {
 
   render();
   renderHistory();
+  initOrigins();
 }
 
 async function render() {
@@ -170,8 +189,8 @@ async function render() {
 
     div.innerHTML = `
       <div class="meta">
-        <strong>${item.label}</strong>
-        <div class="url">${maskWebhookUrl(item.webhookUrl)}</div>
+        <strong>${escapeHtml(item.label)}</strong>
+        <div class="url">${escapeHtml(maskWebhookUrl(item.webhookUrl))}</div>
       </div>
 
       ${isDefault ? `
@@ -227,8 +246,8 @@ async function renderHistory() {
 
     div.innerHTML = `
       <div class="meta">
-        <div class="url" style="white-space:pre-wrap;">${item.text}</div>
-        <small>${date}</small>
+        <div class="url" style="white-space:pre-wrap;">${escapeHtml(item.text)}</div>
+        <small>${escapeHtml(date)}</small>
       </div>
 
       <div class="actions">
@@ -265,7 +284,7 @@ async function renderHistory() {
       const sendBtn = document.createElement("button");
       sendBtn.textContent = "送信";
 
-      sendBtn.onclick = () => {
+      sendBtn.onclick = async () => {
         const checked = Array.from(destDiv.querySelectorAll("input:checked"))
           .map(x => x.value);
 
@@ -274,13 +293,15 @@ async function renderHistory() {
           return;
         }
 
-        chrome.runtime.sendMessage({
+        sendBtn.disabled = true;
+        const result = await chrome.runtime.sendMessage({
           type: "SEND_TO_DISCORD_WEBHOOKS",
           webhookUrls: checked,
           content: item.text
         });
 
-        alert("送信しました ");
+        sendBtn.disabled = false;
+        alert(result?.results?.map(r => `${destinations.find(d => d.webhookUrl === r.url)?.label || "送信先"}: ${r.ok ? "送信完了" : r.error || "送信失敗"}`).join("\n") || result?.error || "結果を確認できませんでした。");
       };
 
       destDiv.appendChild(sendBtn);
@@ -294,4 +315,30 @@ async function renderHistory() {
 
     root.appendChild(div);
   });
+}
+async function initOrigins() {
+  el('allowOrigin').onclick = async () => {
+    let origin;
+    try { const u = new URL(el('extraOrigin').value.trim()); if (u.protocol !== 'https:' || u.username || u.password || u.hostname.includes('*')) throw new Error(); origin = u.origin + '/*'; }
+    catch { el('originStatus').textContent = 'https://で始まるサイトURLを入力してください。'; return; }
+    try {
+      const granted = await chrome.permissions.request({origins:[origin]});
+      if (granted) { await chrome.runtime.sendMessage({type:'REGISTER_ADDITIONAL_SITES'}); el('originStatus').textContent = '許可しました。対象サイトのタブを再読み込みしてください。'; }
+      else el('originStatus').textContent = '許可されませんでした。';
+    } catch { el('originStatus').textContent = 'サイトを許可できませんでした。'; }
+    renderOrigins();
+  };
+  renderOrigins();
+}
+async function renderOrigins() {
+  const fixed = new Set(chrome.runtime.getManifest().host_permissions);
+  const origins = (await chrome.permissions.getAll()).origins || [];
+  const root = el('originList'); root.replaceChildren();
+  for (const origin of origins.filter(x => !fixed.has(x) && x !== 'https://*/*' && x.startsWith('https://'))) {
+    const row = document.createElement('div'); row.className = 'item';
+    const label = document.createElement('span'); label.textContent = origin;
+    const remove = document.createElement('button'); remove.textContent = '許可を解除';
+    remove.onclick = async () => { await chrome.permissions.remove({origins:[origin]}); await chrome.runtime.sendMessage({type:'REGISTER_ADDITIONAL_SITES'}); renderOrigins(); };
+    row.append(label, remove); root.append(row);
+  }
 }

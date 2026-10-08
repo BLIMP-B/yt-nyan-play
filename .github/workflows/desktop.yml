@@ -1,0 +1,214 @@
+name: Desktop tests and Windows package
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel obsolete preparation runs before tagging a newer source
+        if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARE_REPOSITORY: ${{ github.repository }}
+          PREPARE_RUN_ID: ${{ github.run_id }}
+        run: |
+          gh api "repos/$PREPARE_REPOSITORY/actions/workflows/desktop.yml/runs?branch=codex%2Fwindows-desktop-bot&event=push&per_page=100" --jq '.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | .id' |
+          while read -r RUN_ID; do
+            if test "$RUN_ID" -lt "$PREPARE_RUN_ID"; then gh api --method POST "repos/$PREPARE_REPOSITORY/actions/runs/$RUN_ID/cancel"; fi
+          done
+  tag-verified-source:
+    needs: [tests, windows, android-install, hourly-model, live-media]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Register the verified source in its own workflow context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_REPOSITORY: ${{ github.repository }}
+          VERIFIED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          TAG=$(node --input-type=module -e "import{readFileSync}from'node:fs';const p=JSON.parse(readFileSync('package.json')),s=JSON.parse(readFileSync('releases/current.json'));if('v'+p.version!==s.tag)console.log('v'+p.version)")
+          if test -z "$TAG"; then exit 0; fi
+          if EXISTING_SHA=$(gh api "repos/$VERIFIED_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null); then
+            test "$EXISTING_SHA" = "$VERIFIED_SOURCE_SHA"
+          else
+            gh api --method POST "repos/$VERIFIED_REPOSITORY/git/refs" --field ref="refs/tags/$TAG" --field sha="$VERIFIED_SOURCE_SHA" > /dev/null
+          fi
+  tests:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run check:desktop
+      - run: npm test
+      - run: xvfb-run --auto-servernum npm run smoke:desktop
+      - run: xvfb-run --auto-servernum npm run verify:accounts
+      - run: npx playwright-core install --with-deps chromium
+      - run: xvfb-run --auto-servernum npm run verify:account-link
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: account-link-verification-linux
+          path: dist/account-link-verification
+      - name: Check real speech, video audio and PC output
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=nyan_verify rate=48000 channels=2
+          pactl set-default-sink nyan_verify
+          NYAN_AUDIO_MONITOR_SOURCE=nyan_verify.monitor xvfb-run --auto-servernum npm run verify:audio
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-linux
+          path: dist/audio-verification
+      - run: npm run verify:voice-clock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-clock-verification-linux
+          path: dist/voice-clock-verification
+      - run: xvfb-run --auto-servernum npm run verify:playback-duration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-duration-verification-linux
+          path: dist/playback-duration-verification
+  windows:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: ./scripts/check-bouyomi-helper.ps1
+      - run: npm test
+      - run: npm run smoke:desktop
+      - run: npm run verify:accounts
+      - run: npx playwright-core install chromium
+      - run: npm run verify:account-link
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: account-link-verification-windows
+          path: dist/account-link-verification
+      - run: npm run verify:streaming
+      - run: npm run verify:audio
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-windows
+          path: dist/audio-verification
+      - run: npm run verify:playback-duration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playback-duration-verification-windows
+          path: dist/playback-duration-verification
+      - run: npm run verify:voice-clock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-clock-verification-windows
+          path: dist/voice-clock-verification
+      - run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: ./scripts/check-windows-icon.ps1
+      - name: Verify packaged Windows app and history worker
+        run: npm run smoke:desktop
+        env:
+          NYAN_SMOKE_EXECUTABLE: dist/desktop/win-unpacked/NyanTalk-Damare.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyan-talk-damare-windows-x64
+          path: |
+            dist/desktop/*.exe
+            dist/desktop/*.zip
+          if-no-files-found: error
+  android-install:
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: npm ci
+      - name: Install official SDK and Google Play image and create AVD
+        run: npm run verify:android
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-verification-windows
+          path: dist/android-verification
+  hourly-model:
+    needs: tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify managed local SLM and real Japanese generation
+        run: npm run verify:hourly-model
+        env:
+          NYAN_VERIFY_GITHUB_TOKEN: ${{ github.token }}
+      - name: Measure generation, YouTube search and player preparation on Windows
+        run: node scripts/verify-hourly-timing.mjs dist/hourly-model-verification/model-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hourly-model-verification-windows
+          path: dist/hourly-model-verification
+  live-media:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify public YouTube and Niconico audio
+        continue-on-error: true
+        run: npm run verify:audio
+        env:
+          NYAN_LIVE_MEDIA_URLS: '["https://youtu.be/h9c0gegwcM0?si=AWLiET3TiyqluSzc","https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1","https://www.nicovideo.jp/watch/sm9"]'
+          NYAN_REQUIRE_LIVE_SERVICES: 'youtube,niconico'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-live-sites
+          path: dist/audio-verification

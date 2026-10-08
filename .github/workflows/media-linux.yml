@@ -1,0 +1,53 @@
+name: Verify public YouTube audio in additional environments
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  youtube-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check YouTube content audio and Discord encoding
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio pulseaudio-utils
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=nyan_verify rate=48000 channels=2
+          pactl set-default-sink nyan_verify
+          xvfb-run --auto-servernum npm run verify:audio
+        env:
+          NYAN_AUDIO_MONITOR_SOURCE: nyan_verify.monitor
+          NYAN_LIVE_MEDIA_URLS: '["https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1"]'
+          NYAN_REQUIRE_LIVE_SERVICES: youtube
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-youtube-linux
+          path: dist/audio-verification
+  youtube-audio-macos:
+    runs-on: macos-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check YouTube content audio and Discord encoding
+        run: npm run verify:audio
+        env:
+          NYAN_LIVE_MEDIA_URLS: '["https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1"]'
+          NYAN_REQUIRE_LIVE_SERVICES: youtube
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: audio-verification-youtube-macos
+          path: dist/audio-verification

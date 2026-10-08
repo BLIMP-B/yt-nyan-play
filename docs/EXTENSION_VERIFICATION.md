@@ -1,0 +1,54 @@
+# にゃんぷれい v0.2.1 表示・操作の検証
+
+検証日: 2026-10-06（日本時間）。対象はChrome拡張の表示と送信操作です。PCアプリ・Discordへの実音声到達とは別の試験です。
+
+## 試験条件
+
+GitHub Actionsの新しいChromiumプロファイルへ、製品の`extension/manifest.json`から実際のManifest V3拡張を読み込みます。ユーザーのクラウドブラウザ・ログイン状態・Cookieは取り込んでいません。実在のWebhookを使わず、送信試験はネットワーク応答を制御して記録します。検証条件はJSON報告にも保存します。
+
+管理されたローカルChromeは拡張機能の追加を禁止しているため、管理設定を変更せずにActionsで検証しています。
+
+## 投稿DOMを使う表示・操作試験
+
+YouTube、ニコニコ動画、X、Instagram、TikTok、Facebook、Threads、Bluesky、Mastodonの9アダプタを対象に、サイトの投稿形式を使う制御されたHTMLページへ実際の拡張を読み込みます。サイト自体の画面・最新DOMの完全コピーではありません。撮影画像のヘッダーと一覧画像にこの条件を明記します。
+
+各サイトで確認する項目:
+
+- 対象メディアの近くに「再生」が1つ表示される。
+- 押すと送信画面が開き、投稿単位のURLとタイトルが入る。
+- 選んだ動画の時刻を反映し、「最初から」で元の時刻指定を除く。
+- 宛先を選ぶ前は送信できず、検出だけで送信されない。
+- 再生・無限・直接でマーカーが正しく、SNSがYouTube URLに変わらない。
+
+追加試験は、複数候補・要素の削除・遅延ソース・SPAで再利用される投稿のパーマリンク更新・深いReactプレイヤー階層・視覚的に表示された`aria-hidden`メディア・宛先別エラー・失敗先だけの再送・マスク済み成功履歴・画像や文字だけの投稿・390px幅での表示です。結果は`fixtures/fixture-report.json`へ記録します。
+
+## 実公開ページの試験
+
+別の未ログインプロファイルで、実際の公開ページを開き、ページと送信画面を撮影します。サイトを試験HTMLへ置き換えず、実際の動画・音声と投稿URLを調べます。ログイン、CAPTCHA、非公開・アクセス制限の回避は行いません。
+
+ニコニコ動画・TikTok・Facebook・Threads・Bluesky・Mastodonでは、公開ページ上のボタンと送信画面を確認できています。YouTubeはbot確認のログイン画面、X・Instagramはアクセス失敗やログインへの遷移があり、ログイン後の実表示は未確認です。最終のサイト別結果は、Releaseに添付した`public-pages/public-report.json`を確認してください。メディアが存在していてもボタンを確認できなかった場合は成功としません。
+
+最終ソースは`ed5fa211e9a69cd7c1706167b2ea22c54e0a736f`、[検証実行](https://github.com/BLIMP-B/yt-nyan-play/actions/runs/37430472512)は成功しています。
+
+| サイト | 実公開ページの結果 |
+| --- | --- |
+| ニコニコ動画・TikTok・Facebook・Threads・Bluesky・Mastodon | ボタンと送信画面を確認 |
+| YouTube | bot確認によるログイン要求で未確認 |
+| X・Instagram | ページ取得時のHTTP応答失敗で未確認 |
+
+実公開ページの報告には、アクセス先・最終URL・HTTP結果・プレイヤー数・ボタンとダイアログの有無・送信プレビューを記録します。ボタンが見つからない場合は、公開DOM内のメディア状態と近い投稿リンクを診断用に保存します。実音声の再生や実Discord送信は、この報告の成功条件には含めていません。
+
+## 画像の見方・配布
+
+[GitHub Releases](https://github.com/BLIMP-B/yt-nyan-play/releases/tag/v0.2.1)に以下をまとめます。
+
+- `yt-nyan-play-0.2.1.zip`: 読み込めるChrome拡張。
+- `nyan-play-0.2.1-display.png`: 9サイトの表示試験画像の一覧。
+- `nyan-play-0.2.1-screenshots.zip`: フルサイズの画像とJSON報告。`fixtures/`は投稿DOMを使う試験、`public-pages/`は実公開ページです。
+- にゃんとーくv0.5.0の既存EXE・ZIP: 以前のReleaseと同一のPC版です。拡張はv0.2.1のZIPを別途Chromeへ読み込んでください。
+
+画像の元PNGは加工せず保存し、一覧だけ縮小・切り出して配置します。実在のWebhook・Botトークン・アカウントCookieは画像や報告へ含めません。
+
+## 残る確認
+
+ログイン済みの各SNS・YouTubeでの実表示、iframeと閉じたShadow DOM、同一投稿に複数メディアがあるサイトでの受信側候補選択、Windowsの実アカウント・実Discord VCへの再生到達は未確認です。追加のMastodon／一般サイトはChromeの個別許可とPC側の許可ホスト設定が必要です。

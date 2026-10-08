@@ -1,13 +1,104 @@
 {
-  "name": "yt-nyan-play",
-  "version": "0.1.2",
+  "name": "nyan-talk-damare",
+  "version": "0.5.10",
   "private": true,
-  "description": "YTにゃんぷれい Chrome拡張機能のソース管理・検査",
+  "description": "にゃんとーく〜Damare〜 Windows Discord.js統合アプリと送信側Chrome拡張",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "check": "node scripts/check.mjs",
-    "package": "python3 scripts/package.py"
+    "package": "python3 scripts/package.py",
+    "start": "electron .",
+    "test": "node --test tests/*.test.mjs",
+    "check:desktop": "node scripts/check-desktop.mjs",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:dir": "electron-builder --dir --publish never",
+    "smoke:desktop": "node scripts/smoke-desktop.mjs",
+    "icon:build": "electron scripts/build-app-icon.cjs",
+    "verify:voice-clock": "node scripts/verify-voice-clock.mjs",
+    "verify:streaming": "node scripts/verify-streaming.mjs",
+    "verify:playback-duration": "node scripts/verify-playback-duration.mjs",
+    "verify:audio": "node scripts/verify-audio.mjs",
+    "verify:accounts": "node scripts/verify-media-accounts.mjs",
+    "verify:account-link": "node scripts/verify-account-link.mjs",
+    "verify:android": "node scripts/verify-android.mjs",
+    "verify:hourly-model": "node scripts/verify-hourly-model.mjs",
+    "verify:extension": "node scripts/verify-extension.mjs",
+    "verify:extension:live": "node scripts/verify-extension-live.mjs"
+  },
+  "type": "module",
+  "main": "apps/desktop/main.mjs",
+  "author": "BLIMP-B",
+  "dependencies": {
+    "@discordjs/voice": "0.19.2",
+    "discord.js": "14.27.0",
+    "fast-xml-parser": "5.11.2",
+    "fflate": "0.8.3",
+    "ffmpeg-static": "5.3.0",
+    "kuromoji": "0.1.2",
+    "opusscript": "0.1.1",
+    "re2-wasm": "1.0.2"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "playwright-core": "1.58.2"
+  },
+  "extensionVersion": "0.2.2",
+  "license": "UNLICENSED",
+  "build": {
+    "appId": "jp.blimp.nyantalkdamare",
+    "productName": "にゃんとーく〜Damare〜",
+    "directories": {
+      "output": "dist/desktop"
+    },
+    "files": [
+      "apps/desktop/**/*",
+      "extension/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*",
+      "node_modules/**/*.node"
+    ],
+    "extraResources": [
+      {
+        "from": "extension",
+        "to": "chrome-extension"
+      },
+      {
+        "from": "docs",
+        "to": "docs"
+      },
+      {
+        "from": "THIRD_PARTY.md",
+        "to": "THIRD_PARTY.md"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "artifactName": "NyanTalk-Damare-${version}-${arch}.${ext}",
+      "icon": "apps/desktop/assets/app.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "artifactName": "NyanTalk-Damare-Setup-${version}-${arch}.${ext}",
+      "installerIcon": "apps/desktop/assets/app.ico",
+      "uninstallerIcon": "apps/desktop/assets/app.ico"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "icon": "extension/furoneko70furoneko70.png"
+    },
+    "executableName": "NyanTalk-Damare"
   }
 }

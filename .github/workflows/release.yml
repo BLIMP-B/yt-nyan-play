@@ -1,0 +1,315 @@
+name: Publish both applications to GitHub Release
+
+on:
+  push:
+    paths:
+      - releases/current.json
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publish-nyan-applications
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Read the explicit release selection
+        id: selection
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import assert from 'node:assert/strict';
+          const selection = JSON.parse(readFileSync('releases/current.json', 'utf8'));
+          assert.match(selection.tag, /^v\d+\.\d+\.\d+$/);
+          assert.match(selection.sourceSha, /^[a-f0-9]{40}$/);
+          assert.ok(Number.isSafeInteger(selection.windowsRunId) && selection.windowsRunId > 0);
+          assert.ok(typeof selection.title === 'string' && selection.title.length < 200 && !/[\r\n]/.test(selection.title));
+          assert.match(selection.notes, /^releases\/notes-v\d+\.\d+\.\d+\.md$/);
+          const notes = join(process.env.RUNNER_TEMP, 'nyan-release-notes.md');
+          writeFileSync(notes, readFileSync(selection.notes));
+          for (const [name, value] of Object.entries({ tag: selection.tag, sha: selection.sourceSha, run: selection.windowsRunId, title: selection.title, notes })) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+          JS
+      - name: Verify the selected Windows build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ steps.selection.outputs.run }}
+          RELEASE_SOURCE_SHA: ${{ steps.selection.outputs.sha }}
+        run: |
+          gh api "repos/$RELEASE_REPOSITORY/actions/runs/$RELEASE_RUN_ID" > "$RUNNER_TEMP/nyan-release-run.json"
+          gh api "repos/$RELEASE_REPOSITORY/actions/runs/$RELEASE_RUN_ID/jobs" > "$RUNNER_TEMP/nyan-release-jobs.json"
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import assert from 'node:assert/strict';
+          const run = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-run.json')));
+          assert.equal(run.head_sha, process.env.RELEASE_SOURCE_SHA);
+          assert.equal(run.status, 'completed');
+          assert.equal(run.event, 'push');
+          const { jobs } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-jobs.json')));
+          for (const name of ['tests', 'windows', 'android-install', 'hourly-model', 'tag-verified-source']) assert.ok(jobs.some(job => job.name === name && job.conclusion === 'success'), `${name} must succeed`);
+          assert.equal(run.conclusion, 'success');
+          JS
+      - name: Select the latest artifacts from the verified run
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN_ID: ${{ steps.selection.outputs.run }}
+        run: |
+          gh api "repos/$RELEASE_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/nyan-release-artifacts.json"
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import assert from 'node:assert/strict';
+          const { artifacts } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-artifacts.json')));
+          const names = { clock: 'voice-clock-verification-windows', android: 'android-verification-windows', model: 'hourly-model-verification-windows', duration: 'playback-duration-verification-windows', audio: 'audio-verification-windows', windows: 'nyan-talk-damare-windows-x64' };
+          for (const [key, name] of Object.entries(names)) {
+            const latest = artifacts.filter(a => a.name === name && !a.expired).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+            assert.ok(latest && Number.isSafeInteger(latest.id) && latest.size_in_bytes > 0, `${name} is required`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${latest.id}\n`);
+          }
+          JS
+      - name: Download verification artifacts by their exact IDs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ARTIFACT_CLOCK: ${{ steps.artifacts.outputs.clock }}
+          RELEASE_ARTIFACT_ANDROID: ${{ steps.artifacts.outputs.android }}
+          RELEASE_ARTIFACT_MODEL: ${{ steps.artifacts.outputs.model }}
+          RELEASE_ARTIFACT_DURATION: ${{ steps.artifacts.outputs.duration }}
+          RELEASE_ARTIFACT_AUDIO: ${{ steps.artifacts.outputs.audio }}
+        run: |
+          # download-artifact v4 lists only the first page for cross-run IDs.
+          # A rerun can add a valid artifact beyond that page; request its ID directly.
+          for KEY in clock android model duration audio; do
+            VARIABLE="RELEASE_ARTIFACT_${KEY^^}"
+            ID="${!VARIABLE}"
+            ARCHIVE="$RUNNER_TEMP/nyan-artifact-$KEY.zip"
+            gh api "repos/$RELEASE_REPOSITORY/actions/artifacts/$ID/zip" > "$ARCHIVE"
+            mkdir -p "verification/$KEY"
+            unzip -q "$ARCHIVE" -d "verification/$KEY"
+          done
+      - name: Check voice timing, real Android, local SLM and playback reports
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          const clock = JSON.parse(readFileSync('verification/clock/clock-report.json'));
+          assert.equal(clock.platform, 'win32');
+          assert.equal(clock.passed, true);
+          assert.equal(clock.separateThread, true);
+          assert.equal(clock.transport, 'loopback-udp');
+          assert.equal(clock.mainStallMs, 90);
+          assert.ok(clock.baseline.gapsOver60ms >= 5 && clock.baseline.burstsUnder5ms >= 10);
+          for (const output of [clock.speech, clock.media]) {
+            assert.ok(output.packets >= 100);
+            assert.ok(output.gapsOver60ms <= 2 && output.burstsUnder5ms <= 4);
+            assert.equal(output.silentFrames, 0);
+          }
+          assert.equal(clock.cancellation, true);
+          assert.equal(clock.gatewayLeave, true);
+          const android = JSON.parse(readFileSync('verification/android/android-report.json'));
+          assert.equal(android.platform, 'win32');
+          assert.equal(android.bootVerified, true);
+          assert.equal(android.playForeground, true);
+          assert.equal(android.nativeWindowVerified, true);
+          assert.equal(android.shutdownVerified, true);
+          assert.equal(android.notifications.passed, true);
+          assert.deepEqual(android.notifications.outputChoices, ['both', 'local', 'discord']);
+          assert.match(android.playWindow.focus, /com\.android\.vending\//);
+          const model = JSON.parse(readFileSync('verification/model/model-report.json'));
+          assert.equal(model.platform, 'win32');
+          assert.equal(model.passed, true);
+          assert.equal(model.samples.length, 3);
+          for (const sample of model.samples) {
+            assert.ok(sample.text.endsWith('のだ。') && sample.text.length <= 200 && sample.nouns.length === 2);
+            assert.ok(sample.plan.clauseCount >= 1 && sample.plan.maxChars <= 200);
+            assert.equal(sample.plan.version, 2);
+            assert.equal(sample.quality.sentenceCount, 1);
+            assert.equal(sample.quality.uniqueSourceNouns, true);
+            assert.equal((sample.text.match(/。/g) || []).length, 1);
+          }
+          assert.ok(model.samples.some(sample => sample.plan.preset === 'extended' && sample.text.length >= 150));
+          const extended = model.samples.find(sample => sample.plan.preset === 'extended');
+          assert.deepEqual(extended.quality.sourceKinds.slice().sort(), ['phrase', 'sentence', 'word']);
+          assert.ok(extended.quality.sourceMessages >= 3);
+          assert.equal(model.repetitionRegression.plan.clauseCount, 1);
+          assert.equal((model.repetitionRegression.text.match(/不動/g) || []).length, 1);
+          assert.equal((model.repetitionRegression.text.match(/野菜/g) || []).length, 1);
+          assert.equal(model.timing.platform, 'win32');
+          assert.equal(model.timing.passed, true);
+          assert.equal(model.timing.searchPerformed, true);
+          assert.ok(model.timing.totalMs >= 0);
+          assert.equal(model.timing.decision, model.timing.playbackReady && model.timing.totalMs + 1000 <= model.timing.budgetMs ? 'with-chime' : 'before-chime');
+          const duration = JSON.parse(readFileSync('verification/duration/duration-report.json'));
+          assert.equal(duration.platform, 'win32');
+          assert.equal(duration.passed, true);
+          const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
+          assert.equal(audio.platform, 'win32');
+          assert.equal(audio.passed, true);
+          for (const kind of ['stream-full', 'stream-direct']) {
+            const stream = audio.media.find(item => item.kind === kind);
+            assert.equal(stream?.status, 'completed');
+            assert.ok(stream.nonSilentSamples > 1000);
+          }
+          assert.equal(audio.localFallback.passed, true);
+          assert.equal(audio.localFallback.speech, true);
+          assert.equal(audio.localFallback.media, true);
+          assert.equal(audio.localFallback.hourly, true);
+          assert.equal(audio.localFallback.botInVC, false);
+          assert.equal(audio.androidNotifications.passed, true);
+          assert.equal(audio.androidNotifications.pcFallbackWithoutBotVC, true);
+          assert.equal(audio.androidNotifications.pcContinuesAfterBotStopped, true);
+          assert.equal(audio.androidNotifications.outputSavedWhileRunning, true);
+          assert.equal(audio.androidNotifications.disabledWhileRunning, true);
+          assert.ok(audio.androidNotifications.nonSilentSamples > 1000);
+          const network = audio.network;
+          assert.equal(network.passed, true);
+          assert.equal(network.defaultProfile, 'poor');
+          assert.equal(network.bitrate, 48000);
+          assert.equal(network.cbrPacketBytes, 120);
+          assert.equal(network.customBitrate, 64000);
+          assert.equal(network.customBitrateSaved, 64);
+          assert.equal(network.settingsSaved, true);
+          assert.equal(network.recycledDecoders, 1280);
+          assert.equal(network.longPacketSamples, 5760);
+          assert.equal(network.retiredErrorsIsolated, true);
+          assert.equal(network.transport.capacityKbps, 80);
+          assert.equal(network.transport.delivered, network.transport.total);
+          assert.ok(network.transport.highBitrateDelivered < network.transport.total);
+          assert.equal(network.profiles.poor.silentFrames, 0);
+          assert.ok(network.loss.audibleFrames > 230 && network.loss.maximumBufferedMs <= 1000);
+          assert.equal(network.electronLifecycle.passed, true);
+          assert.equal(network.electronLifecycle.recycled, 992);
+          assert.equal(network.electronLifecycle.survivors, true);
+          assert.equal(audio.voiceMonitor.passed, true);
+          assert.equal(audio.voiceMonitor.selfExcluded, true);
+          assert.equal(audio.voiceMonitor.deviceConfigSaved, true);
+          assert.equal(audio.voiceMonitor.unavailableDeviceFallback, true);
+          assert.ok(audio.voiceMonitor.metrics.nonSilentSamples > 1000);
+          assert.ok(audio.hourly.fourthToneAt && Math.abs(audio.hourly.measuredCaptureDelayMs) < 750);
+          assert.equal(audio.latinReading.passed, true);
+          assert.equal(audio.latinReading.singleLetters, true);
+          assert.equal(audio.latinReading.romaji, true);
+          assert.equal(audio.latinReading.standaloneN, true);
+          assert.equal(audio.latinReading.dictionaryPriority, true);
+          assert.equal(audio.latinReading.urlExcluded, true);
+          assert.equal(audio.latinReading.synthesisText, 'エー ビー エヌ エヌ か にゃん CAT URL');
+          const effects = audio.mediaEffects;
+          assert.equal(effects.bypassByDefault, true);
+          assert.equal(effects.eqPresetApplied, true);
+          assert.equal(effects.compressorPresetApplied, true);
+          assert.equal(effects.customSaved, true);
+          assert.equal(effects.rendererReloadVerified, true);
+          assert.equal(effects.opus.passed, true);
+          assert.ok(effects.opus.peak > 100 && effects.opus.packets > 20);
+          const history = audio.historyConcurrent;
+          assert.ok(history.messages > 0 && history.messages <= 500);
+          assert.equal(history.errors.length, 0);
+          assert.ok(history.ticks > 20 && history.maxGapMs < 250);
+          assert.ok(history.speechSamples > 1000 && history.videoSamples > 1000);
+          assert.equal(duration.fixtures.length, 6);
+          assert.equal(duration.continuations.length, 3);
+          for (const kind of ['whole', 'truncated']) for (const mode of ['preview', 'full', 'direct']) {
+            const fixture = duration.fixtures.find(f => f.kind === kind && f.mode === mode);
+            assert.equal(fixture?.status, 'completed');
+            assert.equal(fixture.windowIds.length, kind === 'truncated' ? 2 : 1);
+            assert.ok(fixture.audio.audibleSamples > 1000);
+            if (mode === 'preview') assert.ok(fixture.elapsedMs < 54000);
+            else { assert.ok(fixture.elapsedMs > 50000); assert.ok(fixture.maximumTime > 50); assert.ok(fixture.audio.samplesAfter46Seconds > 1000); }
+          }
+          JS
+      - name: Download the verified Windows package by its exact ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ARTIFACT_WINDOWS: ${{ steps.artifacts.outputs.windows }}
+        run: |
+          ARCHIVE="$RUNNER_TEMP/nyan-artifact-windows.zip"
+          gh api "repos/$RELEASE_REPOSITORY/actions/artifacts/$RELEASE_ARTIFACT_WINDOWS/zip" > "$ARCHIVE"
+          mkdir -p release-assets
+          unzip -q "$ARCHIVE" -d release-assets
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.selection.outputs.sha }}
+          path: release-source
+      - name: Package the Chrome extension from the same source
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          cd release-source
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          assert.equal('v' + JSON.parse(readFileSync('package.json')).version, process.env.RELEASE_TAG);
+          JS
+          npm run package
+          cp dist/yt-nyan-play-*.zip ../release-assets/
+      - name: Check release assets and save checksums
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, readdirSync, statSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          const version = process.env.RELEASE_TAG.slice(1);
+          const extension = JSON.parse(readFileSync('release-source/extension/manifest.json')).version;
+          const expected = [`NyanTalk-Damare-Setup-${version}-x64.exe`, `NyanTalk-Damare-${version}-x64.zip`, `yt-nyan-play-${extension}.zip`].sort();
+          assert.deepEqual(readdirSync('release-assets').sort(), expected);
+          for (const name of expected) assert.ok(statSync('release-assets/' + name).size > 0);
+          JS
+          cd release-assets
+          sha256sum *.exe *.zip > SHA256SUMS.txt
+      - name: Register the tag for the verified source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+          RELEASE_SOURCE_SHA: ${{ steps.selection.outputs.sha }}
+        run: |
+          if EXISTING_TAG_SHA=$(gh api "repos/$RELEASE_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null); then
+            test "$EXISTING_TAG_SHA" = "$RELEASE_SOURCE_SHA"
+          else
+            gh api --method POST "repos/$RELEASE_REPOSITORY/git/refs" --field ref="refs/tags/$RELEASE_TAG" --field sha="$RELEASE_SOURCE_SHA" > /dev/null
+          fi
+      - name: Publish the combined prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
+          RELEASE_SOURCE_SHA: ${{ steps.selection.outputs.sha }}
+          RELEASE_TITLE: ${{ steps.selection.outputs.title }}
+          RELEASE_NOTES: ${{ steps.selection.outputs.notes }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json tagName > /dev/null 2>&1; then
+            if EXISTING_RELEASE_SHA=$(gh api "repos/$RELEASE_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha' 2>/dev/null); then
+              test "$EXISTING_RELEASE_SHA" = "$RELEASE_SOURCE_SHA"
+            else
+              test "$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json isDraft --jq '.isDraft')" = true
+              test "$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json targetCommitish --jq '.targetCommitish')" = "$RELEASE_SOURCE_SHA"
+            fi
+            gh release upload "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --clobber
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft=false --latest=false
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --repo "$RELEASE_REPOSITORY" --verify-tag --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES" --prerelease --draft
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --draft=false --latest=false
+          fi
+          gh release view "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" --json url,assets
