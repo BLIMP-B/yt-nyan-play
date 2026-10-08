@@ -80,7 +80,7 @@ jobs:
           import { join } from 'node:path';
           import assert from 'node:assert/strict';
           const { artifacts } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-artifacts.json')));
-          const names = { android: 'android-verification-windows', model: 'hourly-model-verification-windows', duration: 'playback-duration-verification-windows', audio: 'audio-verification-windows', windows: 'nyan-talk-damare-windows-x64' };
+          const names = { clock: 'voice-clock-verification-windows', android: 'android-verification-windows', model: 'hourly-model-verification-windows', duration: 'playback-duration-verification-windows', audio: 'audio-verification-windows', windows: 'nyan-talk-damare-windows-x64' };
           for (const [key, name] of Object.entries(names)) {
             const latest = artifacts.filter(a => a.name === name && !a.expired).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
             assert.ok(latest && Number.isSafeInteger(latest.id) && latest.size_in_bytes > 0, `${name} is required`);
@@ -91,6 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ARTIFACT_CLOCK: ${{ steps.artifacts.outputs.clock }}
           RELEASE_ARTIFACT_ANDROID: ${{ steps.artifacts.outputs.android }}
           RELEASE_ARTIFACT_MODEL: ${{ steps.artifacts.outputs.model }}
           RELEASE_ARTIFACT_DURATION: ${{ steps.artifacts.outputs.duration }}
@@ -98,7 +99,7 @@ jobs:
         run: |
           # download-artifact v4 lists only the first page for cross-run IDs.
           # A rerun can add a valid artifact beyond that page; request its ID directly.
-          for KEY in android model duration audio; do
+          for KEY in clock android model duration audio; do
             VARIABLE="RELEASE_ARTIFACT_${KEY^^}"
             ID="${!VARIABLE}"
             ARCHIVE="$RUNNER_TEMP/nyan-artifact-$KEY.zip"
@@ -106,11 +107,25 @@ jobs:
             mkdir -p "verification/$KEY"
             unzip -q "$ARCHIVE" -d "verification/$KEY"
           done
-      - name: Check real Android, local SLM, long playback and concurrent history audio reports
+      - name: Check voice timing, real Android, local SLM and playback reports
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
           import assert from 'node:assert/strict';
+          const clock = JSON.parse(readFileSync('verification/clock/clock-report.json'));
+          assert.equal(clock.platform, 'win32');
+          assert.equal(clock.passed, true);
+          assert.equal(clock.separateThread, true);
+          assert.equal(clock.transport, 'loopback-udp');
+          assert.equal(clock.mainStallMs, 90);
+          assert.ok(clock.baseline.gapsOver60ms >= 5 && clock.baseline.burstsUnder5ms >= 10);
+          for (const output of [clock.speech, clock.media]) {
+            assert.ok(output.packets >= 100);
+            assert.ok(output.gapsOver60ms <= 2 && output.burstsUnder5ms <= 4);
+            assert.equal(output.silentFrames, 0);
+          }
+          assert.equal(clock.cancellation, true);
+          assert.equal(clock.gatewayLeave, true);
           const android = JSON.parse(readFileSync('verification/android/android-report.json'));
           assert.equal(android.platform, 'win32');
           assert.equal(android.bootVerified, true);
