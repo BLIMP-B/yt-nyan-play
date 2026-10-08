@@ -87,34 +87,25 @@ jobs:
             appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${latest.id}\n`);
           }
           JS
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.android }}
-          merge-multiple: true
-          path: verification/android
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.selection.outputs.run }}
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.model }}
-          merge-multiple: true
-          path: verification/model
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.selection.outputs.run }}
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.duration }}
-          merge-multiple: true
-          path: verification/duration
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.selection.outputs.run }}
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.audio }}
-          merge-multiple: true
-          path: verification/audio
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.selection.outputs.run }}
+      - name: Download verification artifacts by their exact IDs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ARTIFACT_ANDROID: ${{ steps.artifacts.outputs.android }}
+          RELEASE_ARTIFACT_MODEL: ${{ steps.artifacts.outputs.model }}
+          RELEASE_ARTIFACT_DURATION: ${{ steps.artifacts.outputs.duration }}
+          RELEASE_ARTIFACT_AUDIO: ${{ steps.artifacts.outputs.audio }}
+        run: |
+          # download-artifact v4 lists only the first page for cross-run IDs.
+          # A rerun can add a valid artifact beyond that page; request its ID directly.
+          for KEY in android model duration audio; do
+            VARIABLE="RELEASE_ARTIFACT_${KEY^^}"
+            ID="${!VARIABLE}"
+            ARCHIVE="$RUNNER_TEMP/nyan-artifact-$KEY.zip"
+            gh api "repos/$RELEASE_REPOSITORY/actions/artifacts/$ID/zip" > "$ARCHIVE"
+            mkdir -p "verification/$KEY"
+            unzip -q "$ARCHIVE" -d "verification/$KEY"
+          done
       - name: Check real Android, local SLM, long playback and concurrent history audio reports
         run: |
           node --input-type=module <<'JS'
@@ -231,13 +222,16 @@ jobs:
             else { assert.ok(fixture.elapsedMs > 50000); assert.ok(fixture.maximumTime > 50); assert.ok(fixture.audio.samplesAfter46Seconds > 1000); }
           }
           JS
-      - uses: actions/download-artifact@v4
-        with:
-          artifact-ids: ${{ steps.artifacts.outputs.windows }}
-          merge-multiple: true
-          path: release-assets
-          github-token: ${{ github.token }}
-          run-id: ${{ steps.selection.outputs.run }}
+      - name: Download the verified Windows package by its exact ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ARTIFACT_WINDOWS: ${{ steps.artifacts.outputs.windows }}
+        run: |
+          ARCHIVE="$RUNNER_TEMP/nyan-artifact-windows.zip"
+          gh api "repos/$RELEASE_REPOSITORY/actions/artifacts/$RELEASE_ARTIFACT_WINDOWS/zip" > "$ARCHIVE"
+          mkdir -p release-assets
+          unzip -q "$ARCHIVE" -d release-assets
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.selection.outputs.sha }}
