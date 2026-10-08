@@ -7,6 +7,7 @@ import { MediaEffects } from './media-effects.mjs';
 import { hasHumanListeners } from '../core/voice-audience.mjs';
 import { VoiceMonitor } from './voice-monitor.mjs';
 import { audioNetwork } from '../core/audio-network.mjs';
+import { DiscordAudioWorker } from './voice-worker.mjs';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
   createAudioResource, StreamType, NoSubscriberBehavior, AudioPlayerStatus,
@@ -115,7 +116,8 @@ export function decodeAudio(buffer, signal, executable = ffmpegPath) {
 }
 
 export class VoiceOutput {
-  constructor(getClient, getConfig, log, { monitorSend = () => {}, changed = () => {} } = {}) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.changed = changed; this.connections = new Map(); this.connecting = new Map(); this.connectionEpochs = new Map(); this.speechControllers = new Map(); this.pcmControllers = new Map(); this.heldSpeech = new Map(); this.monitor = new VoiceMonitor(monitorSend, changed, log); }
+  constructor(getClient, getConfig, log, { monitorSend = () => {}, changed = () => {} } = {}) { this.getClient = getClient; this.getConfig = getConfig; this.log = log; this.changed = changed; this.connections = new Map(); this.connecting = new Map(); this.connectionEpochs = new Map(); this.speechControllers = new Map(); this.pcmControllers = new Map(); this.heldSpeech = new Map(); this.backend = this.createAudioBackend({ monitorSend, changed, log }); this.monitor = this.backend?.monitor || new VoiceMonitor(monitorSend, changed, log); }
+  createAudioBackend(options) { return new DiscordAudioWorker(options); }
   async connect(guildId, overrideChannel, allowEmpty = false) {
     if (this.connecting.has(guildId)) return this.connecting.get(guildId);
     const epoch = this.connectionEpochs.get(guildId) || 0;
@@ -135,9 +137,12 @@ export class VoiceOutput {
     if (this.getClient() !== client || !client.isReady()) throw new Error('Discord接続が終了しました');
     if (!channel?.isVoiceBased() || channel.guildId !== guildId) throw new Error('指定した音声チャンネルを利用できません');
     if (!allowEmpty && this.getConfig().bot.autoLeave && hasHumanListeners(channel.guild, channelId) === false) throw new Error('人がいる音声チャンネルへ接続してください');
-    const connection = joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: this.getConfig().desktop.voiceMonitorGuildId !== guildId });
-    const mixer = new PcmMixer(this.getConfig().desktop.networkProfile); const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
-    const entry = { connection, mixer, player, channelId }; this.connections.set(guildId, entry);
+    const c = this.getConfig(), selfDeaf = c.desktop.voiceMonitorGuildId !== guildId;
+    const entry = this.backend ? this.backend.open({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf, networkProfile: c.desktop.networkProfile, bitrate: c.desktop.audioBitrateKbps }) : {
+      connection: joinVoiceChannel({ channelId, guildId, adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf }),
+      mixer: new PcmMixer(c.desktop.networkProfile), player: createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } }), channelId,
+    };
+    const { connection, mixer, player } = entry; this.connections.set(guildId, entry);
     connection.on('stateChange', () => { this.syncMonitor(); this.changed(); });
     connection.on('error', error => this.log('error', `音声接続: ${error.message}`));
     const failed = error => {
@@ -151,14 +156,14 @@ export class VoiceOutput {
       try { await Promise.race([entersState(connection, VoiceConnectionStatus.Signalling, 5000), entersState(connection, VoiceConnectionStatus.Connecting, 5000)]); }
       catch { if (this.connections.get(guildId) === entry) this.disconnect(guildId); }
     });
-    try { await entersState(connection, VoiceConnectionStatus.Ready, 20000); }
+    try { if (entry.ready) await entry.ready; else await entersState(connection, VoiceConnectionStatus.Ready, 20000); }
     catch {
       if ((this.connectionEpochs.get(guildId) || 0) !== epoch) throw new DOMException('Cancelled', 'AbortError');
       if (this.connections.get(guildId) === entry) this.disconnect(guildId);
       throw new Error('Discord音声接続を確立できません。接続・発言権限と回線を確認してください');
     }
     if ((this.connectionEpochs.get(guildId) || 0) !== epoch || this.connections.get(guildId) !== entry) throw new DOMException('Cancelled', 'AbortError');
-    try { connection.subscribe(player); player.play(createDiscordAudioResource(mixer, this.getConfig().desktop.networkProfile, this.getConfig().desktop.audioBitrateKbps)); }
+    try { if (!entry.ready) { connection.subscribe(player); player.play(createDiscordAudioResource(mixer, this.getConfig().desktop.networkProfile, this.getConfig().desktop.audioBitrateKbps)); } }
     catch (error) { this.disconnect(guildId); throw error; }
     this.syncMonitor(); this.changed(); return entry;
   }
@@ -213,6 +218,6 @@ export class VoiceOutput {
   fadeBackground(guildId, gain, ms) { this.connections.get(guildId)?.mixer.backgroundGain.fade(gain, ms); }
   endBackground(guildId) { this.connections.get(guildId)?.mixer.clearBackground(); }
   disconnect(guildId, cancelPending = true) { if (cancelPending) { this.connectionEpochs.set(guildId, (this.connectionEpochs.get(guildId) || 0) + 1); this.connecting.delete(guildId); for (const controller of this.pcmControllers.get(guildId) || []) controller.abort(); } const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); this.syncMonitor(); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); this.changed(); }
-  close() { for (const id of new Set([...this.connections.keys(), ...this.connecting.keys()])) this.disconnect(id); this.monitor.stop(); }
+  close() { for (const id of new Set([...this.connections.keys(), ...this.connecting.keys()])) this.disconnect(id); this.monitor.stop(); this.backend?.close(); }
   snapshot() { return [...this.connections].map(([guildId, e]) => ({ guildId, channelId: e.channelId, status: e.connection.state.status })); }
 }

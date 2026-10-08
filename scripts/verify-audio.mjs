@@ -33,6 +33,9 @@ import { app, session } from 'electron';
 app.whenReady().then(() => { const originalDisplayHandler = session.defaultSession.setDisplayMediaRequestHandler;
 session.defaultSession.setDisplayMediaRequestHandler = function(handler, ...args) { globalThis.nyanProductionDisplayHandler = handler; this.setDisplayMediaRequestHandler = originalDisplayHandler; return originalDisplayHandler.call(this, handler, ...args); }; });
 import { VoiceOutput, PcmMixer } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/voice-output.mjs')).href)};
+// This renderer/PC test substitutes a Discord receiver. The isolated production
+// worker and packet clock have a separate real worker/UDP continuity probe.
+VoiceOutput.prototype.createAudioBackend = () => null;
 import { EventEmitter } from 'node:events'; import { PassThrough } from 'node:stream';
 const originalVoiceConnect = VoiceOutput.prototype.connect, originalDisconnect = VoiceOutput.prototype.disconnect;
 VoiceOutput.prototype.connect = async function(guildId, ...args) {

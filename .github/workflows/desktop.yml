@@ -81,6 +81,12 @@ jobs:
         with:
           name: audio-verification-linux
           path: dist/audio-verification
+      - run: npm run verify:voice-clock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-clock-verification-linux
+          path: dist/voice-clock-verification
       - run: xvfb-run --auto-servernum npm run verify:playback-duration
       - uses: actions/upload-artifact@v4
         if: always()
@@ -121,6 +127,12 @@ jobs:
         with:
           name: playback-duration-verification-windows
           path: dist/playback-duration-verification
+      - run: npm run verify:voice-clock
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-clock-verification-windows
+          path: dist/voice-clock-verification
       - run: npm run dist:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

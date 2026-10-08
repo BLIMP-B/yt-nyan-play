@@ -17,4 +17,4 @@ child.stdout.on('data', data => { output += data; process.stdout.write(data); })
 child.stderr.on('data', data => { errors += data; });
 const timeout = setTimeout(() => child.kill(), 45000);
 child.once('error', error => { console.error(error.message); process.exitCode = 1; });
-child.once('close', code => { clearTimeout(timeout); rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); if (code !== 0 || !output.includes('NYAN_SMOKE_READY') || !output.includes('NYAN_HISTORY_WORKER_READY')) { console.error(errors); process.exitCode = 1; } });
+child.once('close', code => { clearTimeout(timeout); rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); if (code !== 0 || !output.includes('NYAN_SMOKE_READY') || !output.includes('NYAN_HISTORY_WORKER_READY') || !output.includes('NYAN_VOICE_WORKER_READY')) { console.error(errors); process.exitCode = 1; } });

@@ -480,6 +480,9 @@ else {
       })()`, true);
       if (!verified) throw new Error('画面と設定保存のスモークテストが失敗しました');
       if (process.env.NYAN_SCREENSHOT_PATH) { const panel = process.env.NYAN_SCREENSHOT_PANEL === 'connections' ? 'connections' : 'overview'; await window.webContents.executeJavaScript(`document.querySelector('[data-view="${panel}"]').click(); document.querySelector('#toast').hidden = true;`); await new Promise(resolve => setTimeout(resolve, 150)); const picture = await window.webContents.capturePage(); writeFileSync(process.env.NYAN_SCREENSHOT_PATH, picture.toPNG()); }
+      const audioWorker = await voice.backend.health();
+      if (audioWorker.threadId <= 0 || audioWorker.packetBytes !== 120 || audioWorker.pcmBytes !== 3840) throw new Error('音声ワーカーの起動とOpus処理を確認できません');
+      console.log('NYAN_VOICE_WORKER_READY');
       console.log('NYAN_SMOKE_READY'); app.quit();
     }
   }).catch(e => { console.error(e.message); if (app.isReady()) dialog.showErrorBox('にゃんとーく〜Damare〜を起動できません', e.message); app.quit(); });
