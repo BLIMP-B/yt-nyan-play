@@ -124,6 +124,10 @@ jobs:
           assert.equal(android.platform, 'win32');
           assert.equal(android.bootVerified, true);
           assert.equal(android.playForeground, true);
+          assert.equal(android.nativeWindowVerified, true);
+          assert.equal(android.shutdownVerified, true);
+          assert.equal(android.notifications.passed, true);
+          assert.deepEqual(android.notifications.outputChoices, ['both', 'local', 'discord']);
           assert.match(android.playWindow.focus, /com\.android\.vending\//);
           const model = JSON.parse(readFileSync('verification/model/model-report.json'));
           assert.equal(model.platform, 'win32');
@@ -132,8 +136,18 @@ jobs:
           for (const sample of model.samples) {
             assert.ok(sample.text.endsWith('のだ。') && sample.text.length <= 200 && sample.nouns.length === 2);
             assert.ok(sample.plan.clauseCount >= 1 && sample.plan.maxChars <= 200);
+            assert.equal(sample.plan.version, 2);
+            assert.equal(sample.quality.sentenceCount, 1);
+            assert.equal(sample.quality.uniqueSourceNouns, true);
+            assert.equal((sample.text.match(/。/g) || []).length, 1);
           }
           assert.ok(model.samples.some(sample => sample.plan.preset === 'extended' && sample.text.length >= 150));
+          const extended = model.samples.find(sample => sample.plan.preset === 'extended');
+          assert.deepEqual(extended.quality.sourceKinds.slice().sort(), ['phrase', 'sentence', 'word']);
+          assert.ok(extended.quality.sourceMessages >= 3);
+          assert.equal(model.repetitionRegression.plan.clauseCount, 1);
+          assert.equal((model.repetitionRegression.text.match(/不動/g) || []).length, 1);
+          assert.equal((model.repetitionRegression.text.match(/野菜/g) || []).length, 1);
           assert.equal(model.timing.platform, 'win32');
           assert.equal(model.timing.passed, true);
           assert.equal(model.timing.searchPerformed, true);
@@ -155,6 +169,12 @@ jobs:
           assert.equal(audio.localFallback.media, true);
           assert.equal(audio.localFallback.hourly, true);
           assert.equal(audio.localFallback.botInVC, false);
+          assert.equal(audio.androidNotifications.passed, true);
+          assert.equal(audio.androidNotifications.pcFallbackWithoutBotVC, true);
+          assert.equal(audio.androidNotifications.pcContinuesAfterBotStopped, true);
+          assert.equal(audio.androidNotifications.outputSavedWhileRunning, true);
+          assert.equal(audio.androidNotifications.disabledWhileRunning, true);
+          assert.ok(audio.androidNotifications.nonSilentSamples > 1000);
           const network = audio.network;
           assert.equal(network.passed, true);
           assert.equal(network.defaultProfile, 'poor');
