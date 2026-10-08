@@ -273,7 +273,7 @@ try {
   await page.screenshot({ path: join(reports, 'android-notification-settings.png'), fullPage: true });
   await application.evaluate(() => {
     globalThis.nyanAudioProbe.active = 'android'; globalThis.nyanAudioProbe.target = globalThis.nyanAudioProbe.ui; globalThis.nyanAudioProbe.capture = true;
-    globalThis.nyanNotificationRecords.set('0|com.android.shell|2020|probe|2000', 'NotificationRecord(pkg=com.android.shell)\n  flags=AUTO_CANCEL\n  notification=\n    extras={\n        android.title=String (通知試験)\n        android.text=String (Androidの通知を読み上げます)\n    }\n  publicNotification=\n    None\n');
+    globalThis.nyanNotificationRecords.set('0|com.android.shell|2020|probe|2000', 'NotificationRecord(pkg=com.android.shell)\n  flags=AUTO_CANCEL\n  notification=\n    extras={\n        android.title=String (通知試験)\n        android.text=String (Androidの通知を読み上げます)\n    }\n  publicNotification=\n    None\n'.replaceAll('\n', '\r\n'));
   });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   let notificationJob; const notificationUntil = Date.now() + 15000;

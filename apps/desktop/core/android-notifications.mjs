@@ -2,6 +2,9 @@
 // Read only the primary notification; publicNotification is its lock-screen substitute.
 export function parseAndroidNotification(dump) {
   if (typeof dump !== 'string' || Buffer.byteLength(dump) > 65536) return null;
+  // Windows ADB returns CRLF. A trailing CR prevents per-line field matches
+  // and makes the extras closing brace look like part of the last value.
+  dump = dump.replace(/\r\n?/g, '\n');
   const flags = dump.match(/^\s*flags=(.*)$/m)?.[1] || '';
   if (/GROUP_SUMMARY|ONGOING_EVENT/.test(flags) || (Number(flags) & (0x200 | 0x2))) return null;
   const primary = dump.split(/^\s*notification=\s*$/m)[1]?.split(/^\s*publicNotification=\s*$/m)[0];

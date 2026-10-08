@@ -26,6 +26,7 @@ const dump = (body, flags = 'AUTO_CANCEL') => `NotificationRecord(pkg=com.exampl
 
 test('native notification dump reads expanded multiline text and ignores the lock-screen substitute and persistent summaries', () => {
   assert.deepEqual(parseAndroidNotification(dump('本文 (かっこ)\n2行目')), { title: '受信', body: '本文 (かっこ)\n2行目', text: '受信。本文 (かっこ)\n2行目' });
+  assert.deepEqual(parseAndroidNotification(dump('本文 (かっこ)\n2行目').replaceAll('\n', '\r\n')), { title: '受信', body: '本文 (かっこ)\n2行目', text: '受信。本文 (かっこ)\n2行目' });
   for (const flags of ['ONGOING_EVENT|NO_CLEAR', 'GROUP_SUMMARY|AUTO_CANCEL', '0x200', '2']) assert.equal(parseAndroidNotification(dump('skip', flags)), null);
   assert.equal(parseAndroidNotification('error: no active notification matching key'), null);
   assert.equal(parseAndroidNotification(dump('a'.repeat(70000))), null);

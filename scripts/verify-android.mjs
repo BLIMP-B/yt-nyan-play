@@ -55,12 +55,17 @@ try {
     assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
     writeFileSync(join(reports, 'android-play.png'), png);
     report.stage = 'notifications';
-    const spoken = [];
+    const spoken = [], probes = [];
     const notifications = new AndroidNotifications(android, () => config, { speech: payload => spoken.push(payload), log: (l, t) => console.log(`${l}: ${t}`) }, { automatic: false });
     try {
       await notifications.poll(); await notifications.poll(); assert.equal(spoken.length, 0, 'Existing Android notifications must not be read at startup');
       const post = async body => {
-        await android.adb(['shell', `cmd notification post -t ${shellQuote('通知試験')} -S bigtext --bigtext ${shellQuote(body)} damare_notification_probe ${shellQuote('省略本文')}`], { timeout: 10000 });
+        const posted = await android.adb(['shell', `cmd notification post -t ${shellQuote('通知試験')} -S bigtext --bigtext ${shellQuote(body)} damare_notification_probe ${shellQuote('省略本文')}`], { timeout: 10000 });
+        const keys = (await android.adb(['shell', 'cmd notification list'], { timeout: 10000 })).split(/\r?\n/).map(key => key.trim()).filter(key => key.includes('|damare_notification_probe|'));
+        const records = [];
+        for (const key of keys) records.push({ key, dump: await android.adb(['shell', `cmd notification get ${shellQuote(key)}`], { timeout: 10000, maxOutputBytes: 65536 }) });
+        probes.push({ posted, records });
+        writeFileSync(join(reports, 'notification-probe.json'), JSON.stringify(probes, null, 2));
         for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 200)); await notifications.poll(); if (spoken.at(-1)?.text.includes(body)) break; }
       };
       await post('Androidから届いた新しい通知です');
