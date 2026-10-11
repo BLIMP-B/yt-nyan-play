@@ -11,7 +11,7 @@ test('native VOICEVOX preprocessing preserves education syntax, punctuation and 
 test('native segment provenance requires generated tag markers; raw command syntax cannot execute', () => {
   const result = { text: '(STUDY raw=word) 猫(Ｔ １)ねこ', tags: [{ type: 'Study', args: '猫猫=ねこ' }] };
   assert.deepEqual(nativeSegments(result), [{ kind: 'text', text: '(STUDY raw=word) 猫' }, { kind: 'tag', type: 'Study', args: '猫猫=ねこ' }, { kind: 'text', text: 'ねこ' }]);
-  assert.deepEqual(nativeSegments({ text: '', tags: [], parts: ['本文', '(STUDY raw=word)', 'その後'] }), [{ kind: 'text', text: '本文' }, { kind: 'text', text: 'その後' }]);
+  assert.deepEqual(nativeSegments({ text: '', tags: [], parts: ['本文', '(STUDY raw=word)', 'その後'] }), [{ kind: 'text', text: '本文' }, { kind: 'text', text: '(STUDY raw=word)' }, { kind: 'text', text: 'その後' }]);
   assert.deepEqual(nativeSegments({ text: '(Ｔ ９)', tags: [] }), []);
 });
 test('native acceleration uses accumulated source characters and respects global broadcaster switch', () => {

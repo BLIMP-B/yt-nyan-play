@@ -1,5 +1,5 @@
 export function nativeSegments(result) {
-  if (result.parts) return result.parts.flatMap(text => text.startsWith('(') && !text.startsWith('(Ｔ ') ? [] : nativeSegments({ text, tags: result.tags }));
+  if (result.parts) return result.parts.flatMap(text => nativeSegments({ text, tags: result.tags }));
   const segments = [], tags = result.tags || []; let position = 0;
   for (const match of result.text.matchAll(/\(Ｔ ([０-９]+)\)/g)) {
     if (match.index > position) segments.push({ kind: 'text', text: result.text.slice(position, match.index) });

@@ -2,6 +2,7 @@ import { RE2 } from 're2-wasm';
 import { applyEducation } from './education.mjs';
 import { ReadingText } from './latin-reading.mjs';
 import { messageMediaText } from './message-media.mjs';
+import { spokenText } from './spoken-text.mjs';
 
 export function formatTemplate(template, values) {
   return template.replace(/\$([\w-]+)\$/g, (_, key) => String(values[key] ?? ''));
@@ -59,7 +60,7 @@ export function prepareSpeech(message, config) {
     server: message.guildName || '', channel: message.channelName || '', text,
     time: new Date().toLocaleTimeString('ja-JP'), userid: message.userId };
   const formatted = s.readNames ? new ReadingText(s.messageTemplate).replace(/\$([\w-]+)\$/g, (_, key) => values[key] ?? '') : text;
-  return formatted.latinReading(s.maxChars);
+  return spokenText(formatted.latinReading(s.maxChars));
 }
 
 // Native processing has already interpreted tags. Only its spoken text enters
@@ -70,5 +71,5 @@ export function prepareNativeText(text, config, context = {}, readings = []) {
   for (const reading of explicit.sort((a, b) => b.length - a.length)) {
     if (reading) value = value.replace(new RegExp(reading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gu'), () => reading, true);
   }
-  return applyDictionary(value, config.dictionary, context).latinReading();
+  return spokenText(applyDictionary(value, config.dictionary, context).latinReading());
 }

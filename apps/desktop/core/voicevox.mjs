@@ -1,3 +1,5 @@
+import { spokenText } from './spoken-text.mjs';
+
 export const ZUNDAMON_STYLES = ['ノーマル', 'あまあま', 'ツンツン', 'セクシー', 'ささやき', 'ヒソヒソ', 'ヘロヘロ', 'なみだめ'];
 
 export class Voicevox {
@@ -17,7 +19,7 @@ export class Voicevox {
     return { styles, missing, available: missing.length === 0 };
   }
   async synthesize(text, options, signal) {
-    const query = await (await this.request(`/audio_query?${new URLSearchParams({ text, speaker: String(options.styleId) })}`, { method: 'POST' }, signal)).json();
+    const query = await (await this.request(`/audio_query?${new URLSearchParams({ text: spokenText(text), speaker: String(options.styleId) })}`, { method: 'POST' }, signal)).json();
     query.speedScale = options.speed; query.pitchScale = options.pitch;
     query.intonationScale = options.intonation; query.volumeScale = 1;
     const audio = await this.request(`/synthesis?${new URLSearchParams({ speaker: String(options.styleId) })}`, {
