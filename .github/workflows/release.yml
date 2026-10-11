@@ -165,6 +165,15 @@ jobs:
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
           assert.equal(audio.passed, true);
+          for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
+            const media = audio.media.find(item => item.kind === kind);
+            assert.equal(media?.status, 'completed');
+            assert.equal(media.pcPlayback, true);
+            assert.ok(media.mediaToneSamples > 4800, `${kind} must reach PC output independently of speech`);
+          }
+          assert.equal(audio.hourly.pcBackground.passed, true);
+          assert.equal(audio.hourly.pcBackground.fixtureSource, true);
+          assert.ok(audio.hourly.pcBackground.mediaToneSamples > 4800);
           for (const kind of ['stream-full', 'stream-direct']) {
             const stream = audio.media.find(item => item.kind === kind);
             assert.equal(stream?.status, 'completed');
