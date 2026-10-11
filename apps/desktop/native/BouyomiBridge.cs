@@ -24,6 +24,13 @@ public static class BouyomiBridge {
     static string Setting(XmlDocument doc, string name, string fallback) {
         XmlNode node = doc.SelectSingleNode("/Settings/" + name); return node == null ? fallback : node.InnerText;
     }
+    public static bool RuleWasPresent(string input, string source, bool regex) {
+        input = input.Normalize(NormalizationForm.FormKC);
+        source = source.Normalize(NormalizationForm.FormKC);
+        if (!regex) return source.Length > 0 && input.IndexOf(source, StringComparison.OrdinalIgnoreCase) >= 0;
+        try { return Regex.IsMatch(input, source, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant); }
+        catch (ArgumentException) { return false; }
+    }
     static void Load() {
         assembly = Assembly.LoadFrom(Path.Combine(directory, "BouyomiChan.exe"));
         // Only call stateless conversion APIs; the original constructor starts UI/audio threads.
@@ -46,8 +53,16 @@ public static class BouyomiBridge {
         object tagged = Activator.CreateInstance(assembly.GetType("FNF.Utility.BouyomiChan+TagString", true), new object[] { value.ToString() });
         if (tags) { tagged = Invoke(processor, "RegexTag", tagged); tagged = Invoke(processor, "ReplaceTag", tagged); }
         value = (StringBuilder)Field(tagged, "Text");
-        if (study) { value = (StringBuilder)Invoke(processor, "RegexStudy", value, false); value = (StringBuilder)Invoke(processor, "ReplaceStudy", value, false); }
+        Dictionary<string, string> ruleInputs = new Dictionary<string, string>();
+        if (study) {
+            ruleInputs["StudyRegex"] = value.ToString();
+            value = (StringBuilder)Invoke(processor, "RegexStudy", value, false);
+            ruleInputs["Study"] = value.ToString();
+            value = (StringBuilder)Invoke(processor, "ReplaceStudy", value, false);
+        }
+        ruleInputs["WordRegex"] = value.ToString();
         value = (StringBuilder)Invoke(processor, "RegexWord", value, false);
+        ruleInputs["Word"] = value.ToString();
         value = (StringBuilder)Invoke(processor, "ReplaceWord", value, false);
         // VOICEVOX accepts normal text, matching the native SAPI path. AquesTalk phonemes
         // and the MSIME/Talk/Post path must not be fed to VOICEVOX as ordinary Japanese.
@@ -64,6 +79,10 @@ public static class BouyomiBridge {
                 foreach (string line in File.ReadAllLines(path, Encoding.UTF8)) {
                     string[] fields = line.Split('\t');
                     if (fields.Length != 4 || !Regex.IsMatch(fields[3], "[a-zA-ZＡ-Ｚａ-ｚ]") || fields[3].IndexOf('$') >= 0) continue;
+                    // A dictionary entry yielding E/A/etc must not protect the
+                    // same letters in unrelated names such as ERAI. Its source
+                    // must have occurred in this actual replacement stage.
+                    if (!RuleWasPresent(ruleInputs[stage + suffix], fields[2], suffix == "Regex")) continue;
                     string reading = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(fields[3])).ToString();
                     if (reading.Length > 0 && output.Contains(reading)) readings.Add(reading);
                 }

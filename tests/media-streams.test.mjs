@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import ffmpeg from 'ffmpeg-static';
 import { selectStream } from '../apps/desktop/core/media-streams.mjs';
-import { openAudioStream } from '../apps/desktop/runtime/media-streams.mjs';
+import { openAudioStream, MediaStreamResolver } from '../apps/desktop/runtime/media-streams.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { PcmMixer } from '../apps/desktop/runtime/voice-output.mjs';
 
@@ -68,4 +68,20 @@ test('FFmpeg EOF is validated against the original duration instead of accepting
   await (await fetch(stream.url)).arrayBuffer(); await stream.completion;
   assert.equal(stream.finished, true); assert.equal(stream.expectedSeconds, 60); assert.ok(stream.outputSeconds > 1.9 && stream.outputSeconds < 2.1);
   assert.match(stream.error, /終端より前/);
+});
+
+test('the format deadline includes installation and cookie access; stop still cancels instead of falling back', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nyan-deadline-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const stage of ['install', 'cookies', 'extract']) {
+    const logs = [], pending = () => new Promise(() => {});
+    const resolver = new MediaStreamResolver(directory, (_level, text) => logs.push(text), null, stage === 'cookies' ? pending : async () => [], { budgetMs: 25 });
+    resolver.install = stage === 'install' ? pending : async () => 'executable'; resolver.extract = pending;
+    const start = performance.now();
+    assert.equal(await resolver.resolve('https://www.nicovideo.jp/watch/sm9', new AbortController().signal), null);
+    assert.ok(performance.now() - start < 1000); assert.match(logs.at(-1), /取得時間超過/);
+  }
+  const resolver = new MediaStreamResolver(directory, () => {}, null, async () => [], { budgetMs: 25 });
+  resolver.install = () => new Promise(() => {}); const controller = new AbortController();
+  const resolving = resolver.resolve('https://youtu.be/jNQXAC9IVRw', controller.signal); controller.abort();
+  await assert.rejects(resolving, { name: 'AbortError' });
 });

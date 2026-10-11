@@ -7,6 +7,7 @@ import { MediaEffects } from './media-effects.mjs';
 import { hasHumanListeners } from '../core/voice-audience.mjs';
 import { VoiceMonitor } from './voice-monitor.mjs';
 import { audioNetwork } from '../core/audio-network.mjs';
+import { PcmClockBuffer } from '../core/pcm-clock-buffer.mjs';
 import { DiscordAudioWorker } from './voice-worker.mjs';
 import {
   joinVoiceChannel, entersState, VoiceConnectionStatus, createAudioPlayer,
@@ -15,19 +16,21 @@ import {
 
 export class PcmMixer extends Readable {
   constructor(profile = 'poor') {
-    super({ highWaterMark: 3840 }); this.media = Buffer.alloc(0); this.speech = []; this.mediaPrimed = false;
+    super({ highWaterMark: 3840 }); this.mediaBuffer = new PcmClockBuffer(); this.backgroundBuffer = new PcmClockBuffer(); this.speech = [];
     this.ducking = 0.35; this.mediaVolume = 0.7; this.duckGain = new GainEnvelope(); this.duckFadeInMs = 0; this.duckFadeOutMs = 0;
-    this.mediaGain = new GainEnvelope(); this.background = Buffer.alloc(0); this.backgroundPrimed = false; this.backgroundVolume = 0.18; this.backgroundGain = new GainEnvelope();
+    this.mediaGain = new GainEnvelope(); this.backgroundVolume = 0.18; this.backgroundGain = new GainEnvelope();
     this.network = audioNetwork(profile); this.mediaEffects = new MediaEffects(); this.backgroundEffects = new MediaEffects();
     this.watchdog = setInterval(() => {
       if (this.speech.some(track => Date.now() >= (track.startAt || 0) && Date.now() - Math.max(track.progressAt, track.startAt || 0) > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
     }, 1000);
   }
   _read() { this.frame(); }
-  addMedia(chunk) { if (!this.destroyed) this.media = Buffer.concat([this.media, chunk]).subarray(-192000); }
-  clearMedia() { this.media = Buffer.alloc(0); this.mediaPrimed = false; this.mediaEffects.reset(); }
-  addBackground(chunk) { if (!this.destroyed) this.background = Buffer.concat([this.background, chunk]).subarray(-192000); }
-  clearBackground() { this.background = Buffer.alloc(0); this.backgroundPrimed = false; this.backgroundEffects.reset(); }
+  get media() { return this.mediaBuffer.bytes; }
+  get background() { return this.backgroundBuffer.bytes; }
+  addMedia(chunk) { if (!this.destroyed) this.mediaBuffer.push(chunk); }
+  clearMedia() { this.mediaBuffer.clear(); this.mediaEffects.reset(); }
+  addBackground(chunk) { if (!this.destroyed) this.backgroundBuffer.push(chunk); }
+  clearBackground() { this.backgroundBuffer.clear(); this.backgroundEffects.reset(); }
   configureEffects(c) { this.mediaEffects.configure(c.equalizer, c.compressor); this.backgroundEffects.configure(c.equalizer, c.compressor); }
   addSpeech(buffer, volume, signal, startAt = 0) {
     return new Promise((resolve, reject) => {
@@ -41,26 +44,21 @@ export class PcmMixer extends Readable {
   }
   takeFrame(now = Date.now()) {
     if (this.destroyed) throw new Error('音声ストリームが終了しました');
-    if (!this.mediaPrimed && this.media.length >= this.network.mediaMs * 192) this.mediaPrimed = true;
-    if (this.mediaPrimed && this.media.length < 3840) { this.mediaPrimed = false; this.onUnderrun?.('media'); }
-    const mediaReady = this.mediaPrimed;
-    if (!this.backgroundPrimed && this.background.length >= this.network.mediaMs * 192) this.backgroundPrimed = true;
-    if (this.backgroundPrimed && this.background.length < 3840) { this.backgroundPrimed = false; this.onUnderrun?.('background'); }
+    const mediaFrame = this.mediaBuffer.frame(this.network.mediaMs, () => this.onUnderrun?.('media'));
+    const backgroundFrame = this.backgroundBuffer.frame(this.network.mediaMs, () => this.onUnderrun?.('background'));
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
     const out = Buffer.alloc(3840); const duck = tracks.length ? this.ducking : 1;
     if (this.duckGain.to !== duck) this.duckGain.fade(duck, duck < this.duckGain.to ? this.duckFadeOutMs : this.duckFadeInMs, now);
     const mediaGain = this.mediaVolume * this.duckGain.value(now) * this.mediaGain.value(now), backgroundGain = this.backgroundVolume * this.backgroundGain.value(now);
-    const mediaSamples = mediaReady ? this.mediaEffects.process(this.media.subarray(0, 3840)) : null;
-    const backgroundSamples = this.backgroundPrimed ? this.backgroundEffects.process(this.background.subarray(0, 3840)) : null;
+    const mediaSamples = mediaFrame ? this.mediaEffects.process(mediaFrame) : null;
+    const backgroundSamples = backgroundFrame ? this.backgroundEffects.process(backgroundFrame) : null;
     for (let i = 0; i < 3840; i += 2) {
-      let sample = mediaReady ? (mediaSamples ? mediaSamples[i / 2] : this.media.readInt16LE(i)) * mediaGain : 0;
-      if (this.backgroundPrimed) sample += (backgroundSamples ? backgroundSamples[i / 2] : this.background.readInt16LE(i)) * backgroundGain;
+      let sample = mediaFrame ? (mediaSamples ? mediaSamples[i / 2] : mediaFrame.readInt16LE(i)) * mediaGain : 0;
+      if (backgroundFrame) sample += (backgroundSamples ? backgroundSamples[i / 2] : backgroundFrame.readInt16LE(i)) * backgroundGain;
       for (const track of tracks) if (track.position + i + 1 < track.buffer.length) sample += track.buffer.readInt16LE(track.position + i) * track.volume;
       out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(sample))), i);
     }
-    if (mediaReady) this.media = this.media.subarray(3840);
-    if (this.backgroundPrimed) this.background = this.background.subarray(3840);
     for (const track of tracks) {
       track.position += 3840; track.progressAt = Date.now();
       if (track.position >= track.buffer.length) {
@@ -81,13 +79,18 @@ export class PcmMixer extends Readable {
 // behind Discord's clock and forced the player to insert gaps under UI/IPC load.
 export function createDiscordAudioResource(mixer, profile = 'poor', bitrateKbps) {
   const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+  let encoding;
   const configureNetwork = (value, requestedBitrate) => {
     const settings = audioNetwork(value); mixer.network = settings;
     encoder.encoderCTL(4002, requestedBitrate == null ? settings.bitrate : requestedBitrate * 1000); // OPUS_SET_BITRATE
     encoder.encoderCTL(4006, 0); // CBR: bound every 20-ms packet, even during loud music.
-    encoder.encoderCTL(4012, 1); // In-band FEC when the chosen Opus mode supports it.
-    encoder.encoderCTL(4014, settings.lossPercent);
+    // This bundled libopus distorts stereo music badly when its SILK/FEC mode
+    // reserves a 20% loss budget at 48 kbps. Keep AUDIO/CBR without forcing that
+    // mode; the receiver still uses Opus packet-loss concealment.
+    encoder.encoderCTL(4012, 0);
+    encoder.encoderCTL(4014, 0);
     encoder.encoderCTL(4016, 0); // No DTX: quiet media and silence are always transmitted.
+    encoding = { bitrate: requestedBitrate == null ? settings.bitrate : requestedBitrate * 1000, channels: 2, sampleRate: 48000, frameMs: 20, cbr: true, fec: false, expectedLossPercent: 0 };
   };
   configureNetwork(profile, bitrateKbps);
   const source = new Readable({ objectMode: true, highWaterMark: 1,
@@ -96,7 +99,7 @@ export function createDiscordAudioResource(mixer, profile = 'poor', bitrateKbps)
   });
   const failed = error => source.destroy(error), closed = () => source.destroy();
   mixer.on('error', failed); mixer.once('close', closed);
-  return createAudioResource(source, { inputType: StreamType.Opus, metadata: { configureNetwork } });
+  return createAudioResource(source, { inputType: StreamType.Opus, metadata: { configureNetwork, get encoding() { return { ...encoding }; } } });
 }
 
 export function decodeAudio(buffer, signal, executable = ffmpegPath) {

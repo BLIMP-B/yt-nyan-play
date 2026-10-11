@@ -8,8 +8,8 @@ import { MEDIA_EXTRACTOR, streamingService, selectStream } from '../core/media-s
 import { mediaPolicy } from '../core/media-policy.mjs';
 
 export class MediaStreamResolver {
-  constructor(directory, log, fetcher, cookies) {
-    this.directory = join(directory, 'media-tools'); this.log = log; this.fetcher = fetcher; this.cookies = cookies;
+  constructor(directory, log, fetcher, cookies, { budgetMs = 20000 } = {}) {
+    this.directory = join(directory, 'media-tools'); this.log = log; this.fetcher = fetcher; this.cookies = cookies; this.budgetMs = budgetMs;
     mkdirSync(this.directory, { recursive: true });
     for (const file of readdirSync(this.directory)) if (/^session-[a-f0-9]+\.txt$/.test(file)) try { unlinkSync(join(this.directory, file)); } catch {}
   }
@@ -33,39 +33,51 @@ export class MediaStreamResolver {
   async resolve(url, signal) {
     const service = streamingService(url); if (!service) return null;
     signal.throwIfAborted();
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(new DOMException('Extraction timeout', 'TimeoutError')), this.budgetMs);
+    const extractionSignal = AbortSignal.any([signal, controller.signal]);
+    const withinBudget = operation => new Promise((resolve, reject) => {
+      const abort = () => { extractionSignal.removeEventListener('abort', abort); reject(extractionSignal.reason); };
+      extractionSignal.addEventListener('abort', abort, { once: true });
+      Promise.resolve(operation).then(resolve, reject).finally(() => extractionSignal.removeEventListener('abort', abort));
+      if (extractionSignal.aborted) abort();
+    });
     let cookieFile;
     try {
-      let abortInstall;
-      const cancelled = new Promise((_, reject) => { abortInstall = () => reject(signal.reason); signal.addEventListener('abort', abortInstall, { once: true }); });
-      let executable;
-      try { executable = await Promise.race([this.install(), cancelled]); }
-      finally { signal.removeEventListener('abort', abortInstall); }
-      signal.throwIfAborted();
-      const cookies = (await this.cookies()).filter(c => service[1].some(h => c.domain.replace(/^\./,'') === h || c.domain.replace(/^\./,'').endsWith('.' + h)));
+      // Include installation, cookie access and process exit in one deadline.
+      // A shared first-time download can finish in the background for next time.
+      const executable = await withinBudget(this.install());
+      extractionSignal.throwIfAborted();
+      const cookies = (await withinBudget(this.cookies())).filter(c => service[1].some(h => c.domain.replace(/^\./,'') === h || c.domain.replace(/^\./,'').endsWith('.' + h)));
+      extractionSignal.throwIfAborted();
       cookieFile = join(this.directory, 'session-' + randomBytes(16).toString('hex') + '.txt');
       const lines = cookies.filter(c => !/[\t\r\n]/.test(c.domain + c.name + c.path + c.value)).map(c => `${c.httpOnly ? '#HttpOnly_' : ''}${c.domain}\t${c.hostOnly ? 'FALSE' : 'TRUE'}\t${c.path}\t${c.secure ? 'TRUE' : 'FALSE'}\t${Math.floor(c.expirationDate || 0)}\t${c.name}\t${c.value}`);
       writeFileSync(cookieFile, '# Netscape HTTP Cookie File\n' + lines.join('\n') + '\n', { mode: 0o600 });
-      const info = await this.extract(executable, ['--ignore-config', '--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings', '--socket-timeout', '10', '--retries', '0', '--extractor-retries', '0', '--cookies', cookieFile, '--js-runtimes', `node:${process.execPath}`, '--', url], signal);
+      const info = await withinBudget(this.extract(executable, ['--ignore-config', '--no-playlist', '--skip-download', '--dump-single-json', '--no-warnings', '--socket-timeout', '10', '--retries', '0', '--extractor-retries', '0', '--cookies', cookieFile, '--js-runtimes', `node:${process.execPath}`, '--', url], extractionSignal));
       const selected = selectStream(info, url);
       if (selected) this.log('info', `${selected.service}: ${selected.audioOnly ? '音声のみの配信' : '最低画質' + (selected.height ? `（${selected.height}p）` : '')}を選択しました`);
       else this.log('warn', `${service[0]}: 使用できる音声形式がないため、ブラウザの最低画質設定へ切り替えます`);
       return selected;
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      this.log('warn', `${service[0]}: 音声形式を取得できないためブラウザ再生へ切り替えます（${error.name === 'AbortError' ? '取得時間超過' : '取得・導入失敗'}）`); return null;
-    } finally { if (cookieFile && existsSync(cookieFile)) unlinkSync(cookieFile); }
+      this.log('warn', `${service[0]}: 音声形式を取得できないためブラウザ再生へ切り替えます（['AbortError', 'TimeoutError'].includes(error.name) ? '取得時間超過' : '取得・導入失敗'}）`); return null;
+    } finally { clearTimeout(timer); if (cookieFile && existsSync(cookieFile)) unlinkSync(cookieFile); }
   }
   extract(executable, args, signal) {
     return new Promise((resolve, reject) => {
       signal.throwIfAborted();
       const child = spawn(executable, args, { windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'ignore'] });
-      const chunks = []; let size = 0, failed;
-      const abort = () => { failed = signal.reason || new Error('Cancelled'); child.kill(); };
+      const chunks = []; let size = 0, settled = false;
+      const finish = (error, value) => {
+        if (settled) return; settled = true;
+        clearTimeout(timer); signal.removeEventListener('abort', abort);
+        if (error) { child.kill(); reject(error); } else resolve(value);
+      };
+      const abort = () => finish(signal.reason || new Error('Cancelled'));
       signal.addEventListener('abort', abort, { once: true });
-      const timer = setTimeout(() => { failed = new DOMException('Extraction timeout', 'AbortError'); child.kill(); }, 25000);
-      child.stdout.on('data', chunk => { size += chunk.length; if (size > 8 * 1024 * 1024) { failed = new Error('Metadata size'); child.kill(); } else chunks.push(chunk); });
-      child.once('error', error => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(error); });
-      child.once('close', code => { clearTimeout(timer); signal.removeEventListener('abort', abort); if (failed || code !== 0) reject(failed || new Error('Extraction failed')); else try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { reject(new Error('Invalid metadata')); } });
+      const timer = setTimeout(() => finish(new DOMException('Extraction timeout', 'TimeoutError')), this.budgetMs);
+      child.stdout.on('data', chunk => { if (settled) return; size += chunk.length; if (size > 8 * 1024 * 1024) finish(new Error('Metadata size')); else chunks.push(chunk); });
+      child.once('error', finish);
+      child.once('close', code => { if (settled) return; if (code !== 0) finish(new Error('Extraction failed')); else try { finish(null, JSON.parse(Buffer.concat(chunks).toString())); } catch { finish(new Error('Invalid metadata')); } });
     });
   }
 }

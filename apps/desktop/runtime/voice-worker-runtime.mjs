@@ -31,7 +31,7 @@ export class VoiceWorkerRuntime {
     catch (error) { this.send({ type: 'failure', entryId: message.entryId, error: error.message }); }
   }
   async command(message, signal) {
-    if (message.method === 'diagnostics') return [...this.entries].map(([id, entry]) => ({ id, channelId: entry.channelId, ...entry.diagnostics.snapshot() }));
+    if (message.method === 'diagnostics') return [...this.entries].map(([id, entry]) => ({ id, channelId: entry.channelId, ...this.diagnosticsSnapshot(entry) }));
     if (message.method === 'health') {
       const mixer = new PcmMixer(), resource = createDiscordAudioResource(mixer), decoder = new Opus();
       try { const packet = resource.playStream.read(); return { threadId, packetBytes: packet.length, pcmBytes: decoder.decode(packet).length }; }
@@ -94,9 +94,13 @@ export class VoiceWorkerRuntime {
     if (entry.connection && entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy();
   }
   reportDiagnostics(entryId, entry) {
-    const stats = entry.diagnostics.snapshot();
+    const stats = this.diagnosticsSnapshot(entry);
     this.send({ type: 'diagnostics', entryId, stats });
     if (!stats.packets) return;
     this.send({ type: 'log', level: stats.gapEvents || stats.mediaStarvations || stats.backgroundStarvations ? 'warn' : 'info', text: `音声診断 (${entry.channelId}): ${stats.durationSeconds}秒・${stats.packets}パケット、送信遅延${stats.gapEvents}件・まとめ送り${stats.burstEvents}件・最大間隔${stats.maxGapMs}ms、メディア音声不足${stats.mediaStarvations}件・BGM音声不足${stats.backgroundStarvations}件（受信側の音途切れとは別の測定）` });
+  }
+  diagnosticsSnapshot(entry) {
+    return { ...entry.diagnostics.snapshot(), encoding: entry.player.state.resource?.metadata?.encoding || null,
+      pcmBuffers: { media: entry.mixer.mediaBuffer.snapshot(), background: entry.mixer.backgroundBuffer.snapshot() } };
   }
 }

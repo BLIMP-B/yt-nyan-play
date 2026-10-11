@@ -10,6 +10,12 @@ try {
     $request = '{"operation":"process","text":"test","tagMode":"original"}'
     $output = $request | & $target $temporary
     if ($LASTEXITCODE -ne 1 -or $output -notmatch '"error"') { throw 'Native bridge must report missing user-supplied assembly as JSON' }
+    $probe = Join-Path $temporary 'NativeReadingProbe.exe'
+    $probeSource = Join-Path $PSScriptRoot 'native-reading-probe.cs'
+    & $compiler /nologo /target:exe /platform:x86 /main:NativeReadingProbe /reference:System.Web.Extensions.dll "/out:$probe" $source $probeSource
+    if ($LASTEXITCODE -ne 0) { throw 'Native reading probe compilation failed' }
+    & $probe
+    if ($LASTEXITCODE -ne 0) { throw 'Native reading provenance check failed' }
     Write-Host 'Native x86 bridge compilation and JSON error protocol passed.'
 } finally { Remove-Item -Path $temporary -Recurse -Force }
 exit 0

@@ -58,6 +58,12 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run check:desktop
+      - run: npm run verify:opus-fidelity
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: opus-fidelity-verification-linux
+          path: dist/opus-fidelity-verification
       - run: npm test
       - run: xvfb-run --auto-servernum npm run smoke:desktop
       - run: xvfb-run --auto-servernum npm run verify:accounts
@@ -104,6 +110,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: ./scripts/check-bouyomi-helper.ps1
+      - run: npm run verify:opus-fidelity
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: opus-fidelity-verification-windows
+          path: dist/opus-fidelity-verification
       - run: npm test
       - run: npm run smoke:desktop
       - run: npm run verify:accounts

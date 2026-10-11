@@ -52,3 +52,15 @@ test('native tag processing gets attachment types and sticker names while preser
   assert.equal(prepared, 'AB (Sound nyan.wav) CAT。添付ファイル1件、音声ファイル。スタンプ、neko');
   assert.equal(prepareNativeText('CAT neko', c), 'CAT ねこ');
 });
+
+test('unregistered erai uses romaji while explicit education and settings retain their readings', () => {
+  for (const chatEducationEnabled of [false, true]) {
+    const c = config({ speech: { chatEducationEnabled } });
+    const message = { content: '<:erai:1541190483315790015>', stickers: [{ name: 'erai', id: '12345' }] };
+    assert.equal(prepareSpeech(message, c), 'えらい。スタンプ、えらい');
+    c.speech.chatEducationEnabled = true; c.education = [{ source: 'erai', reading: 'CAT' }];
+    assert.equal(prepareSpeech(message, c), 'CAT。スタンプ、CAT');
+    c.speech.emojiReadings = [{ source: 'erai', replacement: '専用の読み' }];
+    assert.equal(prepareSpeech(message, c), '専用の読み。スタンプ、専用の読み');
+  }
+});
