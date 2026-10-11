@@ -42,10 +42,10 @@ export class PcmMixer extends Readable {
   takeFrame(now = Date.now()) {
     if (this.destroyed) throw new Error('音声ストリームが終了しました');
     if (!this.mediaPrimed && this.media.length >= this.network.mediaMs * 192) this.mediaPrimed = true;
-    if (this.mediaPrimed && this.media.length < 3840) this.mediaPrimed = false;
+    if (this.mediaPrimed && this.media.length < 3840) { this.mediaPrimed = false; this.onUnderrun?.('media'); }
     const mediaReady = this.mediaPrimed;
     if (!this.backgroundPrimed && this.background.length >= this.network.mediaMs * 192) this.backgroundPrimed = true;
-    if (this.backgroundPrimed && this.background.length < 3840) this.backgroundPrimed = false;
+    if (this.backgroundPrimed && this.background.length < 3840) { this.backgroundPrimed = false; this.onUnderrun?.('background'); }
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
     const out = Buffer.alloc(3840); const duck = tracks.length ? this.ducking : 1;
@@ -219,5 +219,5 @@ export class VoiceOutput {
   endBackground(guildId) { this.connections.get(guildId)?.mixer.clearBackground(); }
   disconnect(guildId, cancelPending = true) { if (cancelPending) { this.connectionEpochs.set(guildId, (this.connectionEpochs.get(guildId) || 0) + 1); this.connecting.delete(guildId); for (const controller of this.pcmControllers.get(guildId) || []) controller.abort(); } const entry = this.connections.get(guildId); if (!entry) return; this.connections.delete(guildId); this.syncMonitor(); entry.player.stop(); entry.mixer.destroy(); if (entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy(); this.changed(); }
   close() { for (const id of new Set([...this.connections.keys(), ...this.connecting.keys()])) this.disconnect(id); this.monitor.stop(); this.backend?.close(); }
-  snapshot() { return [...this.connections].map(([guildId, e]) => ({ guildId, channelId: e.channelId, status: e.connection.state.status })); }
+  snapshot() { return [...this.connections].map(([guildId, e]) => ({ guildId, channelId: e.channelId, status: e.connection.state.status, diagnostics: e.diagnostics })); }
 }

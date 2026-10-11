@@ -30,6 +30,7 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
     const c = state.config;
     const collections = [
       ['dictionary-list', c.dictionary, d => [d.source + ' → ' + d.replacement, `${d.scope}${d.scopeId ? ': ' + d.scopeId : ''}${d.regex ? ' · 正規表現' : ''}`], (config, d) => { config.dictionary = config.dictionary.filter(x => x.id !== d.id); }],
+      ['emoji-reading-list', c.speech.emojiReadings, e => [e.source + ' → ' + (e.replacement || '無音'), '絵文字・スタンプ'], (config, e) => { config.speech.emojiReadings = config.speech.emojiReadings.filter(x => x.source !== e.source); }],
       ['profile-list', c.speech.profiles, p => [p.name || p.userId, `利用者 ${p.userId} · 声種 ${p.styleId} · 話速 ${p.speed}`], (config, p) => { config.speech.profiles = config.speech.profiles.filter(x => x.userId !== p.userId); }],
       ['clip-list', c.speech.soundClips, p => [p.trigger, p.path], (config, p) => { config.speech.soundClips = config.speech.soundClips.filter(x => x.trigger !== p.trigger); }],
       ['forward-list', c.speech.forwarding, f => [`${f.fromGuildId} → ${f.toGuildId}`, { 'one-way': '片方向', 'two-way': '双方向', none: '転送なし' }[f.mode]], (config, f) => { config.speech.forwarding = config.speech.forwarding.filter(x => x.fromGuildId !== f.fromGuildId || x.toGuildId !== f.toGuildId); }],
@@ -135,7 +136,7 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   document.querySelector('[data-config="desktop.networkProfile"]').addEventListener('change', event => {
     document.querySelector('[data-config="desktop.audioBitrateKbps"]').value = { poor: 48, balanced: 96, fast: 128 }[event.target.value];
   });
-  const actions = { 'bot-start': 'bot:start', 'bot-stop': 'bot:stop', 'show-media': 'media:show', 'open-docs': 'open:docs', 'open-voicevox': 'open:voicevox', 'stop-engine': 'engine:stop', 'export-config': 'config:export' };
+  const actions = { 'bot-start': 'bot:start', 'bot-stop': 'bot:stop', 'show-media': 'media:show', 'open-docs': 'open:docs', 'open-voicevox': 'open:voicevox', 'stop-engine': 'engine:stop', 'export-config': 'config:export', 'export-audio-diagnostics': 'voice:diagnostics-export' };
   function renderAccountLink() {
     const youtube = $('media-account-service').value === 'youtube', link = state.accountLink || {};
     $('youtube-account-help').hidden = !youtube; $('embedded-account-help').hidden = youtube;
@@ -158,6 +159,7 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
     $('binding-form').reset();
   }));
   $('dictionary-form').addEventListener('submit', task(async () => { const c = draft(); c.dictionary.push({ source: $('dict-source').value, replacement: $('dict-replacement').value, scope: $('dict-scope').value, scopeId: $('dict-scope-id').value.trim(), regex: $('dict-regex').checked, caseSensitive: false }); await save(c); $('dictionary-form').reset(); }));
+  $('emoji-reading-form').addEventListener('submit', task(async () => { const c = draft(), source = $('emoji-source').value.trim(); c.speech.emojiReadings = c.speech.emojiReadings.filter(e => e.source !== source); c.speech.emojiReadings.push({ source, replacement: $('emoji-replacement').value }); await save(c); $('emoji-reading-form').reset(); }));
   $('profile-form').addEventListener('submit', task(async () => { const c = draft(), p = { userId: $('profile-id').value.trim(), name: $('profile-name').value, styleId: Number($('profile-style').value), speed: Number($('profile-speed').value) }; c.speech.profiles = c.speech.profiles.filter(x => x.userId !== p.userId); c.speech.profiles.push(p); await save(c); $('profile-form').reset(); }));
   $('choose-clip').addEventListener('click', task(async () => { const path = await invoke('clip:choose'); if (path) $('clip-path').value = path; }));
   $('clip-form').addEventListener('submit', task(async () => { const c = draft(), clip = { trigger: $('clip-trigger').value, path: $('clip-path').value }; c.speech.soundClips = c.speech.soundClips.filter(x => x.trigger !== clip.trigger); c.speech.soundClips.push(clip); await save(c); $('clip-form').reset(); }));

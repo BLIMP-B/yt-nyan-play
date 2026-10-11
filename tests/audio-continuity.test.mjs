@@ -38,6 +38,19 @@ test('Discord packet generation avoids underruns when main-thread work stalls an
   assert.ok(packets >= 50); assert.ok(peak > 2 && peak < 100, `Quiet media was lost or amplified: ${peak}`);
   assert.equal(player.state.missedFrames, 0);
 });
+test('capture sends stereo sound to the PC and PCM reporting retains the same channels', () => {
+  let Processor; const packets = [];
+  runInNewContext(readFileSync(new URL('../apps/desktop/renderer/pcm-worklet.js', import.meta.url), 'utf8'), {
+    AudioWorkletProcessor: class { constructor() { this.port = { postMessage: bytes => packets.push(Buffer.from(bytes)) }; } }, registerProcessor: (_name, klass) => { Processor = klass; },
+  });
+  const processor = new Processor(), left = new Float32Array(128).fill(.25), right = new Float32Array(128).fill(-.125), output = [new Float32Array(128), new Float32Array(128)];
+  for (let i = 0; i < 15; i++) processor.process([[left, right]], [output]);
+  assert.deepEqual(output[0], left); assert.deepEqual(output[1], right);
+  assert.equal(packets.length, 2);
+  assert.equal(packets[0].readInt16LE(0), 8192); assert.equal(packets[0].readInt16LE(2), -4096);
+  processor.process([[left]], [output]); assert.deepEqual(output[1], left);
+  processor.process([], [output]); assert.ok(output.every(c => c.every(v => v === 0)));
+});
 test('jitter buffering never consumes a partial media frame and speech can continue before media primes', async t => {
   const mixer = new PcmMixer(); mixer.mediaVolume = 1; t.after(() => mixer.destroy());
   const audio = tone(12, 1000); mixer.addMedia(audio.subarray(0, 512));

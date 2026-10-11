@@ -20,7 +20,7 @@ export const DEFAULT_CONFIG = {
     enabled: true, provider: 'voicevox', engineUrl: 'http://127.0.0.1:50021',
     engineExecutable: '', styleId: 3, speed: 1, pitch: 0, intonation: 1,
     volume: 0.8, output: 'discord', outputDevice: '', maxChars: 500,
-    readNames: true, readUrls: false, readEmoji: false, readAttachments: true,
+    readNames: true, readUrls: false, readEmoji: true, readStickers: true, readAttachments: true,
     readSpoilers: false, spoilerText: 'ネタバレ', readCode: false,
     messageTemplate: '$nickname$、$text$', joinTemplate: '$nickname$が$channel$に参加しました',
     leaveTemplate: '$nickname$が$channel$から退出しました',

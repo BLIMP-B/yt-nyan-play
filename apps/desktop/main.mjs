@@ -167,6 +167,12 @@ else {
       if (data.action === 'retry') runner.retry(job.id); else if (data.action === 'cancel') runner.cancel(job.id); else throw new Error('未対応の操作です'); return snapshot();
     }
     if (name === 'config:export') { const selected = await dialog.showSaveDialog(window, { defaultPath: 'nyan-play-settings.json', filters: [{ name: '設定', extensions: ['json'] }] }); if (!selected.canceled) writeFileSync(selected.filePath, JSON.stringify(store.exportConfig(), null, 2)); return null; }
+    if (name === 'voice:diagnostics-export') {
+      const stats = await voice.backend?.diagnostics() || [];
+      const selected = await dialog.showSaveDialog(window, { defaultPath: 'nyan-audio-diagnostics.json', filters: [{ name: '音声診断', extensions: ['json'] }] });
+      if (!selected.canceled) writeFileSync(selected.filePath, JSON.stringify({ version: app.getVersion(), generatedAt: new Date().toISOString(), measuredAt: 'sender', receiverDropoutsVerified: false, networkProfile: getConfig().desktop.networkProfile, bitrateKbps: getConfig().desktop.audioBitrateKbps, connections: stats, logs: store.logs.filter(log => log.text.startsWith('音声診断 (')) }, null, 2));
+      return null;
+    }
     if (name === 'config:import') {
       const selected = await dialog.showOpenDialog(window, { properties: ['openFile'], filters: [{ name: '設定', extensions: ['json'] }] }); if (selected.canceled) return null;
       const buffer = readFileSync(selected.filePaths[0]); if (buffer.length > 5 * 1024 * 1024) throw new Error('設定ファイルが大きすぎます');

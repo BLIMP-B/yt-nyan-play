@@ -20,12 +20,13 @@ export function educationKey(value) { return normalize(value).replace(/[a-z]/g, 
 export function applyEducation(text, entries) {
   const tracked = text instanceof ReadingText;
   if (!entries?.length) return text;
-  let value = tracked ? new ReadingText(normalize(text.text)) : normalize(text);
+  let value = tracked ? text.normalize() : normalize(text);
   for (const entry of [...entries].sort((a, b) => b.source.length - a.source.length)) {
     const source = normalize(entry.source), literal = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pattern = /^[a-z]+$/iu.test(source) ? `(?<![a-z])${literal}(?![a-z])` : literal;
     // A replacement function preserves literal dollar signs in readings.
-    value = value.replace(new RegExp(pattern, 'giu'), () => entry.reading, true);
+    const current = value;
+    value = value.replace(new RegExp(pattern, 'giu'), (match, offset) => tracked && current.protected.slice(offset, offset + match.length).some(Boolean) ? current.slice(offset, offset + match.length) : entry.reading, true);
   }
   return value;
 }

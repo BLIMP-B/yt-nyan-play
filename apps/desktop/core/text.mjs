@@ -1,6 +1,7 @@
 import { RE2 } from 're2-wasm';
 import { applyEducation } from './education.mjs';
 import { ReadingText } from './latin-reading.mjs';
+import { messageMediaText } from './message-media.mjs';
 
 export function formatTemplate(template, values) {
   return template.replace(/\$([\w-]+)\$/g, (_, key) => String(values[key] ?? ''));
@@ -37,27 +38,21 @@ export function applyDictionary(text, entries, context) {
 export function prepareSpeech(message, config) {
   const s = config.speech;
   if (s.bouyomiPreprocess || s.provider === 'bouyomi' && s.bouyomiNativeRules) {
-    const text = s.chatEducationEnabled ? applyEducation(message.content, config.education) : message.content;
+    const content = messageMediaText(message, config);
+    const text = (s.chatEducationEnabled ? applyEducation(content, config.education) : content).text;
     const values = { username: message.userName || '', nickname: message.displayName || message.userName || '', server: message.guildName || '', channel: message.channelName || '', text, userid: message.userId || '', time: new Date().toLocaleTimeString('ja-JP') };
     return s.readNames ? formatTemplate(s.messageTemplate, values) : text;
   }
-  let text = new ReadingText(message.content);
+  let text = messageMediaText(message, config);
   if (s.chatEducationEnabled) text = applyEducation(text, config.education);
   if (!s.readSpoilers) text = text.replace(/\|\|[\s\S]*?\|\|/g, s.spoilerText);
   if (!s.readCode) text = text.replace(/```[\s\S]*?```/g, 'コード').replace(/`([^`]+)`/g, '$1');
   text = text.replace(/<@!?(\d+)>/g, (_, id) => message.mentions?.[id] || 'メンション')
     .replace(/<@&(\d+)>/g, (_, id) => message.roles?.[id] || 'ロール')
     .replace(/<#(\d+)>/g, (_, id) => message.channels?.[id] || 'チャンネル');
-  text = text.replace(/<a?:([^:>]+):\d+>/g, (_, name) => s.readEmoji ? name : '');
   // Strip Markdown destinations before replacing URLs, retaining the link label.
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').urls(s.readUrls);
-  for (const e of s.emojiReadings) text = text.replace(new RegExp(e.source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gu'), () => e.replacement, true);
-  if (!s.readEmoji) text = text.replace(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/gu, '');
   text = text.replace(/[*_~]/g, (match, offset) => text.protected[offset] ? match : '');
-  if (s.readAttachments && message.attachments?.length) {
-    const names = message.attachments.map(a => a.spoiler && !s.readSpoilers ? s.spoilerText : a.name).join('、');
-    text = text.replace(/$/u, () => `。添付ファイル${message.attachments.length}件、${names}`);
-  }
   text = applyDictionary(text, config.dictionary, message).replace(/^\s+|\s+$/gu, '');
   if (!text.text) return '';
   const values = { username: message.userName, nickname: message.displayName || message.userName,
@@ -71,7 +66,8 @@ export function prepareSpeech(message, config) {
 // this fallback; command arguments and media URLs never pass through it.
 export function prepareNativeText(text, config, context = {}, readings = []) {
   let value = new ReadingText(text);
-  for (const reading of [...readings].sort((a, b) => b.length - a.length)) {
+  const explicit = [...readings, ...config.speech.emojiReadings.map(e => e.replacement), ...(config.speech.chatEducationEnabled ? config.education.map(e => e.reading) : [])];
+  for (const reading of explicit.sort((a, b) => b.length - a.length)) {
     if (reading) value = value.replace(new RegExp(reading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gu'), () => reading, true);
   }
   return applyDictionary(value, config.dictionary, context).latinReading();

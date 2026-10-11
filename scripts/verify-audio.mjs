@@ -62,9 +62,13 @@ HourlyHistory.prototype.sync = function(...args) {
 };
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
+  if (url === 'https://www.youtube.com/watch?v=NyanBgm0001') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'youtube', headers: {} });
   if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} });
   return original.call(this, url, signal);
 };
+import { HourlyRuntime } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/hourly.mjs')).href)};
+const originalSentence = HourlyRuntime.prototype.sentence;
+HourlyRuntime.prototype.sentence = function(...args) { return globalThis.nyanBgmFixture ? Promise.resolve({ text: '猫は時計を眺めるのだ。', nouns: ['猫', '時計'] }) : originalSentence.apply(this, args); };
 import { AndroidRuntime } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/android.mjs')).href)};
 import { shellQuote } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/core/android-packages.mjs')).href)};
 const originalAdb = AndroidRuntime.prototype.adb;
@@ -199,9 +203,21 @@ try {
         if (peak > 500 && frequency >= 800 && frequency <= 950) metrics.fourthToneAt = Date.now();
       }
       for (let i = 0; i + 1 < buffer.length; i += 2) { const v = Math.abs(buffer.readInt16LE(i)); metrics.peak = Math.max(metrics.peak, v); if (v > 100) { metrics.nonSilentSamples++; if(globalThis.nyanAudioHistory?.syncing) metrics.samplesDuringHistory=(metrics.samplesDuringHistory||0)+1; } }
+      const expected = label === 'hourly-bgm' || label.includes('audio') || label.startsWith('stream') ? 660 : label.startsWith('video') ? 880 : null;
+      if (expected) {
+        let crossings = 0, previous = 0, framePeak = 0;
+        for (let i = 0; i + 3 < buffer.length; i += 4) { const sample = buffer.readInt16LE(i); framePeak = Math.max(framePeak, Math.abs(sample)); if (i && (sample >= 0) !== (previous >= 0)) crossings++; previous = sample; }
+        const frequency = crossings * 48000 / (2 * (buffer.length / 4));
+        if (framePeak > 100 && Math.abs(frequency - expected) < 75) metrics.mediaToneSamples = (metrics.mediaToneSamples || 0) + buffer.length / 4;
+      }
       if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
     });
     const mediaSession = session.fromPartition('persist:nyan-playback');
+    await mediaSession.protocol.handle('https', request => {
+      const url = new URL(request.url);
+      if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
+      return net.fetch(request, { bypassCustomProtocolHandlers: true });
+    });
     await mediaSession.protocol.handle('http', request => {
       if (new URL(request.url).hostname !== 'media-fixture.test') return net.fetch(request, { bypassCustomProtocolHandlers: true });
       const file = new URL(request.url).pathname;
@@ -247,15 +263,15 @@ try {
       const until = Date.now() + 8000;
       while (Date.now() < until) {
         const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
-        if (target) { probe.target = target; probe.active = kind; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+        if (target) { probe.target = probe.ui; probe.active = kind; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       throw new Error('Playback window did not open');
     }, kind);
     await waitForJob(page, job.id);
     const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
-    assert.ok(metrics?.nonSilentSamples > 1000, `${kind} audio missing: ${JSON.stringify(metrics)}`);
-    report.media.push({ kind, status: 'completed', ...metrics });
+    assert.ok(metrics?.mediaToneSamples > 4800, `${kind} audio did not reach PC output (announcement excluded): ${JSON.stringify(metrics)}`);
+    report.media.push({ kind, status: 'completed', pcPlayback: true, ...metrics });
     await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   }
   await historyTask;
@@ -294,6 +310,21 @@ try {
   notificationConfig.speech.output = 'both'; await call(page, 'config:save', notificationConfig);
   await page.locator('[data-view="overview"]').click();
   report.androidNotifications = { ...notificationAudio, pcFallbackWithoutBotVC: true, pcContinuesAfterBotStopped: true, outputSavedWhileRunning: true, disabledWhileRunning: true, passed: true };
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  // The real hourly search -> muted preparation -> chime -> local capture ->
+  // fade/stop path, with only search/model/media contents supplied as fixtures.
+  const bgmConfig = (await call(page, 'state')).config; bgmConfig.hourly.output = 'both'; bgmConfig.hourly.servers = [{ guildId: '11111', channelIds: ['22222'], enabled: true, bgm: true }];
+  bgmConfig.hourly.generationMode = 'live'; bgmConfig.hourly.bgmFadeInMs = 200; bgmConfig.hourly.bgmFadeOutMs = 200;
+  await call(page, 'config:save', bgmConfig);
+  await application.evaluate(async () => {
+    globalThis.nyanBgmFixture = true; const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'hourly-bgm'; probe.capture = true;
+    await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+  });
+  await call(page, 'hourly:test', { guildId: '11111' });
+  const bgmMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics['hourly-bgm']);
+  assert.ok(bgmMetrics?.mediaToneSamples > 4800, `Hourly BGM did not reach PC speakers (speech/chime excluded): ${JSON.stringify(bgmMetrics)}`);
+  (report.hourly ||= {}).pcBackground = { ...bgmMetrics, fixtureSource: true, passed: true };
+  await application.evaluate(() => { globalThis.nyanBgmFixture = false; });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   const interrupted = await call(page, 'media:add', { url: 'http://media-fixture.test/video', mode: 'direct' });
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.some(m => m.startedAt));
@@ -336,7 +367,7 @@ try {
   await clockTask;
   const clockMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.hourly);
   assert.ok(targetAt && clockMetrics?.fourthToneAt && clockMetrics.nonSilentSamples > 4800, 'The real timed chime did not produce the fourth tone');
-  report.hourly = { ...clockMetrics, targetAt, measuredCaptureDelayMs: clockMetrics.fourthToneAt - targetAt };
+  report.hourly = { ...report.hourly, ...clockMetrics, targetAt, measuredCaptureDelayMs: clockMetrics.fourthToneAt - targetAt };
   assert.ok(Math.abs(report.hourly.measuredCaptureDelayMs) < 750, 'The fourth tone was not aligned with the scheduled PC hour');
   const clockPcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks.hourly.slice(-250))]));
   report.hourly.discordEncoder = await encodedAudio(clockPcm); assert.ok(report.hourly.discordEncoder.nonSilentSamples > 4800);

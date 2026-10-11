@@ -55,6 +55,7 @@ export class DiscordAudioWorker {
   }
   post(message) { this.worker?.postMessage(message); }
   async health() { this.start(); return this.request({ method: 'health' }); }
+  diagnostics() { return this.worker ? this.request({ method: 'diagnostics' }, AbortSignal.timeout(5000)) : Promise.resolve([]); }
   request(message, signal) {
     signal?.throwIfAborted();
     if (!this.worker) return Promise.reject(new Error('音声ワーカーが終了しました'));
@@ -94,6 +95,7 @@ export class DiscordAudioWorker {
       const before = entry.connection.state; entry.connection.state = { status: message.status };
       entry.connection.emit('stateChange', before, entry.connection.state); entry.connection.emit(message.status, before, entry.connection.state);
     } else if (message.type === 'playerState' && entry) { entry.player.state.status = message.status; }
+    else if (message.type === 'diagnostics' && entry) { entry.diagnostics = message.stats; this.changed(); }
     else if (message.type === 'failure' && entry) entry.player.emit('error', new Error(message.error));
     else if (message.type === 'connectionError' && entry) entry.connection.emit('error', new Error(message.error));
     else if (message.type === 'adapterPayload' && entry) { if (!entry.adapter.sendPayload(message.data)) { entry.player.emit('error', new Error('Discordの接続が終了しました')); } }

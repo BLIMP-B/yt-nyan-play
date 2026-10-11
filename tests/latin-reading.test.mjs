@@ -71,7 +71,7 @@ test('education readings including Latin replacements and mute take priority', (
 });
 test('names, attachments and emoji readings use the same fallback while explicit readings stay intact', () => {
   const c = config({ speech: { readNames: true, readEmoji: true, emojiReadings: [{ source: '😀', replacement: 'ABC' }] } });
-  assert.equal(prepareSpeech({ content: 'AB 😀', userName: 'CD', attachments: [{ name: 'EF.mp3' }] }, c), 'シーディー、あビー ABC。添付ファイル1件、えエフ.エムピー3');
+  assert.equal(prepareSpeech({ content: 'AB 😀', userName: 'CD', attachments: [{ name: 'EF.mp3' }] }, c), 'シーディー、あビー ABC。添付ファイル1件、音声ファイル');
 });
 test('expanded speech stays bounded and user marker-looking text cannot bypass spelling', () => {
   assert.equal(speech('QW'.repeat(1000), config({ speech: { maxChars: 10 } })), 'キューダブリュー'.repeat(1000).slice(0, 10));

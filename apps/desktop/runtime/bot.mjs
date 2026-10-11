@@ -75,6 +75,7 @@ export class DiscordBot {
       roles: Object.fromEntries([...(message.mentions?.roles || [])].map(([id, r]) => [id, r.name])),
       channels: Object.fromEntries([...(message.mentions?.channels || [])].map(([id, c]) => [id, c.name])),
       attachments: [...(message.attachments?.values() || [])].map(a => ({ name: a.name || 'ファイル', contentType: a.contentType || '', spoiler: a.spoiler === true })),
+      stickers: [...(message.stickers?.values() || [])].map(sticker => ({ id: sticker.id || '', name: sticker.name || '' })),
     };
   }
   async message(message) {

@@ -85,7 +85,7 @@
         const context = new AudioContext({ sampleRate: 48000 }); capture.context = context;
         if (capture.local) await setDevice(context, message.device);
         await context.audioWorklet.addModule('pcm-worklet.js');
-        const source = context.createMediaStreamSource(stream); const processor = new AudioWorkletNode(context, 'nyan-pcm'); capture.processor = processor;
+        const source = context.createMediaStreamSource(stream); const processor = new AudioWorkletNode(context, 'nyan-pcm', { outputChannelCount: [2] }); capture.processor = processor;
         const failed = error => { if (!capture.stopping) { window.nyan.audioResult({ id: message.id, type: 'capture:error', error }); void stopCapture(message.id); } };
         processor.onprocessorerror = () => failed('音声転送の処理が停止しました');
         stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => failed('再生ウィンドウの音声接続が終了しました'), { once: true }));

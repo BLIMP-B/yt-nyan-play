@@ -3,6 +3,7 @@ import { PcmMixer, createDiscordAudioResource } from './voice-output.mjs';
 import { VoiceMonitor } from './voice-monitor.mjs';
 import Opus from './opus-codec.mjs';
 import { threadId } from 'node:worker_threads';
+import { AudioDiagnostics } from './audio-diagnostics.mjs';
 
 // The gateway adapter crosses threads; voice WebSocket, UDP, DAVE, Opus and
 // the 20-ms player clock stay together on this thread.
@@ -30,6 +31,7 @@ export class VoiceWorkerRuntime {
     catch (error) { this.send({ type: 'failure', entryId: message.entryId, error: error.message }); }
   }
   async command(message, signal) {
+    if (message.method === 'diagnostics') return [...this.entries].map(([id, entry]) => ({ id, channelId: entry.channelId, ...entry.diagnostics.snapshot() }));
     if (message.method === 'health') {
       const mixer = new PcmMixer(), resource = createDiscordAudioResource(mixer), decoder = new Opus();
       try { const packet = resource.playStream.read(); return { threadId, packetBytes: packet.length, pcmBytes: decoder.decode(packet).length }; }
@@ -38,14 +40,17 @@ export class VoiceWorkerRuntime {
     if (message.method === 'open') {
       const { entryId, guildId, channelId, selfDeaf, networkProfile, bitrate } = message;
       const mixer = new PcmMixer(networkProfile), player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 } });
-      const entry = { mixer, player, channelId }; this.entries.set(entryId, entry);
+      const diagnostics = new AudioDiagnostics(), entry = { mixer, player, channelId, diagnostics }; this.entries.set(entryId, entry);
+      mixer.onUnderrun = lane => diagnostics.starvation(lane);
       try {
         entry.connection = this.join({ guildId, channelId, selfDeaf, adapterCreator: methods => {
           entry.adapter = methods;
           return { sendPayload: data => { this.send({ type: 'adapterPayload', entryId, data }); return true; }, destroy: () => this.send({ type: 'adapterDestroy', entryId }) };
         } });
         const connection = entry.connection;
-        connection.on('stateChange', (before, after) => this.send({ type: 'connectionState', entryId, status: after.status }));
+        const dispatch = connection.dispatchAudio.bind(connection);
+        connection.dispatchAudio = () => { const sent = dispatch(); if (sent) diagnostics.dispatch(); return sent; };
+        connection.on('stateChange', (before, after) => { if (after.status !== VoiceConnectionStatus.Ready) diagnostics.resetClock(); this.send({ type: 'connectionState', entryId, status: after.status }); });
         connection.on('error', error => this.send({ type: 'connectionError', entryId, error: error.message }));
         const failed = error => this.send({ type: 'failure', entryId, error: error.message });
         player.on('error', failed); mixer.on('error', failed);
@@ -56,6 +61,7 @@ export class VoiceWorkerRuntime {
         finally { signal.removeEventListener('abort', aborted); }
         if (this.entries.get(entryId) !== entry) throw new DOMException('Cancelled', 'AbortError');
         connection.subscribe(player); player.play(createDiscordAudioResource(mixer, networkProfile, bitrate));
+        entry.diagnosticsTimer = setInterval(() => this.reportDiagnostics(entryId, entry), 60000); entry.diagnosticsTimer.unref();
         return { status: connection.state.status };
       } catch (error) { this.release(entryId); throw error; }
     }
@@ -82,8 +88,15 @@ export class VoiceWorkerRuntime {
   release(id) {
     const entry = this.entries.get(id); if (!entry) return;
     this.entries.delete(id);
+    clearInterval(entry.diagnosticsTimer); this.reportDiagnostics(id, entry);
     if (this.monitor.entry === entry) this.monitor.stop();
     entry.player.stop(true); entry.mixer.destroy();
     if (entry.connection && entry.connection.state.status !== VoiceConnectionStatus.Destroyed) entry.connection.destroy();
+  }
+  reportDiagnostics(entryId, entry) {
+    const stats = entry.diagnostics.snapshot();
+    this.send({ type: 'diagnostics', entryId, stats });
+    if (!stats.packets) return;
+    this.send({ type: 'log', level: stats.gapEvents || stats.mediaStarvations || stats.backgroundStarvations ? 'warn' : 'info', text: `音声診断 (${entry.channelId}): ${stats.durationSeconds}秒・${stats.packets}パケット、送信遅延${stats.gapEvents}件・まとめ送り${stats.burstEvents}件・最大間隔${stats.maxGapMs}ms、メディア音声不足${stats.mediaStarvations}件・BGM音声不足${stats.backgroundStarvations}件（受信側の音途切れとは別の測定）` });
   }
 }

@@ -54,6 +54,11 @@ export class ReadingText {
     const value = new ReadingText(this.text.slice(start, end));
     value.protected = this.protected.slice(start, end); return value;
   }
+  normalize(form = 'NFKC') {
+    const parts = [...new Intl.Segmenter('ja', { granularity: 'grapheme' }).segment(this.text)].map(({ segment, index }) => ({ text: segment.normalize(form), protected: this.protected.slice(index, index + segment.length).some(Boolean) }));
+    const value = new ReadingText(parts.map(p => p.text).join(''));
+    value.protected = parts.flatMap(p => Array(p.text.length).fill(p.protected)); return value;
+  }
   replace(pattern, replacement, protect = false) {
     const original = this.text, chunks = []; let position = 0;
     original.replace(pattern, (...args) => {
