@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - releases/current.json
-      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -17,7 +16,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/codex/release-v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,7 +40,7 @@ jobs:
           assert.ok(typeof selection.title === 'string' && selection.title.length < 200 && !/[\r\n]/.test(selection.title));
           assert.match(selection.notes, /^releases\/notes-v\d+\.\d+\.\d+\.md$/);
           const notes = join(process.env.RUNNER_TEMP, 'nyan-release-notes.md');
-          writeFileSync(notes, readFileSync(selection.notes));
+          writeFileSync(notes, readFileSync(selection.notes) + `\n検証対象ソース: ${selection.sourceSha}\n\n[Windows/Linuxビルドと検証](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${selection.windowsRunId})\n`);
           for (const [name, value] of Object.entries({ tag: selection.tag, sha: selection.sourceSha, run: selection.windowsRunId, title: selection.title, notes })) {
             appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
           }
@@ -109,6 +108,8 @@ jobs:
             unzip -q "$ARCHIVE" -d "verification/$KEY"
           done
       - name: Check voice timing, real Android, local SLM and playback reports
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
@@ -180,6 +181,7 @@ jobs:
           assert.equal(duration.passed, true);
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
+          assert.equal(audio.version, process.env.RELEASE_TAG.slice(1));
           assert.equal(audio.passed, true);
           for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
             const media = audio.media.find(item => item.kind === kind);
@@ -239,7 +241,27 @@ jobs:
           assert.equal(audio.latinReading.urlExcluded, true);
           assert.equal(audio.latinReading.synthesisText, 'エー ビー エヌ エヌ か にゃん CAT URL');
           const effects = audio.mediaEffects;
-          assert.equal(effects.bypassByDefault, true);
+          const version = process.env.RELEASE_TAG.slice(1).split('.').map(Number);
+          const atLeast = patch => version[0] > 0 || version[1] > 5 || version[1] === 5 && version[2] >= patch;
+          const modernRelease = atLeast(13);
+          if (modernRelease) {
+            assert.equal(effects.discordPresetByDefault, 'discord1');
+            assert.equal(effects.discordPresetsSelectable, true);
+            assert.equal(audio.titleCalls.enabledByDefault, true);
+            assert.equal(audio.titleCalls.defaultMediaRatio, 0.8);
+            assert.equal(audio.titleCalls.speedRatio, 0.85);
+            assert.equal(audio.titleCalls.speedSettingSaved, true);
+            assert.equal(audio.titleCalls.synthesisSpeedVerified, true);
+            assert.equal(audio.titleCalls.pageTitleRead, true);
+            assert.ok(audio.titleCalls.completed > 0);
+            assert.equal(audio.titleCalls.receiverVerified, false);
+            for (const key of ['simultaneousGuildMedia', 'discordDuckingIsolated', 'pcDuckingGlobal', 'rawCaptureUnaffected', 'sameGuildReplacementIsolated']) assert.equal(audio.guildIsolation[key], true);
+            assert.equal(audio.guildIsolation.receiverVerified, false);
+            if (atLeast(14)) {
+              assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
+              assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);
+            }
+          } else assert.equal(effects.bypassByDefault, true);
           assert.equal(effects.eqPresetApplied, true);
           assert.equal(effects.compressorPresetApplied, true);
           assert.equal(effects.customSaved, true);
@@ -301,6 +323,25 @@ jobs:
           assert.deepEqual(readdirSync('release-assets').sort(), expected);
           for (const name of expected) assert.ok(statSync('release-assets/' + name).size > 0);
           JS
+          python3 - <<'PYTHON'
+          import os, json, struct, zipfile
+          from pathlib import Path, PurePosixPath
+          version = os.environ['RELEASE_TAG'][1:]
+          with zipfile.ZipFile(Path('release-assets') / f'NyanTalk-Damare-{version}-x64.zip') as archive:
+            paths = [name for name in archive.namelist() if name.replace('\\', '/').endswith('resources/app.asar')]
+            assert len(paths) == 1, 'Exactly one packaged app archive is required'
+            with archive.open(paths[0]) as stream:
+              prefix, header_size, payload_size, json_size = struct.unpack('<4I', stream.read(16))
+              assert prefix == 4 and 0 < json_size <= 64 * 1024 * 1024
+              assert header_size >= json_size + 8
+              header = json.loads(stream.read(json_size))
+              entry = header['files']['package.json']
+              assert not entry.get('unpacked') and 0 < entry['size'] <= 1024 * 1024
+              stream.seek(8 + header_size + int(entry['offset']))
+              package = json.loads(stream.read(entry['size']))
+              assert package['version'] == version, 'Packaged app version must match the release tag'
+              print('Verified packaged app version:', package['version'])
+          PYTHON
           cd release-assets
           sha256sum *.exe *.zip > SHA256SUMS.txt
       - name: Register the tag for the verified source
