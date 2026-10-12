@@ -1,0 +1,103 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { AndroidRuntime } from '../apps/desktop/runtime/android.mjs';
+import { normalizeConfig } from '../apps/desktop/core/config.mjs';
+import { AndroidNotifications } from '../apps/desktop/runtime/android-notifications.mjs';
+import { shellQuote } from '../apps/desktop/core/android-packages.mjs';
+
+if (process.platform !== 'win32') throw new Error('Android導入試験はWindows x64で実行してください');
+const directory = mkdtempSync(join(tmpdir(), 'damare-android-install-'));
+const reports = resolve(import.meta.dirname, '../dist/android-verification'); mkdirSync(reports, { recursive: true });
+const config = normalizeConfig(), report = { platform: process.platform, image: config.android.image, installed: false, bootVerified: false };
+const android = new AndroidRuntime(directory, () => config, (level, text) => console.log(`${level}: ${text}`));
+let last = 0;
+android.on('change', () => { if (Date.now() - last > 10000) { last = Date.now(); console.log(android.progress.replace(/[\r\n]+/g, ' ').slice(-300)); } });
+const timeout = setTimeout(() => android.cancelSetup(), 25 * 60000);
+try {
+  await android.refresh();
+  // CI installs the official SDK solely to exercise the same setup path as the desktop action.
+  const state = await android.setup({ accepted: true }); assert.equal(state.ready, true);
+  const devices = await android.javaTool('avdmanager', ['list', 'avd'], { timeout: 60000 });
+  assert.ok(devices.includes(state.avd), 'Google Play AVD was not registered');
+  report.installed = true; report.avd = state.avd;
+  report.emulator = (await android.run(android.paths().emulator, ['-version'])).slice(0, 500);
+  try { report.acceleration = await android.run(android.paths().emulator, ['-accel-check']); }
+  catch (e) { report.acceleration = e.message; }
+  if (/is installed and usable/i.test(report.acceleration)) {
+    // Hosted Windows has no physical display adapter. Exercise the supported software renderer.
+    config.android.gpu = 'software'; report.gpu = config.android.gpu;
+    config.android.audioEnabled = false;
+    config.android.showWindow = true;
+    report.stage = 'native-probe-prerequisites';
+    report.pythonVersion = await android.run('python', ['--version'], { timeout: 15000 });
+    await android.run('python', ['-X', 'utf8', resolve(import.meta.dirname, 'windows-emulator-windows.py'), '0'], { timeout: 15000 });
+    report.stage = 'boot';
+    await android.start(); report.bootVerified = true;
+    // Match our visible Qt windows by PID and cached window class. Reading
+    // titles can wait on a busy Qt thread; no WM_GETTEXT is sent here.
+    report.stage = 'native-window';
+    const windows = await android.run('python', ['-X', 'utf8', resolve(import.meta.dirname, 'windows-emulator-windows.py'), String(android.child.pid)], { timeout: 15000 });
+    report.nativeWindows = JSON.parse(windows);
+    report.nativeWindowVerified = report.nativeWindows.some(window => window.visible && window.class.startsWith('Qt'));
+    assert.equal(report.nativeWindowVerified, true, 'The native Android window for protected authentication screens was not visible');
+    report.stage = 'verify-installed-play';
+    report.playInstalled = /^package:/m.test(await android.adb(['shell', 'pm', 'path', 'com.android.vending'], { timeout: 60000 }));
+    assert.equal(report.playInstalled, true, 'Google Play was not installed in the AVD');
+    report.stage = 'open-play'; report.playWindow = await android.openPlay();
+    report.playForeground = /com\.android\.vending\//.test(report.playWindow.focus);
+    assert.equal(report.playForeground, true, 'Google Play did not become the focused, unobstructed window');
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    report.playProcess = (await android.adb(['shell', 'pidof', 'com.android.vending'])).trim();
+    assert.ok(report.playProcess, 'Google Play did not start');
+    const png = await android.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 });
+    assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
+    writeFileSync(join(reports, 'android-play.png'), png);
+    report.stage = 'notifications';
+    const spoken = [], probes = [];
+    const notifications = new AndroidNotifications(android, () => config, { speech: payload => spoken.push(payload), log: (l, t) => console.log(`${l}: ${t}`) }, { automatic: false });
+    try {
+      await notifications.poll(); await notifications.poll(); assert.equal(spoken.length, 0, 'Existing Android notifications must not be read at startup');
+      const post = async body => {
+        const posted = await android.adb(['shell', `cmd notification post -t ${shellQuote('通知試験')} -S bigtext --bigtext ${shellQuote(body)} damare_notification_probe ${shellQuote('省略本文')}`], { timeout: 10000 });
+        const keys = (await android.adb(['shell', 'cmd notification list'], { timeout: 10000 })).split(/\r?\n/).map(key => key.trim()).filter(key => key.includes('|damare_notification_probe|'));
+        const records = [];
+        for (const key of keys) records.push({ key, dump: await android.adb(['shell', `cmd notification get ${shellQuote(key)}`], { timeout: 10000, maxOutputBytes: 65536 }) });
+        probes.push({ posted, records });
+        writeFileSync(join(reports, 'notification-probe.json'), JSON.stringify(probes, null, 2));
+        for (let i = 0; i < 5; i++) { await new Promise(resolve => setTimeout(resolve, 200)); await notifications.poll(); if (spoken.at(-1)?.text.includes(body)) break; }
+      };
+      await post('Androidから届いた新しい通知です');
+      assert.equal(spoken.length, 1, notifications.error || 'Native Android notification was not delivered');
+      assert.equal(spoken[0].text, '通知試験。Androidから届いた新しい通知です');
+      await notifications.poll(); assert.equal(spoken.length, 1, 'Duplicate notification was read twice');
+      await post('更新された通知です'); assert.equal(spoken.length, 2, 'Updated notification was not delivered');
+      assert.equal(spoken[1].output, 'both'); assert.equal(spoken[1].master, true); assert.equal(spoken[1].system, true);
+      config.android.notificationOutput = 'local'; await post('PCだけに送る通知です'); assert.equal(spoken.at(-1).output, 'local');
+      config.android.notificationOutput = 'discord'; await post('全VCに送る通知です'); assert.equal(spoken.at(-1).output, 'discord');
+      report.notifications = { nativePost: true, expandedText: true, initialBaselineSkipped: true, duplicateSuppressed: true, updateDelivered: true, outputChoices: ['both', 'local', 'discord'], passed: true };
+    } finally { notifications.close(); }
+  }
+  console.log('ANDROID_INSTALL_VERIFIED ' + JSON.stringify(report));
+} catch (e) {
+  report.error = e.message; report.errorState = e.state; console.error(e); process.exitCode = 1;
+  if (android.status === 'running') {
+    try {
+      writeFileSync(join(reports, 'android-failure.png'), await android.adb(['exec-out', 'screencap', '-p'], { binary: true, timeout: 15000 }));
+      writeFileSync(join(reports, 'android-display.txt'), await android.adb(['shell', 'dumpsys', 'window', 'displays']));
+    } catch (diagnosticError) { report.diagnosticError = diagnosticError.message; }
+  }
+}
+finally {
+  clearTimeout(timeout); const child = android.child;
+  await android.stop().catch(error => { report.shutdownError = error.message; process.exitCode = 1; }); android.close();
+  report.shutdownVerified = !child || child.exitCode !== null || child.signalCode !== null;
+  if (!report.shutdownVerified) { report.shutdownError ||= 'The emulator launcher remained alive after stopping'; process.exitCode = 1; }
+  report.emulatorOutput = android.emulatorLog; report.bootAttempts = android.bootAttempts;
+  writeFileSync(join(reports, 'android-report.json'), JSON.stringify(report, null, 2));
+  // This isolated CI machine owns the ADB server; stop it before removing its locked executable.
+  await android.run(android.paths().adb, ['kill-server']).catch(() => {});
+  try { rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); }
+  catch (e) { console.warn('Temporary SDK cleanup: ' + e.message); }
+}

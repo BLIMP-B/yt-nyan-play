@@ -1,0 +1,120 @@
+name: Publish verified extension release
+on:
+  push:
+    branches: ['codex/windows-desktop-bot']
+    paths: ['releases/extension-current.json', '.github/workflows/extension-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Select the verified source
+        id: selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,appendFileSync} from 'node:fs';
+          import {execFileSync} from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const s=JSON.parse(readFileSync('releases/extension-current.json'));
+          assert.equal(s.version,'0.2.1');assert.match(s.sourceSha,/^[a-f0-9]{40}$/);
+          const run=JSON.parse(execFileSync('gh',['api',`repos/${process.env.GH_REPO}/actions/runs/${s.verificationRunId}`],{encoding:'utf8'}));
+          assert.equal(run.event,'push');assert.equal(run.head_sha,s.sourceSha);assert.equal(run.status,'completed');assert.equal(run.conclusion,'success');
+          const {jobs}=JSON.parse(execFileSync('gh',['api',`repos/${process.env.GH_REPO}/actions/runs/${s.verificationRunId}/jobs`],{encoding:'utf8'}));
+          for(const name of ['fixtures','public-pages'])assert.ok(jobs.some(j=>j.name===name&&j.conclusion==='success'));
+          appendFileSync(process.env.GITHUB_OUTPUT,`sha=${s.sourceSha}\nrun=${s.verificationRunId}\ntag=v${s.version}\nnotes=${s.notes}\n`);
+          JS
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-0.2.1-verified
+          path: release-assets
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-display-fixtures
+          path: verification/fixtures
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-display-public-pages
+          path: verification/public-pages
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.selection.outputs.run }}
+      - name: Verify reports and collect images
+        env:
+          EXT_NOTES: ${{ steps.selection.outputs.notes }}
+        run: |
+          node --input-type=module <<'JS'
+          import {readFileSync,copyFileSync,writeFileSync} from 'node:fs';import assert from 'node:assert/strict';
+          const r=JSON.parse(readFileSync('verification/fixtures/fixture-report.json'));
+          assert.equal(r.version,'0.2.1');assert.equal(r.passed,true);assert.equal(r.sites.length,9);
+          assert.deepEqual(r.sites.map(s=>s.id).sort(),['youtube','niconico','x','instagram','tiktok','facebook','threads','bluesky','mastodon'].sort());
+          for(const s of r.sites)for(const key of ['button','dialog','postUrl','currentPosition','resetPosition'])assert.equal(s[key],true);
+          const live=JSON.parse(readFileSync('verification/public-pages/public-report.json'));assert.equal(live.version,'0.2.1');assert.equal(live.sites.length,9);
+          copyFileSync('verification/fixtures/overview.png','release-assets/nyan-play-0.2.1-display.png');
+          const names={youtube:'YouTube',niconico:'ニコニコ動画',x:'X',instagram:'Instagram',tiktok:'TikTok',facebook:'Facebook',threads:'Threads',bluesky:'Bluesky',mastodon:'Mastodon'};
+          const labels={'display-verified':'実サイトでボタン・送信画面を確認','login-or-access-check':'ログイン・アクセス確認により未確認','no-playable-media':'取得ページに再生可能なメディアなし','media-found-display-unverified':'メディア検出あり・表示未確認','http-blocked':'HTTPアクセス失敗','error':'ページ取得・操作失敗'};
+          const table='\n実公開ページの最終結果（未ログインの検証用ブラウザ）\n\n|サイト|結果|\n|---|---|\n'+live.sites.map(s=>`|${names[s.id]}|${labels[s.status]||s.status}|`).join('\n')+'\n';
+          writeFileSync('release-body.md',readFileSync(process.env.EXT_NOTES,'utf8')+table);
+
+          JS
+          python - <<'PY'
+          import json,zipfile,pathlib
+          with zipfile.ZipFile('release-assets/yt-nyan-play-0.2.1.zip') as z:
+            assert json.loads(z.read('manifest.json'))['version']=='0.2.1'
+          with zipfile.ZipFile('release-assets/nyan-play-0.2.1-screenshots.zip','w',zipfile.ZIP_DEFLATED) as z:
+            for p in sorted(pathlib.Path('verification').rglob('*')):
+              if p.is_file():z.write(p,p.relative_to('verification'))
+          PY
+      - name: Include the existing desktop release without rebuilding it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download v0.5.0 --pattern 'NyanTalk-Damare-Setup-0.5.0-x64.exe' --dir release-assets
+          gh release download v0.5.0 --pattern 'NyanTalk-Damare-0.5.0-x64.zip' --dir release-assets
+          python - <<'PY'
+          import hashlib,pathlib
+          known={'NyanTalk-Damare-Setup-0.5.0-x64.exe':'988754559f7a4916392453cb77a1124676899f2295f078fefedde79e4b8e1d12','NyanTalk-Damare-0.5.0-x64.zip':'ca6a011f7a20fc4a633f24f8970499e5eedce27b34738d7aa936edd6dc237ca9'}
+          for name,digest in known.items():assert hashlib.sha256((pathlib.Path('release-assets')/name).read_bytes()).hexdigest()==digest
+          PY
+          cd release-assets
+          sha256sum *.exe *.zip *.png > SHA256SUMS.txt
+      - name: Register the verified extension tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXT_TAG: ${{ steps.selection.outputs.tag }}
+          EXT_SHA: ${{ steps.selection.outputs.sha }}
+        run: |
+          if CURRENT_TAG=$(gh api "repos/$GH_REPO/git/ref/tags/$EXT_TAG" --jq '.object.sha' 2>/dev/null); then
+            test "$CURRENT_TAG" = "$EXT_SHA"
+          else
+            gh api --method POST "repos/$GH_REPO/git/refs" --field ref="refs/tags/$EXT_TAG" --field sha="$EXT_SHA" > /dev/null
+          fi
+      - name: Publish extension and desktop assets together
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXT_TAG: ${{ steps.selection.outputs.tag }}
+          EXT_NOTES: release-body.md
+        run: |
+          if gh release view "$EXT_TAG" --json tagName > /dev/null 2>&1; then
+            gh release upload "$EXT_TAG" release-assets/* --clobber
+          else
+            gh release create "$EXT_TAG" release-assets/* --verify-tag --title 'にゃんぷれい v0.2.1 / にゃんとーく〜Damare〜 v0.5.0' --notes-file "$EXT_NOTES" --prerelease --draft
+          fi
+          gh release edit "$EXT_TAG" --notes-file "$EXT_NOTES" --prerelease --draft=false --latest=false
+          gh release view "$EXT_TAG" --json url,assets

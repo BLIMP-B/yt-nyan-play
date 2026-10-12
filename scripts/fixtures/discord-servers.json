@@ -1,0 +1,21 @@
+[
+  {
+    "id": "100000000000000001",
+    "name": "にゃんとーく",
+    "channels": [
+      { "id": "100000000000000003", "name": "雑談", "text": true, "voice": false, "parentId": "100000000000000008", "parentName": "テキストチャンネル", "canRead": true },
+      { "id": "100000000000000004", "name": "動画リクエスト", "text": true, "voice": false, "parentId": "100000000000000008", "parentName": "テキストチャンネル", "canRead": true },
+      { "id": "100000000000000005", "name": "管理者専用", "text": true, "voice": false, "parentId": "100000000000000008", "parentName": "テキストチャンネル", "canRead": false },
+      { "id": "100000000000000002", "name": "作業部屋", "text": true, "voice": true, "parentId": "100000000000000009", "parentName": "ボイスチャンネル", "canRead": true, "canConnect": true },
+      { "id": "100000000000000006", "name": "ゲーム部屋", "text": true, "voice": true, "parentId": "100000000000000009", "parentName": "ボイスチャンネル", "canRead": true, "canConnect": true }
+    ]
+  },
+  {
+    "id": "200000000000000001",
+    "name": "ゲームサーバー",
+    "channels": [
+      { "id": "200000000000000003", "name": "ロビー", "text": true, "voice": false, "parentId": "", "parentName": "", "canRead": true },
+      { "id": "200000000000000002", "name": "ボイスチャット", "text": true, "voice": true, "parentId": "", "parentName": "", "canRead": true, "canConnect": true }
+    ]
+  }
+]

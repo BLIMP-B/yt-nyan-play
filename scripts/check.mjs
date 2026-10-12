@@ -9,7 +9,7 @@ const extension = resolve(root, 'extension');
 const manifest = JSON.parse(readFileSync(resolve(extension, 'manifest.json'), 'utf8'));
 const metadata = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 assert.equal(manifest.manifest_version, 3);
-assert.equal(manifest.version, metadata.version, 'Versions must agree');
+assert.equal(manifest.version, metadata.extensionVersion ?? metadata.version, 'Extension versions must agree');
 assert.ok(!manifest.update_url, 'Do not bundle Chrome Web Store update metadata');
 
 function checkReference(path) {
@@ -28,7 +28,10 @@ const references = [
 ];
 for (const path of new Set(references)) checkReference(path);
 const html = readFileSync(resolve(extension, manifest.options_page), 'utf8');
-for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) checkReference(match[1]);
+for (const match of html.matchAll(/(src|href)="([^"]+)"/g)) {
+  if (match[1] === 'href' && match[2].startsWith('https://')) assert.doesNotThrow(() => new URL(match[2]));
+  else checkReference(match[2]);
+}
 
 function filesUnder(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
