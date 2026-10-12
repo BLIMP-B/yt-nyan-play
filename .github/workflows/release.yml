@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/codex/release-v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -181,6 +181,7 @@ jobs:
           assert.equal(duration.passed, true);
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
+          assert.equal(audio.version, process.env.RELEASE_TAG.slice(1));
           assert.equal(audio.passed, true);
           for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
             const media = audio.media.find(item => item.kind === kind);
@@ -322,6 +323,25 @@ jobs:
           assert.deepEqual(readdirSync('release-assets').sort(), expected);
           for (const name of expected) assert.ok(statSync('release-assets/' + name).size > 0);
           JS
+          python3 - <<'PYTHON'
+          import os, json, struct, zipfile
+          from pathlib import Path, PurePosixPath
+          version = os.environ['RELEASE_TAG'][1:]
+          with zipfile.ZipFile(Path('release-assets') / f'NyanTalk-Damare-{version}-x64.zip') as archive:
+            paths = [name for name in archive.namelist() if name.replace('\\', '/').endswith('resources/app.asar')]
+            assert len(paths) == 1, 'Exactly one packaged app archive is required'
+            with archive.open(paths[0]) as stream:
+              prefix, header_size, payload_size, json_size = struct.unpack('<4I', stream.read(16))
+              assert prefix == 4 and 0 < json_size <= 64 * 1024 * 1024
+              assert header_size >= json_size + 8
+              header = json.loads(stream.read(json_size))
+              entry = header['files']['package.json']
+              assert not entry.get('unpacked') and 0 < entry['size'] <= 1024 * 1024
+              stream.seek(8 + header_size + int(entry['offset']))
+              package = json.loads(stream.read(entry['size']))
+              assert package['version'] == version, 'Packaged app version must match the release tag'
+              print('Verified packaged app version:', package['version'])
+          PYTHON
           cd release-assets
           sha256sum *.exe *.zip > SHA256SUMS.txt
       - name: Register the tag for the verified source
