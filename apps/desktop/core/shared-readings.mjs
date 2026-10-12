@@ -34,7 +34,8 @@ export function unifyReadings(config, baseline) {
 export function readingSlots(config) {
   const copy = { education: structuredClone(config.education), speech: { emojiReadings: structuredClone(config.speech.emojiReadings) } };
   unifyReadings(copy);
-  return copy.education.map(e => ({ ...e, emoji: copy.speech.emojiReadings.some(n => readingKey(n.source) === readingKey(e.source)) }));
+  const emojiKeys = new Set(copy.speech.emojiReadings.map(e => readingKey(e.source)));
+  return copy.education.map(e => ({ ...e, emoji: emojiKeys.has(readingKey(e.source)) }));
 }
 
 export function setSharedReading(config, { source, reading = '', forget = false, metadataOnly = false, emoji = metadataOnly, native = false }) {
