@@ -23,12 +23,13 @@ execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
 for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=30`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', '-ac', '2', join(directory, 'scope-speech.wav')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-ar', '48000', '-ac', '2', join(directory, 'long-title.wav')]);
 const wav = readFileSync(join(directory, 'speech.wav'));
 const synthesisTexts = [];
 const synthesisSettings = [];
 const engine = createServer((req, res) => {
   if (req.url.startsWith('/audio_query')) { const text = new URL(req.url, 'http://localhost').searchParams.get('text'); synthesisTexts.push(text); res.end(JSON.stringify({ verificationText: text })); }
-  else if (req.url.startsWith('/synthesis')) { let body = ''; req.on('data', bytes => { body += bytes; }); req.on('end', () => { synthesisSettings.push(JSON.parse(body)); res.setHeader('Content-Type', 'audio/wav'); res.end(body.includes('別サーバー読み上げ') ? readFileSync(join(directory, 'scope-speech.wav')) : wav); }); }
+  else if (req.url.startsWith('/synthesis')) { let body = ''; req.on('data', bytes => { body += bytes; }); req.on('end', () => { synthesisSettings.push(JSON.parse(body)); res.setHeader('Content-Type', 'audio/wav'); res.end(body.includes('再生開始に重なる長い題名') ? readFileSync(join(directory, 'long-title.wav')) : body.includes('別サーバー読み上げ') ? readFileSync(join(directory, 'scope-speech.wav')) : wav); }); }
   else { res.statusCode = 404; res.end(); }
 });
 engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
@@ -69,7 +70,12 @@ VoiceOutput.prototype.connect = async function(guildId, ...args) {
 VoiceOutput.prototype.disconnect = function(guildId, ...args) { const result = originalDisconnect.call(this, guildId, ...args); if (guildId === '99998' && this.monitorFixtureClient) { this.getClient = this.monitorFixtureClient; this.monitorFixtureClient = null; } return result; };
 import { MediaTitleCalls } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/core/media-title-calls.mjs')).href)};
 const titlePlay = MediaTitleCalls.prototype.play;
-MediaTitleCalls.prototype.play = function(job, ...args) { if (job.payload.url.startsWith('http://media-fixture.test/title-')) job.payload.source = '送信者由来の名前'; return titlePlay.call(this, job, ...args); };
+MediaTitleCalls.prototype.play = function(job, ...args) {
+  if (job.payload.url.startsWith('http://media-fixture.test/title-')) job.payload.source = '送信者由来の名前';
+  if (job.payload.url.endsWith('/title-slow-preparation')) job.payload.title = '取得中に読む短い題名';
+  if (job.payload.url.endsWith('/title-long-overlap') || job.payload.url.endsWith('/title-direct-overlap')) job.payload.title = '再生開始に重なる長い題名';
+  return titlePlay.call(this, job, ...args);
+};
 import { MediaStreamResolver } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href)};
 import { HourlyHistory } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/hourly-history.mjs')).href)};
 const historyRows = Array.from({length:5000},(_,i)=>({id:String(10000+i),guildId:'11111',channelId:'22222',createdTimestamp:i+1,content:'猫が時計を眺める。森の太陽は月の料理を運ぶ。'.repeat(70)}));
@@ -83,6 +89,14 @@ HourlyHistory.prototype.sync = function(...args) {
 };
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
+  if (['/title-slow-preparation', '/title-long-overlap', '/title-direct-overlap'].includes(new URL(url).pathname)) {
+    const timing = { url, extractionStartedAt: Date.now() }; (globalThis.nyanTitleTimings ||= []).push(timing);
+    return new Promise((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(signal.reason); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); timing.extractionFinishedAt = Date.now(); resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} }); }, url.endsWith('/title-slow-preparation') ? 4000 : 400);
+      signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
+    });
+  }
   if (url === 'https://www.youtube.com/watch?v=NyanBgm0001') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'youtube', headers: {} });
   if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} });
   return original.call(this, url, signal);
@@ -333,6 +347,28 @@ try {
   assert.ok(unknownRepeats >= 2, 'Missing resource metadata must keep the preparation announcement repeating');
   assert.ok(!synthesisTexts.includes('送信者由来の名前'), 'Discord sender identity leaked into title speech');
   report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, resourceAuthorRead: authorRead, discordSenderIgnored: true, unknownMetadataRepeats: unknownRepeats, titleIdentityJobs: titleIdentityJobs.length, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
+  // Hold extraction and title audio independently through the production
+  // browser/capture path. Playback must not wait for the spoken title to end.
+  report.titleCalls.preparationTimings = [];
+  for (const [kind, mode] of [['title-slow-preparation', 'full'], ['title-long-overlap', 'preview'], ['title-direct-overlap', 'direct']]) {
+    const before = new Set((await call(page, 'state')).jobs.map(j => j.id));
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode });
+    const state = await waitForJob(page, job.id, 20000), saved = state.jobs.find(j => j.id === job.id);
+    const speech = state.jobs.filter(j => !before.has(j.id) && j.kind === 'speech');
+    const title = speech.find(j => j.payload.titleCall), announcement = speech.find(j => !j.payload.titleCall);
+    assert.equal(title?.status, 'completed', 'Title speech did not complete');
+    if (mode === 'direct') assert.equal(announcement, undefined);
+    else { assert.equal(announcement?.status, 'completed'); assert.ok(Date.parse(announcement.finishedAt) <= Date.parse(saved.mediaPreparingAt)); }
+    const timing = await application.evaluate((_electron, url) => globalThis.nyanTitleTimings.find(t => t.url === url), saved.payload.url);
+    assert.ok(timing?.extractionFinishedAt, 'The held extraction did not finish');
+    const preparedAt = Date.parse(saved.mediaPreparingAt), titleStartedAt = Date.parse(title.startedAt), titleFinishedAt = Date.parse(title.finishedAt), mediaStartedAt = Date.parse(saved.mediaStartedAt);
+    assert.ok(preparedAt <= timing.extractionStartedAt && timing.extractionStartedAt <= titleStartedAt, 'Media extraction started after title speech');
+    if (kind === 'title-slow-preparation') assert.ok(titleFinishedAt < timing.extractionFinishedAt, 'Title did not play during slow extraction');
+    else assert.ok(titleStartedAt <= mediaStartedAt && mediaStartedAt < titleFinishedAt, 'Playback waited for long title speech to finish');
+    report.titleCalls.preparationTimings.push({ kind, mode, extractionStartMs: timing.extractionStartedAt - preparedAt, extractionEndMs: timing.extractionFinishedAt - preparedAt, titleStartMs: titleStartedAt - preparedAt, titleEndMs: titleFinishedAt - preparedAt, mediaStartMs: mediaStartedAt - preparedAt });
+  }
+  report.titleCalls.extractionConcurrent = true;
+  report.titleCalls.playbackDoesNotWaitForTitle = true;
   await historyTask;
   report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
   assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');

@@ -20,8 +20,9 @@ export class MediaTitleCalls {
     try {
       if (job.payload.mode !== 'direct') await this.speak({ ...payload, text: mediaAnnouncement(job.payload.url), priority: 50 }, { signal: speechSignal, interrupt: true });
       signal.throwIfAborted();
-      // Start both paths without waiting for title synthesis or metadata.
-      const playing = Promise.resolve().then(playback);
+      // Begin real media acquisition before launching title speech. Title
+      // completion never gates extraction, page loading or playback.
+      const playing = playback();
       call = enabled ? (async () => {
         // Allow a short metadata head start, then fill a slow lookup gap.
         await Promise.race([prepared, delay(750, undefined, { signal: speechSignal })]);

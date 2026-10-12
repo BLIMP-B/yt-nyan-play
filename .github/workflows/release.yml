@@ -263,6 +263,17 @@ jobs:
               assert.ok(audio.titleCalls.unknownMetadataRepeats >= 2);
               assert.equal(audio.titleCalls.titleIdentityJobs, 2);
             }
+            if (atLeast(16)) {
+              assert.equal(audio.titleCalls.extractionConcurrent, true);
+              assert.equal(audio.titleCalls.playbackDoesNotWaitForTitle, true);
+              assert.equal(audio.titleCalls.preparationTimings.length, 3);
+              for (const mode of ['preview', 'full', 'direct']) assert.ok(audio.titleCalls.preparationTimings.some(t => t.mode === mode));
+              for (const t of audio.titleCalls.preparationTimings) {
+                assert.ok(t.extractionStartMs <= t.titleStartMs);
+                if (t.kind === 'title-slow-preparation') assert.ok(t.titleEndMs < t.extractionEndMs);
+                else assert.ok(t.titleStartMs <= t.mediaStartMs && t.mediaStartMs < t.titleEndMs);
+              }
+            }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
               assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);

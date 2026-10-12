@@ -17,6 +17,7 @@ export class MediaBrowser {
     signal.throwIfAborted(); this.job = job; this.localGainSent = null; const c = this.getConfig(); const payload = job.payload;
     const { mode, limitSeconds } = mediaPolicy(payload);
     const url = validateMediaUrl(payload.url, c.media.allowedHosts);
+    if (!browserOnly) this.bridge.preparing?.(job);
     let stream, selected;
     this.playOptions = null;
     if (!browserOnly && c.media.bandwidthSaving && this.resolver) {

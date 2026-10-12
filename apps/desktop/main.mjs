@@ -250,6 +250,7 @@ else {
       const browserConfig = bed ? () => ({ ...getConfig(), media: { ...getConfig().media, output: getConfig().hourly.output, volume: getConfig().hourly.bgmVolume, showWindow: false } }) : getConfig;
       browser = new MediaBrowser(browserConfig, {
         changed: emitState,
+        preparing: job => { if (store.jobs.some(j => j.id === job.id)) store.changeJob(job.id, { mediaPreparingAt: new Date().toISOString(), mediaStartedAt: null }); },
         played: job => { titleCalls?.started(job.id); if (store.jobs.some(j => j.id === job.id)) store.changeJob(job.id, { mediaStartedAt: new Date().toISOString() }); },
         metadata: (job, values) => titleCalls?.update(job.id, values),
         localGain: (job, volume, ms) => { const capture = captures.get(job.id); if (capture && capture.output !== 'discord' && window && !window.isDestroyed()) window.webContents.send('nyan:audio', { type: 'capture:gain', id: job.id, volume, ms }); },

@@ -51,8 +51,24 @@ test('metadata starts with the announcement and supplied title speech does not h
   const task=calls.play(job(),new AbortController().signal,async()=>{events.push('play');return end.promise;});await tick();
   assert.ok(events.includes('metadata'));assert.equal(events.includes('play'),false);announcement.resolve();await tick();
   assert.ok(events.includes('取得したタイトル'));assert.ok(events.includes('play'));
+  assert.ok(events.indexOf('play') < events.indexOf('取得したタイトル'), 'Media acquisition must start before title speech');
   calls.started('media-id');end.resolve();let finished=false;task.then(()=>{finished=true;});await tick();assert.equal(finished,false);
   title.resolve();await task;assert.equal(calls.active.size,0);
+});
+test('media acquisition and actual start both progress while title speech is unfinished', async () => {
+  const config=normalizeConfig(), acquired=deferred(), ended=deferred(), title=deferred(), events=[];
+  const calls=new MediaTitleCalls(()=>config,{metadata:async()=>({}),speak:p=>{
+    if(!p.titleCall)return Promise.resolve();
+    events.push('title-start');return title.promise.then(()=>events.push('title-end'));
+  }});
+  const task=calls.play(job({title:'メッセージに添えた題名'}),new AbortController().signal,async()=>{
+    events.push('acquire-start');await acquired.promise;
+    events.push('media-start');calls.started('media-id');await ended.promise;
+  });
+  await tick();assert.deepEqual(events,['acquire-start','title-start']);
+  acquired.resolve();await tick();assert.deepEqual(events,['acquire-start','title-start','media-start']);
+  title.resolve();await tick();assert.equal(events.at(-1),'title-end');
+  ended.resolve();await task;
 });
 test('unknown media repeats only until actual playback starts and finishes the current unit', async () => {
   const config=normalizeConfig(), end=deferred(), units=[];
