@@ -47,4 +47,5 @@ export class BouyomiProcessor {
   }
   process(text, tagMode, signal, educationEnabled = false) { return this.request({ operation: 'process', text, tagMode, educationEnabled }, signal); }
   learn(type, args, signal) { return this.request({ operation: 'learn', type, args }, signal); }
+  lookup(source, signal) { return this.request({ operation: 'lookup', source }, signal); }
 }

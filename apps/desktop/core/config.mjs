@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import { AUDIO_NETWORK_PROFILES } from './audio-network.mjs';
 import { DEFAULT_EQUALIZER, DEFAULT_COMPRESSOR, EQ_PRESETS, COMPRESSOR_PRESETS, effectPreset } from './media-effects-settings.mjs';
 import { SENTENCE_PRESETS } from './hourly-sentence.mjs';
+import { unifyReadings } from './shared-readings.mjs';
 
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
@@ -60,8 +61,12 @@ const number = (value, min, max, label, integer = false) => {
 const strings = (value, label, ids = false) => {
   if (!Array.isArray(value) || value.length > 5000 || value.some(v => typeof v !== 'string' || v.length > 500 || (ids && !/^\d{5,22}$/.test(v)))) fail(label);
 };
-export function normalizeConfig(patch) {
+export function normalizeConfig(patch, readingBaseline) {
   const c = mergeKnown(DEFAULT_CONFIG, patch);
+  if (readingBaseline) {
+    if (!Object.hasOwn(patch || {}, 'education')) c.education = structuredClone(readingBaseline.education);
+    if (!Object.hasOwn(patch?.speech || {}, 'emojiReadings')) c.speech.emojiReadings = structuredClone(readingBaseline.speech.emojiReadings);
+  }
   if (!Object.hasOwn(patch?.desktop || {}, 'outputDevice')) c.desktop.outputDevice = patch?.speech?.outputDevice || '';
   c.speech.outputDevice = c.desktop.outputDevice; // Preserve old settings/backups.
   c.schemaVersion = 1;
@@ -151,8 +156,9 @@ export function normalizeConfig(patch) {
   if (!Array.isArray(c.dictionary) || c.dictionary.length > 10000) fail('辞書');
   if (!Array.isArray(c.education) || c.education.length > 10000) fail('教育辞書');
   c.education = c.education.map(e => {
-    if (!e || typeof e.source !== 'string' || !e.source || e.source.length > 2000 || typeof e.reading !== 'string' || e.reading.length > 500 || /[\t\r\n]/u.test(e.source + e.reading)) fail('教育辞書の単語・読み方');
-    return { source: e.source, reading: e.reading };
+    if (!e || typeof e.source !== 'string' || !e.source.trim() || e.source.length > 2000 || typeof e.reading !== 'string' || e.reading.length > 500 || /[\t\r\n]/u.test(e.source + e.reading)) fail('教育辞書の単語・読み方');
+    for (const flag of ['metadataOnly', 'native']) if (e[flag] !== undefined && typeof e[flag] !== 'boolean') fail('教育辞書の適用先');
+    return { source: e.source, reading: e.reading, ...(e.metadataOnly ? { metadataOnly: true } : {}), ...(e.native ? { native: true } : {}) };
   });
   c.dictionary = c.dictionary.map(d => {
     if (!d || typeof d.source !== 'string' || !d.source || d.source.length > 200 || typeof d.replacement !== 'string' || d.replacement.length > 500) fail('辞書の単語・読み方');
@@ -167,13 +173,15 @@ export function normalizeConfig(patch) {
     return { userId: p.userId, name: String(p.name || '').slice(0, 100), styleId: p.styleId, speed: p.speed };
   });
   c.speech.emojiReadings = c.speech.emojiReadings.map(e => {
-    if (typeof e.source !== 'string' || !e.source || e.source.length > 100 || typeof e.replacement !== 'string' || e.replacement.length > 100) fail('絵文字の読み方');
+    if (!e || typeof e.source !== 'string' || !e.source.trim() || e.source.length > 2000 || typeof e.replacement !== 'string' || e.replacement.length > 500 || /[\t\r\n]/u.test(e.source + e.replacement)) fail('絵文字の読み方');
     return { source: e.source, replacement: e.replacement };
   });
   c.speech.soundClips = c.speech.soundClips.map(s => {
     if (typeof s.trigger !== 'string' || !s.trigger || s.trigger.length > 100 || typeof s.path !== 'string' || !/\.(wav|mp3|ogg|flac)$/i.test(s.path)) fail('音声クリップ');
     return { trigger: s.trigger, path: s.path };
   });
+  unifyReadings(c, readingBaseline);
+  if (c.education.length > 10000) fail('教育辞書');
   return c;
 }
 

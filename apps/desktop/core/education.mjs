@@ -17,6 +17,10 @@ export function parseEducationCommand(text) {
   return { type: match[1] === '忘却' ? 'Forget' : match[1] === '無音' ? 'Mute' : 'Study', source, reading };
 }
 export function educationKey(value) { return normalize(value).replace(/[a-z]/g, c => c.toUpperCase()); }
+export function fallbackEducation(config) {
+  const native = config.speech.bouyomiPreprocess || config.speech.provider === 'bouyomi' && config.speech.bouyomiNativeRules;
+  return config.education.filter(e => !e.metadataOnly && !(native && e.native));
+}
 export function applyEducation(text, entries) {
   const tracked = text instanceof ReadingText;
   if (!entries?.length) return text;

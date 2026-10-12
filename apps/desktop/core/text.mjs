@@ -1,5 +1,5 @@
 import { RE2 } from 're2-wasm';
-import { applyEducation } from './education.mjs';
+import { applyEducation, fallbackEducation } from './education.mjs';
 import { ReadingText } from './latin-reading.mjs';
 import { messageMediaText } from './message-media.mjs';
 import { spokenText } from './spoken-text.mjs';
@@ -40,12 +40,12 @@ export function prepareSpeech(message, config) {
   const s = config.speech;
   if (s.bouyomiPreprocess || s.provider === 'bouyomi' && s.bouyomiNativeRules) {
     const content = messageMediaText(message, config);
-    const text = (s.chatEducationEnabled ? applyEducation(content, config.education) : content).text;
+    const text = (s.chatEducationEnabled ? applyEducation(content, fallbackEducation(config)) : content).text;
     const values = { username: message.userName || '', nickname: message.displayName || message.userName || '', server: message.guildName || '', channel: message.channelName || '', text, userid: message.userId || '', time: new Date().toLocaleTimeString('ja-JP') };
     return s.readNames ? formatTemplate(s.messageTemplate, values) : text;
   }
   let text = messageMediaText(message, config);
-  if (s.chatEducationEnabled) text = applyEducation(text, config.education);
+  if (s.chatEducationEnabled) text = applyEducation(text, fallbackEducation(config));
   if (!s.readSpoilers) text = text.replace(/\|\|[\s\S]*?\|\|/g, s.spoilerText);
   if (!s.readCode) text = text.replace(/```[\s\S]*?```/g, 'コード').replace(/`([^`]+)`/g, '$1');
   text = text.replace(/<@!?(\d+)>/g, (_, id) => message.mentions?.[id] || 'メンション')

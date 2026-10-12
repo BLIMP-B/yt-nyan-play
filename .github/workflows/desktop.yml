@@ -66,6 +66,12 @@ jobs:
           path: dist/opus-fidelity-verification
       - run: npm test
       - run: xvfb-run --auto-servernum npm run smoke:desktop
+      - run: xvfb-run --auto-servernum npm run verify:shared-readings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shared-readings-verification-linux
+          path: dist/shared-readings-verification
       - run: xvfb-run --auto-servernum npm run verify:accounts
       - run: npx playwright-core install --with-deps chromium
       - run: xvfb-run --auto-servernum npm run verify:account-link
@@ -118,6 +124,12 @@ jobs:
           path: dist/opus-fidelity-verification
       - run: npm test
       - run: npm run smoke:desktop
+      - run: npm run verify:shared-readings
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shared-readings-verification-windows
+          path: dist/shared-readings-verification
       - run: npm run verify:accounts
       - run: npx playwright-core install chromium
       - run: npm run verify:account-link

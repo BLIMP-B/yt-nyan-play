@@ -10,6 +10,11 @@ public static class NativeReadingProbe {
         Check(BouyomiBridge.RuleWasPresent("ERAI", "^erai$", true));
         Check(!BouyomiBridge.RuleWasPresent("ERAI", "^cat$", true));
         Check(!BouyomiBridge.RuleWasPresent("ERAI", "(", true));
+        string[] rows = new string[] { "4\tE\tERAI\t読み", "4\tE\tNEKO\t" };
+        Check((bool)BouyomiBridge.LookupRule(rows, "ERAI")["registered"]);
+        Check((string)BouyomiBridge.LookupRule(rows, "ERAI")["reading"] == "読み");
+        Check((string)BouyomiBridge.LookupRule(rows, "NEKO")["reading"] == "");
+        Check(!(bool)BouyomiBridge.LookupRule(rows, "INAI")["registered"]);
         Console.WriteLine("Native reading provenance passed."); return 0;
     }
 }

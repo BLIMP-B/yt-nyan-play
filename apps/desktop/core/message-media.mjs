@@ -1,5 +1,6 @@
 import { ReadingText } from './latin-reading.mjs';
-import { applyEducation, educationKey } from './education.mjs';
+import { applyEducation } from './education.mjs';
+import { readingKey } from './shared-readings.mjs';
 
 const fileKinds = [
   ['画像ファイル', 'jpg jpeg jfif png apng gif webp avif heic heif bmp dib tif tiff svg ico jxl'],
@@ -24,10 +25,11 @@ export function attachmentKind(attachment) {
 
 function namedReading(name, id, token, config) {
   const aliases = [token, name, `:${name}:`, id].filter(Boolean);
-  const configured = config.speech.emojiReadings.find(e => aliases.includes(e.source));
+  const keys = new Set(aliases.map(readingKey));
+  const configured = config.speech.emojiReadings.find(e => keys.has(readingKey(e.source)));
   if (configured) return new ReadingText(configured.replacement, true);
   if (config.speech.chatEducationEnabled) {
-    const exact = config.education.find(e => aliases.some(alias => educationKey(alias) === educationKey(e.source)));
+    const exact = config.education.find(e => keys.has(readingKey(e.source)));
     if (exact) return new ReadingText(exact.reading, true);
     return applyEducation(new ReadingText(name), config.education);
   }

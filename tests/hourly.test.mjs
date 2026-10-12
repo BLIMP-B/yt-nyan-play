@@ -54,6 +54,17 @@ test('both mode plays common and custom chimes locally without a VC and prepares
   await ready; await turn(); assert.ok(events.includes('bgm-ready')); assert.ok(events.includes('猫は時計を運ぶのだ。')); assert.equal(events.includes('bgm-start'), false); assert.equal(events.includes('custom'), false);
   finishChime(); await task; assert.ok(events.indexOf('generate') < events.indexOf('chime-end')); assert.ok(events.indexOf('bgm-start') > events.indexOf('chime-end')); assert.ok(events.indexOf('custom') > events.indexOf('chime-end')); runtime.close();
 });
+test('common-only hourly output never starts disabled history, SLM or BGM work', async t => {
+  const c = normalizeConfig({ hourly: { enabled: true, output: 'both', servers: [{ guildId: '11111', channelIds: ['22222'], enabled: false, bgm: true }] } });
+  let time = 100000, played = 0;
+  const unused = async () => { throw new Error('disabled custom hourly dependency was started'); };
+  const runtime = new HourlyRuntime(temp(t), () => c, { targets: () => [], reserve: () => () => {}, hold() {}, fadeMedia() {}, log() {},
+    history: { model: unused }, model: { start: unused }, generate: unused, background: unused,
+    synthesize: async () => Buffer.alloc(700 * 192), play: async () => { played++; } }, { now: () => time, delay: async ms => { time += ms; } });
+  t.after(() => runtime.close());
+  const program = await runtime.prepare(time + 15000, new AbortController().signal);
+  assert.equal(program.customPreparations.size, 0); await runtime.execute(program, { test: true }); assert.equal(played, 1);
+});
 test('clock reservations preempt active speech including stop announcements, preserve waiting items and release per-server independently', async t => {
   const store = new Store(temp(t)), started = [];
   const pool = new SpeechPool(store, (job, signal) => new Promise((resolve, reject) => { started.push(job.payload.text); job.finish = resolve; signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));

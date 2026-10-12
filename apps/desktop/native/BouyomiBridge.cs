@@ -116,7 +116,19 @@ public static class BouyomiBridge {
         }
         Invoke(rules, "SaveRule", path);
         string format = mute ? "{0} を 無音にしました" : Setting(settings, forget ? "ForgetFormat" : "StudyFormat", forget ? "{0} を 忘れました" : "{0} わ {1} を 覚えました");
-        return new Dictionary<string, object> { { "text", String.Format(format, source, reading) } };
+        return new Dictionary<string, object> { { "text", String.Format(format, source, reading) }, { "source", source }, { "reading", mute ? "" : reading }, { "forgot", forget } };
+    }
+    static object Lookup(string source) {
+        source = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(source)).ToString();
+        string path = Path.Combine(directory, "ReplaceStudy.dic");
+        return LookupRule(File.Exists(path) ? File.ReadAllLines(path, Encoding.UTF8) : new string[0], source);
+    }
+    public static Dictionary<string, object> LookupRule(string[] lines, string source) {
+        foreach (string line in lines) {
+            string[] fields = line.Split('\t');
+            if (fields.Length == 4 && fields[2] == source) return new Dictionary<string, object> { { "registered", true }, { "source", source }, { "reading", fields[3] } };
+        }
+        return new Dictionary<string, object> { { "registered", false }, { "source", source } };
     }
     public static int Main(string[] args) {
         Console.InputEncoding = new UTF8Encoding(false); Console.OutputEncoding = new UTF8Encoding(false);
@@ -132,6 +144,7 @@ public static class BouyomiBridge {
             Load();
             object result;
             if ((string)request["operation"] == "learn") result = Learn((string)request["type"], (string)request["args"], settings);
+            else if ((string)request["operation"] == "lookup") result = Lookup((string)request["source"]);
             else {
                 string mode = (string)request["tagMode"];
                 bool broadcast = mode == "on" || mode == "original" && Setting(settings, "BroadcasterMode", "false") == "true";

@@ -26,7 +26,7 @@ export class Store extends EventEmitter {
     try { return JSON.parse(readFileSync(path, 'utf8')); }
     catch { copyFileSync(path, `${path}.invalid-${Date.now()}`); throw new Error(`${name}を読み込めません。元ファイルは保全しました。`); }
   }
-  updateConfig(patch) { this.config = normalizeConfig(patch); writeAtomic(join(this.directory, 'config.json'), this.config); this.emit('change'); return this.config; }
+  updateConfig(patch) { const next = normalizeConfig(patch); writeAtomic(join(this.directory, 'config.json'), next); this.config = next; this.emit('change'); return this.config; }
   saveState() { writeAtomic(join(this.directory, 'state.json'), { jobs: this.jobs, seen: this.seen }); this.emit('change'); }
   remember(id) {
     if (!id) return false;

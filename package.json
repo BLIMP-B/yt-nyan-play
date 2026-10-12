@@ -18,6 +18,7 @@
     "icon:build": "electron scripts/build-app-icon.cjs",
     "verify:voice-clock": "node scripts/verify-voice-clock.mjs",
     "verify:opus-fidelity": "node scripts/verify-opus-fidelity.mjs",
+    "verify:shared-readings": "node scripts/verify-shared-readings.mjs",
     "verify:streaming": "node scripts/verify-streaming.mjs",
     "verify:playback-duration": "node scripts/verify-playback-duration.mjs",
     "verify:audio": "node scripts/verify-audio.mjs",

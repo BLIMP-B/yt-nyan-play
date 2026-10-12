@@ -20,6 +20,7 @@ import { pcmWav } from './core/hourly-audio.mjs';
 import { MediaBrowser } from './runtime/media-browser.mjs';
 import { MediaAccounts } from './runtime/media-accounts.mjs';
 import { ChatEducation } from './runtime/chat-education.mjs';
+import { readingSlots } from './core/shared-readings.mjs';
 import { MEDIA_ACCOUNTS } from './core/media-accounts.mjs';
 import { Vault } from './runtime/vault.mjs';
 import { EngineProcess } from './runtime/engine-process.mjs';
@@ -49,7 +50,7 @@ if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, androidNotifications, twitter, twitterAppVault, bouyomi, bouyomiProcessor, hourly, hourlyHistory, hourlyModel;
+  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, androidNotifications, twitter, twitterAppVault, bouyomi, bouyomiProcessor, education, hourly, hourlyHistory, hourlyModel;
   let historyController, historyTimer;
   let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const audioBridge = new AudioBridge(() => window); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
@@ -58,7 +59,7 @@ else {
     if (stateTimer || !window || window.isDestroyed()) return;
     stateTimer = setTimeout(() => { stateTimer = null; if (!window.isDestroyed()) window.webContents.send('nyan:state', snapshot()); }, 80);
   };
-  const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
+  const snapshot = () => ({ version: app.getVersion(), config: store.exportConfig(), readings: readingSlots(store.config), tokenSaved: vault.hasToken(), vaultAvailable: vault.available(),
     bot: { status: bot.status, name: bot.client?.user?.username || '', startedAt: bot.startedAt, servers: smoke ? smokeCatalog : bot.catalog() },
     voices: voice.snapshot(), voiceMonitor: voice.monitor.snapshot(), jobs: structuredClone(store.jobs).reverse(), logs: store.logs, mediaAccounts: MEDIA_ACCOUNTS.map(({ id, name }) => ({ id, name })), accountLink: accounts.snapshot(),
     paused: { speech: speechRunner.paused, media: media.paused }, media: media.status, engineRunning: Boolean(engine.child), android: { ...android.snapshot(), notifications: androidNotifications?.snapshot() }, twitter: twitter.snapshot(), bouyomi: bouyomi.snapshot(),
@@ -99,14 +100,14 @@ else {
   async function action(name, data) {
     if (name === 'state') return snapshot();
     if (name === 'config:save') {
-      const c = normalizeConfig(data);
+      const c = normalizeConfig(data, data.__readingBase ? normalizeConfig(data.__readingBase) : store.config);
       if ((android.child || android.busy) && androidEnvironmentChanged(store.config.android, c.android)) throw new Error('Androidの停止後に仮想環境の設定を変更してください');
       if (hourlyModel.busy && JSON.stringify(c.hourly) !== JSON.stringify(store.config.hourly)) throw new Error('SLMの導入が終わるか中止してから時報設定を変更してください');
       const hourlyChanged = JSON.stringify(c.hourly) !== JSON.stringify(store.config.hourly);
       if (hourlyChanged) { hourly.cancel(); historyController?.abort(); historyController = null; }
       if (c.hourly.slmUrl !== store.config.hourly.slmUrl) await hourlyModel.stop();
       for (const d of c.dictionary) if (d.regex) new RE2(d.source, d.caseSensitive ? 'gu' : 'giu');
-      store.updateConfig(c); voice.updateSettings(); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
+      await education.saveConfig(data, changed => store.updateConfig(changed)); voice.updateSettings(); if (process.platform === 'win32') app.setLoginItemSettings({ openAtLogin: c.desktop.autoStart, args: c.desktop.startMinimized ? ['--minimized'] : [] });
       androidNotifications.update();
       speechRunner.drain();
       void bot.reconcileVoices();
@@ -115,6 +116,8 @@ else {
     }
     if (name === 'token:save') { vault.save(data); return { saved: true }; }
     if (name === 'token:clear') { stopBot(); vault.clear(); return { saved: false }; }
+    if (name === 'reading:save') { await education.set(data?.source, data?.reading); return snapshot(); }
+    if (name === 'reading:forget') { await education.forget(data?.source); return snapshot(); }
     if (name === 'bot:start') { await startBot(); return snapshot(); }
     if (name === 'bot:stop') { stopBot(); return snapshot(); }
     if (name === 'voice:join') { await voice.connect(String(data), undefined, true); return snapshot(); }
@@ -221,11 +224,14 @@ else {
     android = new AndroidRuntime(store.directory, getConfig, (l, t) => store.log(l, t), (url, options) => net.fetch(url, options));
     accounts = new MediaAccounts(getConfig, (l, t) => store.log(l, t), emitState);
     const streamResolver = new MediaStreamResolver(store.directory, (l,t) => store.log(l,t), (url, options) => net.fetch(url, options), () => playbackSession().cookies.get({}));
-    const education = new ChatEducation(store, () => {
-      if (!getConfig().speech.bouyomiPreprocess || getConfig().speech.provider !== 'voicevox') return null;
+    const nativeEducation = () => {
       if (bouyomi.child) throw new Error('教育辞書を更新するには元の棒読みちゃんを終了してください');
       return bouyomiProcessor;
-    });
+    };
+    education = new ChatEducation(store, () => {
+      if (!getConfig().speech.bouyomiPreprocess || getConfig().speech.provider !== 'voicevox') return null;
+      return nativeEducation();
+    }, nativeEducation);
     android.on('change', emitState); android.on('frame', bytes => { if (window && !window.isDestroyed()) window.webContents.send('nyan:android-frame', bytes); });
     bot = new DiscordBot(store, {
       speech: payload => { store.enqueue('speech', payload); void speechRunner.drain(); },
@@ -303,7 +309,10 @@ else {
         const { settings: original } = inspectBouyomi(bouyomi.directory);
         const pendingCharacters = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
         const pipelineController = new AbortController(); const pipelineSignal = AbortSignal.any([signal, pipelineController.signal]);
-        try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: bouyomiProcessor,
+        try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: {
+          process: (...args) => bouyomiProcessor.process(...args),
+          learn: (type, args, tagSignal) => education.applyTag(type, args, tagSignal, bouyomiProcessor),
+        },
           output: (text, options, textSignal, readings) => output(prepareNativeText(text, c, job.payload, readings), options, textSignal), log: (l, text) => store.log(l, text),
           sound: async (name, options, original, soundSignal) => {
             if (original.SoundDisablePath === 'true' && (isAbsolute(name) || name.split(/[\\/]/).includes('..'))) throw new Error('Soundタグの外部パスは無効です');
