@@ -7,7 +7,7 @@ import { normalizeConfig } from './core/config.mjs';
 import { RE2 } from 're2-wasm';
 import { SpeechPool } from './core/speech-pool.mjs';
 import { Voicevox } from './core/voicevox.mjs';
-import { parseMediaCommand, mediaAnnouncement } from './core/protocol.mjs';
+import { parseMediaCommand } from './core/protocol.mjs';
 import { DiscordBot } from './runtime/bot.mjs';
 import { APP_ICON, APP_ID } from './runtime/app-icon.mjs';
 import { VoiceOutput, decodeAudio } from './runtime/voice-output.mjs';
@@ -21,6 +21,8 @@ import { MediaBrowser } from './runtime/media-browser.mjs';
 import { MediaAccounts } from './runtime/media-accounts.mjs';
 import { ChatEducation } from './runtime/chat-education.mjs';
 import { readingSlots } from './core/shared-readings.mjs';
+import { MediaTitleCalls } from './core/media-title-calls.mjs';
+import { fetchTitleMetadata } from './runtime/media-title-metadata.mjs';
 import { MEDIA_ACCOUNTS } from './core/media-accounts.mjs';
 import { Vault } from './runtime/vault.mjs';
 import { EngineProcess } from './runtime/engine-process.mjs';
@@ -50,7 +52,7 @@ if (process.env.NYAN_DATA_DIR) app.setPath('userData', process.env.NYAN_DATA_DIR
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  let window, tray, store, vault, bot, voice, media, accounts, speechRunner, engine, android, androidNotifications, twitter, twitterAppVault, bouyomi, bouyomiProcessor, education, hourly, hourlyHistory, hourlyModel;
+  let window, tray, store, vault, bot, voice, media, titleCalls, accounts, speechRunner, engine, android, androidNotifications, twitter, twitterAppVault, bouyomi, bouyomiProcessor, education, hourly, hourlyHistory, hourlyModel;
   let historyController, historyTimer;
   let quitting = false; let stateTimer; let notificationAt = 0; let notifiedEntry; const audioBridge = new AudioBridge(() => window); const captures = new Map(); let captureRequest = null; let captureChain = Promise.resolve();
   const getConfig = () => store.config;
@@ -248,7 +250,9 @@ else {
       const browserConfig = bed ? () => ({ ...getConfig(), media: { ...getConfig().media, output: getConfig().hourly.output, volume: getConfig().hourly.bgmVolume, showWindow: false } }) : getConfig;
       browser = new MediaBrowser(browserConfig, {
         changed: emitState,
-        played: job => { if (store.jobs.some(j => j.id === job.id)) store.changeJob(job.id, { mediaStartedAt: new Date().toISOString() }); },
+        played: job => { titleCalls?.started(job.id); if (store.jobs.some(j => j.id === job.id)) store.changeJob(job.id, { mediaStartedAt: new Date().toISOString() }); },
+        metadata: (job, values) => titleCalls?.update(job.id, values),
+        localGain: (job, volume, ms) => { const capture = captures.get(job.id); if (capture && capture.output !== 'discord' && window && !window.isDestroyed()) window.webContents.send('nyan:audio', { type: 'capture:gain', id: job.id, volume, ms }); },
         captureError: id => {
           const capture = captures.get(id); if (!capture) return;
           if (capture.error) return capture.error;
@@ -262,10 +266,10 @@ else {
             signal.throwIfAborted();
             const output = browserConfig().media.output;
             const targets = outputTargets(output, master ? [...voice.connections.keys()] : [guildId], voice.snapshot());
-            for (const key of targets) await discordOutput(output, async () => { if (bed) await voice.beginBackground(key); else { voice.endMedia(key); await voice.beginMedia(key); } }, signal, (l, t) => store.log(l, t));
+            for (const key of targets) await discordOutput(output, async () => { if (bed) await voice.beginBackground(key); else { voice.endMedia(key); await voice.beginMedia(key); voice.fadeMedia(key, Math.min(1, ...media.overlayGains.values()), 0); } }, signal, (l, t) => store.log(l, t));
             signal.throwIfAborted();
             captures.set(id, { guildId, master, bed, output: browserConfig().media.output, window: browser.window }); captureRequest = id;
-            try { await audioCommand('capture:start', { id, local: output !== 'discord', device: getConfig().desktop.outputDevice }, signal, 20000); }
+            try { await audioCommand('capture:start', { id, local: output !== 'discord', volume: browser.localVolume(), device: getConfig().desktop.outputDevice }, signal, 20000); }
             catch (e) { captures.delete(id); window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (bed) voice.endBackground(guildId); else if (master) for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); throw e; }
             finally { captureRequest = null; }
           }); return captureChain;
@@ -273,10 +277,17 @@ else {
         stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (bed) voice.endBackground(guildId); else if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
       }, (l, t) => store.log(l, t), accounts, streamResolver); return browser;
     };
-    media = new MediaPool(store, scope => createBrowser(scope), async (job, signal) => {
+    titleCalls = new MediaTitleCalls(getConfig, {
+      metadata: (url, signal) => fetchTitleMetadata(url, getConfig().media.allowedHosts, (url, options) => playbackSession().fetch(url, options), signal),
+      speak: (payload, options) => {
+        const c = getConfig();
+        const text = payload.titleCall ? prepareSpeech({ content: payload.text, guildId: payload.guildId }, { ...c, speech: { ...c.speech, readNames: false, bouyomiPreprocess: false, provider: 'voicevox' } }) : payload.text;
+        return speechRunner.speak({ ...payload, text }, options);
+      }, log: (level, text) => store.log(level, text),
+    });
+    media = new MediaPool(store, scope => createBrowser(scope), undefined, async (job, signal, play) => {
       if (job.payload.master) speechRunner.skip(); else speechRunner.skip(job.payload.guildId || 'local');
-      if (job.payload.mode === 'direct') return;
-      await speechRunner.speak({ text: mediaAnnouncement(job.payload.url), guildId: job.payload.guildId, master: job.payload.master, system: true, priority: 50, output: getConfig().media.output }, { signal, interrupt: true });
+      await titleCalls.play(job, signal, play);
     });
     speechRunner = new SpeechPool(store, async (job, signal) => {
       const c = getConfig(); const profile = c.speech.profiles.find(p => p.userId === job.payload.userId);
@@ -285,6 +296,7 @@ else {
         const pending = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
         settings = nativeSpeechDefaults(settings, inspectBouyomi(bouyomi.directory).settings, pending);
       }
+      if (job.payload.titleCall) settings.speed *= c.media.titleCallSpeedRatio;
       if (job.payload.privateOwnerId) { await twitter.userSession(); if (twitter.owner()?.id !== job.payload.privateOwnerId) throw new Error('非公開投稿は本人のXログイン中だけ読み上げます'); }
       const candidates = job.payload.androidNotification ? voice.snapshot().filter(v => v.status === 'ready').map(v => v.guildId) : job.payload.master ? [...voice.connections.keys()] : job.payload.system ? (job.payload.guildId ? [job.payload.guildId] : []) : speechTargets(job.payload.guildId, c.speech.forwarding);
       const targets = outputTargets(settings.output, candidates, voice.snapshot());
@@ -294,15 +306,15 @@ else {
       const output = async (text, outputSettings, outputJobSignal, clipPath) => {
       const audio = clipPath ? readFileSync(clipPath) : await new Voicevox(outputSettings.engineUrl).synthesize(text, outputSettings, outputJobSignal);
       if (audio.length > 30 * 1024 * 1024) throw new Error('音声クリップが大きすぎます');
-      const duckTargets = new Set([...candidates, ...targets, ...(settings.output !== 'discord' ? [...media.lanes.keys()] : [])]);
-      if (!duckTargets.size) duckTargets.add('');
-      for (const target of duckTargets) media.setDucked(true, target);
+      // Browser capture stays raw; this gain affects only PC speakers. Discord
+      // attenuation follows speech tracks in each destination's own mixer.
+      media.setDucked(true, undefined, job.payload.titleCall === true);
       const outputController = new AbortController(); const outputSignal = AbortSignal.any([outputJobSignal, outputController.signal]); const outputs = [];
       try {
         if (outputSettings.output !== 'discord') outputs.push(audioCommand('play', { bytes: audio, volume: outputSettings.volume, device: c.desktop.outputDevice }, outputSignal));
-        for (const target of outputTargets(outputSettings.output, targets, voice.snapshot())) outputs.push(discordOutput(outputSettings.output, () => voice.speech(target, audio, outputSettings.volume, outputSignal, job.payload.priority || 0), outputSignal, (l, t) => store.log(l, t)));
+        for (const target of outputTargets(outputSettings.output, targets, voice.snapshot())) outputs.push(discordOutput(outputSettings.output, () => voice.speech(target, audio, outputSettings.volume, outputSignal, job.payload.priority || 0, job.payload.titleCall === true), outputSignal, (l, t) => store.log(l, t)));
         await Promise.all(outputs);
-      } catch (e) { outputController.abort(); await Promise.allSettled(outputs); throw e; } finally { for (const target of duckTargets) media.setDucked(false, target); }
+      } catch (e) { outputController.abort(); await Promise.allSettled(outputs); throw e; } finally { media.setDucked(false, undefined, job.payload.titleCall === true); }
       };
       if (settings.bouyomiPreprocess && !job.payload.system && !job.payload.literal && !job.payload.clipPath) {
         if (bouyomi.child) throw new Error('辞書への同時書き込みを防ぐため元アプリを終了してください');
@@ -341,7 +353,7 @@ else {
       log: (level, text) => store.log(level, text), targets: () => voice.snapshot().filter(v => v.status === 'ready').map(v => v.guildId), reserve: scopes => speechRunner.reserve(scopes),
       hold: (id, value) => { voice.holdSpeech(id, value); if (value) voice.interruptSpeech(id); },
       synthesize: async (text, signal) => decodeAudio(await new Voicevox(getConfig().speech.engineUrl).synthesize(text, getConfig().speech, signal), signal),
-      fadeMedia: (gain, ms, scope) => { media.fadeOverlay(gain, ms, scope); for (const id of voice.connections.keys()) voice.fadeMedia(id, Math.min(media.overlayGains.get('*') ?? 1, media.overlayGains.get(id) ?? 1), ms); },
+      fadeMedia: (gain, ms, scope) => { media.fadeOverlay(gain, ms, scope); const globalGain = Math.min(1, ...media.overlayGains.values()); for (const id of voice.connections.keys()) voice.fadeMedia(id, globalGain, ms); },
       play: async (pcm, targets, signal, startAt = 0) => {
         const c = getConfig(); const outputs = []; const controller = new AbortController(), outputSignal = AbortSignal.any([signal, controller.signal]);
         if (c.hourly.output !== 'discord') outputs.push(audioCommand(startAt ? 'play:timed' : 'play', { bytes: pcmWav(pcm), volume: c.hourly.volume, device: c.desktop.outputDevice, ...(startAt ? { startAt } : {}) }, outputSignal));

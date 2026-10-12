@@ -32,7 +32,7 @@ export const DEFAULT_CONFIG = {
     bouyomiPreprocess: false, bouyomiTagMode: 'original', bouyomiVoiceMap: [], chatEducationEnabled: true,
   },
   media: {
-    enabled: true, volume: 0.7, ducking: 0.35, duckFadeInMs: 3000, duckFadeOutMs: 3000, bandwidthSaving: true, showWindow: true,
+    enabled: true, volume: 0.7, ducking: 0.35, titleCallEnabled: true, titleCallDucking: 0.8, titleCallSpeedRatio: 0.85, duckFadeInMs: 3000, duckFadeOutMs: 3000, bandwidthSaving: true, showWindow: true,
     output: 'discord', maxMinutes: 120,
     equalizer: DEFAULT_EQUALIZER, compressor: DEFAULT_COMPRESSOR,
     allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'nico.ms', 'x.com',
@@ -122,6 +122,8 @@ export function normalizeConfig(patch, readingBaseline) {
   number(c.speech.bouyomiVoice, 0, 32767, '棒読みちゃんの声', true); number(c.speech.bouyomiTone, -1, 200, '棒読みちゃんの音程', true);
   if (!['tcp', 'http'].includes(c.speech.bouyomiCommunication)) fail('棒読みちゃん通信方式');
   number(c.media.volume, 0, 1, '動画音量'); number(c.media.ducking, 0, 1, '読み上げ中の動画音量');
+  number(c.media.titleCallDucking, 0, 1, 'タイトルコール中の動画音量の割合');
+  number(c.media.titleCallSpeedRatio, 0.5, 1.5, 'タイトルコールの読み上げ速度の倍率');
   for (const key of ['duckFadeInMs', 'duckFadeOutMs']) number(c.media[key], 0, 30000, '読み上げ中の動画フェード時間', true);
   number(c.media.maxMinutes, 1, 1440, '再生上限', true);
   const eq = c.media.equalizer, comp = c.media.compressor;

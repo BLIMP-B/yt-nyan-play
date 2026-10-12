@@ -20,7 +20,7 @@ class RemoteMonitor {
 class RemoteMixer {
   constructor(owner, entryId) {
     this.owner = owner; this.entryId = entryId; this.destroyed = false; this.values = {}; this.pending = {};
-    for (const key of ['mediaVolume', 'ducking', 'duckFadeInMs', 'duckFadeOutMs', 'backgroundVolume']) Object.defineProperty(this, key, {
+    for (const key of ['mediaVolume', 'ducking', 'titleCallDucking', 'duckFadeInMs', 'duckFadeOutMs', 'backgroundVolume']) Object.defineProperty(this, key, {
       get: () => this.values[key], set: value => { if (this.values[key] !== value) { this.values[key] = value; this.pending[key] = value; this.flushSoon(); } },
     });
     for (const [key, lane] of [['mediaGain', 'media'], ['backgroundGain', 'background']]) this[key] = { fade: (value, ms = 0, at = Date.now()) => owner.post({ type: 'fade', entryId, lane, value, ms, at }) };
@@ -37,7 +37,7 @@ class RemoteMixer {
   addBackground(bytes) { this.owner.post({ type: 'pcm', entryId: this.entryId, lane: 'background', bytes }); }
   clearMedia() { this.owner.post({ type: 'clear', entryId: this.entryId, lane: 'media' }); }
   clearBackground() { this.owner.post({ type: 'clear', entryId: this.entryId, lane: 'background' }); }
-  addSpeech(bytes, volume, signal, startAt = 0) { return this.owner.request({ method: 'speech', entryId: this.entryId, bytes, volume, startAt }, signal); }
+  addSpeech(bytes, volume, signal, startAt = 0, titleCall = false) { return this.owner.request({ method: 'speech', entryId: this.entryId, bytes, volume, startAt, titleCall }, signal); }
   destroy() { if (!this.destroyed) { this.destroyed = true; this.owner.release(this.entryId); } }
   on() { return this; }
 }

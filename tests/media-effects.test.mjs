@@ -20,14 +20,15 @@ function tone(frequency = 1000, amplitude = .1, frames = 50, rightRatio = 1) {
   }
   return pcm;
 }
-function processor(patch) { const effects = new MediaEffects(), { media } = normalizeConfig({ media: patch }); effects.configure(media.equalizer, media.compressor); return effects; }
+function processor(patch) { const effects = new MediaEffects(), { media } = normalizeConfig({ media: { equalizer: { enabled: false, preampDb: 0, ...patch?.equalizer }, compressor: { enabled: false, ...patch?.compressor } } }); effects.configure(media.equalizer, media.compressor); return effects; }
 function rms(samples, start = 0) { let sum = 0; for (let i = start; i < samples.length; i++) sum += samples[i] ** 2; return Math.sqrt(sum / (samples.length - start)); }
 const inputSamples = pcm => Array.from({ length: pcm.length / 2 }, (_, i) => pcm.readInt16LE(i * 2));
 
-test('existing configurations bypass effects; custom values and all presets persist across restart', () => {
+test('Discord defaults are enabled; explicit legacy bypass and custom presets persist across restart', () => {
   const dir = mkdtempSync(join(tmpdir(), 'nyan-effects-'));
   try {
-    const store = new Store(dir); assert.equal(store.config.media.equalizer.enabled, false); assert.equal(store.config.media.compressor.enabled, false);
+    const store = new Store(dir); assert.equal(store.config.media.equalizer.enabled, true); assert.equal(store.config.media.compressor.enabled, true); assert.equal(store.config.media.equalizer.preset, 'discord1'); assert.equal(store.config.media.compressor.preset, 'discord1');
+    store.updateConfig({ media: { equalizer: { enabled: false, preset: 'flat' }, compressor: { enabled: false, preset: 'gentle' } } }); assert.equal(new Store(dir).config.media.equalizer.enabled, false);
     assert.equal(processor().process(tone()), null);
     const patch = { equalizer: { enabled: true, preset: 'custom', gains: [-3, 1, 4, -2, 0], preampDb: -5 }, compressor: { enabled: true, preset: 'custom', thresholdDb: -22, ratio: 3.5, kneeDb: 7, attackMs: 12, releaseMs: 230, makeupDb: 3 } };
     store.updateConfig({ media: patch }); assert.deepEqual(new Store(dir).config.media.equalizer, patch.equalizer); assert.deepEqual(new Store(dir).config.media.compressor, patch.compressor);
@@ -78,7 +79,7 @@ test('mixer applies effects before media ducking/fades and background fade; spee
   background.clearBackground(); assert.deepEqual(background.backgroundEffects.process(pcm), processor({ equalizer: media.equalizer, compressor: media.compressor }).process(pcm));
 });
 test('saving updates all active guilds without reconnecting or resetting unchanged effects', () => {
-  let config = normalizeConfig(); const output = new VoiceOutput(() => null, () => config, () => {}), mixers = [new PcmMixer(), new PcmMixer()];
+  let config = normalizeConfig({ media: { equalizer: { enabled: false }, compressor: { enabled: false } } }); const output = new VoiceOutput(() => null, () => config, () => {}), mixers = [new PcmMixer(), new PcmMixer()];
   try {
     mixers.forEach((mixer, i) => output.connections.set(String(i), { mixer, connection: { joinConfig: { selfDeaf: true } } })); output.updateSettings(); assert.ok(mixers.every(m => !m.mediaEffects.active));
     config = normalizeConfig({ media: { equalizer: { enabled: true, preset: 'bassCut' }, compressor: { enabled: true, preset: 'gentle' } } }); output.updateSettings();

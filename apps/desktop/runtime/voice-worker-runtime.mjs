@@ -67,7 +67,7 @@ export class VoiceWorkerRuntime {
     }
     const entry = this.entries.get(message.entryId);
     if (!entry) throw new Error('Discordの音声接続が終了しました');
-    if (message.method === 'speech') return entry.mixer.addSpeech(Buffer.from(message.bytes), message.volume, signal, message.startAt);
+    if (message.method === 'speech') return entry.mixer.addSpeech(Buffer.from(message.bytes), message.volume, signal, message.startAt, message.titleCall === true);
     throw new Error('Unknown audio worker request');
   }
   control(message) {

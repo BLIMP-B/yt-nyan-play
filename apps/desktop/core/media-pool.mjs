@@ -1,15 +1,17 @@
 import { JobRunner } from './queue.mjs';
 export function mediaScope(payload) { return payload.master ? 'master' : payload.guildId || 'local'; }
 export class MediaPool {
-  constructor(store, browserFactory, beforePlay) { this.store = store; this.browserFactory = browserFactory; this.beforePlay = beforePlay; this.lanes = new Map(); this.masterActive = false; this.paused = false; this.pausedScopes = new Set(); this.duckDepth = new Map(); this.overlayGains = new Map(); }
+  constructor(store, browserFactory, beforePlay, duringPlay) { this.store = store; this.browserFactory = browserFactory; this.beforePlay = beforePlay; this.duringPlay = duringPlay; this.lanes = new Map(); this.masterActive = false; this.paused = false; this.pausedScopes = new Set(); this.duckDepth = new Map(); this.overlayGains = new Map(); }
   masterPending() { return this.masterActive || this.store.jobs.some(j => j.kind === 'media' && j.status === 'waiting' && mediaScope(j.payload) === 'master'); }
   lane(scope) {
     if (this.lanes.has(scope)) return this.lanes.get(scope);
     const browser = this.browserFactory(scope);
-    browser.setOverlayGain?.(this.overlayValue(scope), 0);
+    browser.setOverlayGain?.(this.overlayValue(), 0);
+    browser.setDucked?.(this.duckValue(scope, false), false);
+    browser.setDucked?.(this.duckValue(scope, true), true);
     const runner = new JobRunner(this.store, 'media', async (job, signal) => {
       const master = scope === 'master'; if (master) { this.masterActive = true; for (const [key, lane] of this.lanes) if (key !== 'master') lane.browser.setPaused(true); }
-      try { if (this.beforePlay) await this.beforePlay(job, signal); signal.throwIfAborted(); await browser.play(job, signal); }
+      try { if (this.beforePlay) await this.beforePlay(job, signal); signal.throwIfAborted(); const play = () => browser.play(job, signal); if (this.duringPlay) await this.duringPlay(job, signal, play); else await play(); }
       finally { if (master) this.masterActive = false; for (const [key, lane] of this.lanes) { lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); queueMicrotask(() => lane.runner.drain()); } }
     }, job => mediaScope(job.payload) === scope && (scope === 'master' || !this.masterPending()));
     runner.paused = this.paused || this.pausedScopes.has(scope); const lane = { browser, runner }; this.lanes.set(scope, lane); return lane;
@@ -30,8 +32,9 @@ export class MediaPool {
   pause(value, scope) { if (scope) { if (value) this.pausedScopes.add(scope); else this.pausedScopes.delete(scope); } else this.paused = value; for (const [key, lane] of this.lanes) if (!scope || scope === key) { lane.runner.pause(this.paused || this.pausedScopes.has(key)); lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); } this.store.emit('change'); }
   skip(scope) { if (scope) this.lanes.get(scope)?.runner.skip(); else if (this.masterActive) this.lanes.get('master')?.runner.skip(); else for (const lane of this.lanes.values()) lane.runner.skip(); }
   clear(scope) { const scopes = scope ? [scope] : [...new Set(this.store.jobs.filter(j => j.kind === 'media').map(j => mediaScope(j.payload)))]; for (const key of scopes) { const lane = this.lane(key); for (const job of this.store.jobs) if (job.kind === 'media' && job.status === 'waiting' && mediaScope(job.payload) === key) job.status = 'cancelled'; lane.runner.skip(); } this.store.saveState(); for (const [key, lane] of this.lanes) lane.browser.setPaused(this.paused || this.pausedScopes.has(key) || key !== 'master' && this.masterPending()); this.drain(); }
-  setDucked(value, guildId) { for (const [key, lane] of this.lanes) if (!guildId || key === 'master' || key === guildId || key === 'local') { const depth = Math.max(0, (this.duckDepth.get(key) || 0) + (value ? 1 : -1)); this.duckDepth.set(key, depth); lane.browser.setDucked(depth > 0); } }
-  overlayValue(scope) { return Math.min(1, this.overlayGains.get('*') ?? 1, this.overlayGains.get(scope) ?? 1, ...(['master', 'local'].includes(scope) ? this.overlayGains.values() : [])); }
+  duckValue(scope, titleCall) { const suffix = titleCall ? ':title' : ':speech'; return [...this.duckDepth].some(([slot, depth]) => depth > 0 && slot.endsWith(suffix) && (slot === '*' + suffix || slot === scope + suffix || scope === 'master' || scope === 'local')); }
+  setDucked(value, guildId, titleCall = false) { const slot = (guildId || '*') + (titleCall ? ':title' : ':speech'), depth = Math.max(0, (this.duckDepth.get(slot) || 0) + (value ? 1 : -1)); if (depth) this.duckDepth.set(slot, depth); else this.duckDepth.delete(slot); for (const [key, lane] of this.lanes) lane.browser.setDucked(this.duckValue(key, titleCall), titleCall); }
+  overlayValue() { return Math.min(1, ...this.overlayGains.values()); }
   fadeOverlay(value, ms, scope = '*') { if (value === 1) this.overlayGains.delete(scope); else this.overlayGains.set(scope, value); for (const [key, lane] of this.lanes) lane.browser.setOverlayGain?.(this.overlayValue(key), ms); }
   show() { for (const lane of this.lanes.values()) lane.browser.show(); }
   get status() { return [...this.lanes].filter(([, l]) => l.runner.active).map(([scope, lane]) => ({ scope, ...lane.browser.status })); }

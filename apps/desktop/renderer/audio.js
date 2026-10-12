@@ -32,7 +32,7 @@
     else if (message.type === 'stop' && monitor?.id === message.id) stopMonitor();
     else if (message.type === 'pcm' && monitor?.id === message.id) monitor.processor?.port.postMessage(new Uint8Array(message.bytes));
   });
-  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId) }), update: state => {
+  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId), captureVolumes: [...captures].map(([id, c]) => ({ id, volume: c.volume, gain: c.gain?.gain.value })) }), update: state => {
     const previous = config; config = state.config.desktop;
     if (state.voiceMonitor?.id) void startMonitor(state.voiceMonitor.id, state.voiceMonitor.rendererMs); else if (monitor) stopMonitor();
     if (monitor?.gain) monitor.gain.gain.setTargetAtTime(config.voiceMonitorVolume, monitor.context.currentTime, 0.02);
@@ -46,6 +46,12 @@
     await capture.context?.close();
   };
   const handleAudio = async message => {
+    if (message.type === 'capture:gain') {
+      const capture = captures.get(message.id); if (!capture) return;
+      capture.volume = capture.local ? Math.max(0, Math.min(1, Number(message.volume) || 0)) : 0;
+      if (capture.gain) { const gain = capture.gain.gain, at = capture.context.currentTime; gain.cancelAndHoldAtTime(at); gain.linearRampToValueAtTime(capture.volume, at + Math.max(0, Number(message.ms) || 0) / 1000); }
+      return;
+    }
     if (message.type === 'cancel') { const audio = playing.get(message.id); if (audio?.cancel) audio.cancel(); else { audio?.pause(); audio?.dispatchEvent(new Event('ended')); } return; }
     if (message.type === 'capture:stop') { await stopCapture(message.id); return; }
     try {
@@ -80,7 +86,7 @@
       if (message.type === 'capture:start') {
         await stopCapture(message.id);
         const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2, sampleRate: 48000 } });
-        const capture = { stream, local: message.local === true }; captures.set(message.id, capture);
+        const capture = { stream, local: message.local === true, volume: message.local ? message.volume ?? 1 : 0 }; captures.set(message.id, capture);
         if (!stream.getAudioTracks().length) throw new Error('再生ウィンドウから音声を取得できません');
         const context = new AudioContext({ sampleRate: 48000 }); capture.context = context;
         if (capture.local) await setDevice(context, message.device);
@@ -90,7 +96,9 @@
         processor.onprocessorerror = () => failed('音声転送の処理が停止しました');
         stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => failed('再生ウィンドウの音声接続が終了しました'), { once: true }));
         processor.port.onmessage = event => window.nyan.pcm(message.id, event.data);
-        const gain = context.createGain(); gain.gain.value = capture.local ? 1 : 0; source.connect(processor).connect(gain).connect(context.destination); await context.resume();
+        // PCM leaves the worklet before the PC-only gain. Discord applies its
+        // own per-guild volume/ducking, independent of local global attenuation.
+        const gain = capture.gain = context.createGain(); gain.gain.value = capture.volume; source.connect(processor).connect(gain).connect(context.destination); await context.resume();
       }
       window.nyan.audioResult({ id: message.id });
     } catch (error) { if (message.type === 'capture:start') await stopCapture(message.id); window.nyan.audioResult({ id: message.id, error: error.message }); }

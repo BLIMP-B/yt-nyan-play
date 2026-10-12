@@ -21,9 +21,16 @@ const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/au
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.7', '-ar', '48000', '-ac', '2', join(directory, 'speech.wav')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=320x180:rate=25:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:v', 'libvpx', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-shortest', join(directory, 'video.webm')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
+for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=20`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', '-ac', '2', join(directory, 'scope-speech.wav')]);
 const wav = readFileSync(join(directory, 'speech.wav'));
 const synthesisTexts = [];
-const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query')) { synthesisTexts.push(new URL(req.url, 'http://localhost').searchParams.get('text')); res.end('{}'); } else if (req.url.startsWith('/synthesis')) { res.setHeader('Content-Type', 'audio/wav'); res.end(wav); } else { res.statusCode = 404; res.end(); } });
+const synthesisSettings = [];
+const engine = createServer((req, res) => {
+  if (req.url.startsWith('/audio_query')) { const text = new URL(req.url, 'http://localhost').searchParams.get('text'); synthesisTexts.push(text); res.end(JSON.stringify({ verificationText: text })); }
+  else if (req.url.startsWith('/synthesis')) { let body = ''; req.on('data', bytes => { body += bytes; }); req.on('end', () => { synthesisSettings.push(JSON.parse(body)); res.setHeader('Content-Type', 'audio/wav'); res.end(body.includes('別サーバー読み上げ') ? readFileSync(join(directory, 'scope-speech.wav')) : wav); }); }
+  else { res.statusCode = 404; res.end(); }
+});
 engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
 const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'both', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'both', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
 writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
@@ -39,6 +46,17 @@ VoiceOutput.prototype.createAudioBackend = () => null;
 import { EventEmitter } from 'node:events'; import { PassThrough } from 'node:stream';
 const originalVoiceConnect = VoiceOutput.prototype.connect, originalDisconnect = VoiceOutput.prototype.disconnect;
 VoiceOutput.prototype.connect = async function(guildId, ...args) {
+  if (['11111', '33333'].includes(guildId)) {
+    globalThis.nyanScopeVoice = this;
+    if (!this.connections.has(guildId)) {
+      const mixer = new PcmMixer(), stats = { frames: 0, peaks: [], clears: 0, rawPeaks: [] }, connection = { state: {status:'ready'}, joinConfig:{selfDeaf:true}, rejoin(){return true;}, destroy(){this.state.status='destroyed';clearInterval(timer);} };
+      const clear = mixer.clearMedia.bind(mixer); mixer.clearMedia = () => { stats.clears++; clear(); };
+      const add = mixer.addMedia.bind(mixer); mixer.addMedia = bytes => { let peak=0;for(let i=0;i+1<bytes.length;i+=2)peak=Math.max(peak,Math.abs(bytes.readInt16LE(i)));stats.rawPeaks.push(peak);if(stats.rawPeaks.length>100)stats.rawPeaks.shift();add(bytes); };
+      const timer = setInterval(() => { if(mixer.destroyed)return;const bytes=mixer.takeFrame();let peak=0;for(let i=0;i+1<bytes.length;i+=2)peak=Math.max(peak,Math.abs(bytes.readInt16LE(i)));stats.frames++;stats.peaks.push(peak);if(stats.peaks.length>20)stats.peaks.shift(); },20);
+      const channelId = this.getConfig().bot.bindings.find(b=>b.guildId===guildId).voiceChannelId; this.connections.set(guildId,{channelId,connection,mixer,stats,player:{stop(){}}});this.mediaSettings(mixer,this.getConfig());
+    }
+    this.changed();return this.connections.get(guildId);
+  }
   if (guildId !== '99998') return originalVoiceConnect.call(this, guildId, ...args);
   if (!this.connections.has(guildId)) {
     const speaking = new EventEmitter(); speaking.users = new Map(); const streams = new Map();
@@ -157,8 +175,15 @@ try {
   // Use the production settings controls, then reload the renderer and inspect
   // the persisted config; this catches preset/custom wiring and packaged imports.
   const effectsField = path => page.locator(`[data-config="media.${path}"]`);
-  assert.equal(await effectsField('equalizer.enabled').isChecked(), false);
-  assert.equal(await effectsField('compressor.enabled').isChecked(), false);
+  assert.equal(await effectsField('titleCallEnabled').isChecked(), true);
+  assert.equal(await effectsField('titleCallDucking').inputValue(), '0.8');
+  assert.equal(await effectsField('titleCallSpeedRatio').inputValue(), '0.85');
+  await effectsField('titleCallSpeedRatio').fill('0.9');
+  assert.equal(await effectsField('equalizer.enabled').isChecked(), true);
+  assert.equal(await effectsField('compressor.enabled').isChecked(), true);
+  assert.equal(await effectsField('equalizer.preset').inputValue(), 'discord1');
+  assert.equal(await effectsField('compressor.preset').inputValue(), 'discord1');
+  for (const preset of ['discord2', 'discord3']) { await effectsField('equalizer.preset').selectOption(preset); await effectsField('compressor.preset').selectOption(preset); }
   await effectsField('equalizer.preset').selectOption('clarity');
   assert.equal(await effectsField('equalizer.enabled').isChecked(), true);
   assert.equal(await effectsField('equalizer.gains.3').inputValue(), '3');
@@ -172,6 +197,11 @@ try {
   await page.locator('[data-panel="settings"] .save-config').first().click();
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.compressor.ratio === 3.5);
   await page.reload(); await page.waitForFunction(() => document.querySelector('[data-config="media.compressor.ratio"]').value === '3.5');
+  assert.equal(await effectsField('titleCallSpeedRatio').inputValue(), '0.9');
+  await page.locator('[data-view="settings"]').click();
+  await effectsField('titleCallSpeedRatio').fill('0.85');
+  await page.locator('[data-panel="settings"] .save-config').first().click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.titleCallSpeedRatio === 0.85);
   await page.locator('[data-view="settings"]').click();
   assert.equal(await effectsField('equalizer.gains.0').inputValue(), '-5');
   const effectSettings = (await call(page, 'state')).config.media;
@@ -179,10 +209,10 @@ try {
   assert.deepEqual(persisted.media.equalizer, effectSettings.equalizer); assert.deepEqual(persisted.media.compressor, effectSettings.compressor);
   await effectsField('equalizer.enabled').scrollIntoViewIfNeeded();
   await page.screenshot({ path: join(reports, 'media-effects-settings.png'), fullPage: true });
-  report.mediaEffects = { bypassByDefault: true, eqPresetApplied: true, compressorPresetApplied: true, customSaved: true, rendererReloadVerified: true, equalizer: effectSettings.equalizer, compressor: effectSettings.compressor };
+  report.mediaEffects = { discordPresetByDefault: 'discord1', discordPresetsSelectable: true, eqPresetApplied: true, compressorPresetApplied: true, customSaved: true, rendererReloadVerified: true, equalizer: effectSettings.equalizer, compressor: effectSettings.compressor };
   await page.locator('[data-view="overview"]').click();
   // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
-  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio }) => {
+  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio, scopeVideo, scopeAudio }) => {
     const ui = BrowserWindow.getAllWindows()[0];
     const probe = globalThis.nyanAudioProbe = { ui, target: ui, active: 'speech', metrics: {}, chunks: {} };
     ui.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
@@ -222,13 +252,14 @@ try {
       if (new URL(request.url).hostname !== 'media-fixture.test') return net.fetch(request, { bypassCustomProtocolHandlers: true });
       const file = new URL(request.url).pathname;
       if (file === '/video.webm') return new Response(new Uint8Array(video), { headers: { 'Content-Type': 'video/webm' } });
+      if (file === '/scope-video.ogg' || file === '/scope-audio.ogg') return new Response(new Uint8Array(file.includes('video') ? scopeVideo : scopeAudio), { headers: { 'Content-Type': 'audio/ogg' } });
       if (file === '/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
-      const tag = file.includes('audio') ? 'audio' : 'video', source = tag === 'audio' ? '/audio.ogg' : '/video.webm';
+      const tag = file.includes('audio') ? 'audio' : 'video', source = file.includes('scope') ? (tag === 'audio' ? '/scope-audio.ogg' : '/scope-video.ogg') : tag === 'audio' ? '/audio.ogg' : '/video.webm';
       const replace = file.includes('replace') ? `<script>document.querySelector('${tag}').addEventListener('ended', () => { const next = document.createElement('video'); next.controls = true; next.autoplay = true; next.src = '/video.webm'; document.querySelector('${tag}').replaceWith(next); });</script>` : '';
       return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>${replace}`, { headers: { 'Content-Type': 'text/html' } });
     });
     ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture', 'speaker-selection'].includes(permission)));
-  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
+  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))], scopeVideo: [...readFileSync(join(directory, 'scope-video.ogg'))], scopeAudio: [...readFileSync(join(directory, 'scope-audio.ogg'))] });
   await application.evaluate(() => { globalThis.nyanAudioProbe.capture = true; });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
@@ -274,11 +305,49 @@ try {
     report.media.push({ kind, status: 'completed', pcPlayback: true, ...metrics });
     await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   }
+  const titleJobs = (await call(page, 'state')).jobs.filter(j => j.kind === 'speech' && j.payload.titleCall && j.status === 'completed');
+  assert.ok(titleJobs.some(j => j.payload.text === 'メディア音声試験'), 'The playback page title did not reach the production speech path');
+  const titleSynthesis = synthesisSettings.filter(query => query.verificationText === 'メディア音声試験');
+  assert.ok(titleSynthesis.length > 0 && titleSynthesis.every(query => Math.abs(query.speedScale - 0.85) < 1e-6), 'Title speed did not reach VOICEVOX');
+  report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
   await historyTask;
   report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
   assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
   assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
   assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
+  // Real Chromium tab capture, PC gain and two independent production mixers.
+  // Only Discord transport is substituted; this does not measure a receiver.
+  const restoreScopeConfig = (await call(page, 'state')).config;
+  const scopeConfig = structuredClone(restoreScopeConfig);
+  scopeConfig.bot.bindings = [{ guildId:'11111',textChannelIds:['22222'],voiceChannelId:'44444' },{ guildId:'33333',textChannelIds:['55555'],voiceChannelId:'66666' }];
+  Object.assign(scopeConfig.media,{output:'both',volume:0.5,ducking:0.35,titleCallEnabled:false,duckFadeInMs:0,duckFadeOutMs:0});
+  scopeConfig.media.equalizer.enabled=false;scopeConfig.media.compressor.enabled=false;scopeConfig.speech.output='both';
+  await call(page,'config:save',scopeConfig);await call(page,'voice:join','11111');await call(page,'voice:join','33333');
+  const scopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video',mode:'direct',guildId:'11111'});
+  const scopeB=await call(page,'media:add',{url:'http://media-fixture.test/scope-audio',mode:'direct',guildId:'33333'});
+  await page.waitForFunction(async ids=>{const s=(await window.nyan.invoke('state')).value;return ids.every(id=>s.jobs.find(j=>j.id===id)?.mediaStartedAt);},[scopeA.id,scopeB.id]);
+  const scopeStats=()=>application.evaluate(()=>Object.fromEntries(['11111','33333'].map(id=>{const e=globalThis.nyanScopeVoice.connections.get(id);return[id,{...e.stats,duck:e.mixer.duckGain.to,speaking:e.mixer.speech.length,mediaVolume:e.mixer.mediaVolume}];})));
+  let beforeScope;const scopeReadyUntil=Date.now()+6000;do{beforeScope=await scopeStats();if(['11111','33333'].every(id=>beforeScope[id].peaks.some(p=>p>500)))break;await page.waitForTimeout(80);}while(Date.now()<scopeReadyUntil);
+  assert.ok(beforeScope['11111'].peaks.some(p=>p>500)&&beforeScope['33333'].peaks.some(p=>p>500),'Both guilds must receive independent media PCM: '+JSON.stringify(beforeScope));
+  const scopedSpeech=await call(page,'speech:test',{text:'別サーバー読み上げ',guildId:'33333'});
+  await page.waitForFunction(async ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.175)<0.01);},[scopeA.id,scopeB.id]);
+  await page.waitForTimeout(150);const duringScope=await scopeStats();
+  assert.equal(duringScope['11111'].duck,1);assert.equal(duringScope['11111'].speaking,0);assert.equal(duringScope['33333'].duck,0.35);assert.ok(duringScope['33333'].speaking>0);
+  assert.ok(duringScope['11111'].rawPeaks.slice(-5).every(p=>p>2000),'PC attenuation leaked into raw Discord PCM');
+  assert.ok(duringScope['11111'].peaks.slice(-5).every(p=>p>1000),'Other-guild speech attenuated Discord media');
+  const pcDuring=await page.evaluate(()=>window.nyanLocalAudio.snapshot().captureVolumes);
+  await waitForJob(page,scopedSpeech.id);
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.5)<0.01);},[scopeA.id,scopeB.id]);
+  const beforeReplacement=await scopeStats();
+  const nextScopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video-new',mode:'direct',guildId:'11111'});
+  await page.waitForFunction(async ids=>{const s=(await window.nyan.invoke('state')).value;return s.jobs.find(j=>j.id===ids[0])?.status==='cancelled'&&s.jobs.find(j=>j.id===ids[1])?.mediaStartedAt&&s.jobs.find(j=>j.id===ids[2])?.status==='running';},[scopeA.id,nextScopeA.id,scopeB.id]);
+  const afterReplacement=await scopeStats();assert.equal(afterReplacement['33333'].clears,beforeReplacement['33333'].clears);assert.ok(afterReplacement['33333'].frames>beforeReplacement['33333'].frames);
+  const playerVolumes=await application.evaluate(async({BrowserWindow})=>Promise.all(BrowserWindow.getAllWindows().filter(w=>w!==globalThis.nyanAudioProbe.ui).map(w=>w.webContents.executeJavaScript('document.querySelector("video,audio")?.volume'))));
+  assert.ok(playerVolumes.length>=2&&playerVolumes.every(v=>v===1),'Capture source must remain independent of PC gain');
+  report.guildIsolation={receiverVerified:false,scope:'production-capture-and-mixers',simultaneousGuildMedia:true,discordDuckingIsolated:true,pcDuckingGlobal:true,rawCaptureUnaffected:true,sameGuildReplacementIsolated:true,sourceVolumes:playerVolumes,during: duringScope,pcGains:pcDuring.filter(c=>[scopeA.id,scopeB.id].includes(c.id)).map(c=>c.gain)};
+  for(const id of [nextScopeA.id,scopeB.id])await call(page,'job:action',{id,action:'cancel'});
+  await page.waitForFunction(()=>window.nyanLocalAudio.snapshot().captureVolumes.length===0);
+  await call(page,'voice:leave','11111');await call(page,'voice:leave','33333');await call(page,'config:save',restoreScopeConfig);
   // Native notification retrieval is verified separately on a real Windows AVD.
   // Here inject that wire format through the actual notification reader, queue, VOICEVOX and PC output.
   await call(page, 'android:start');

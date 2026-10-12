@@ -9,17 +9,19 @@ import { mediaAuthHosts } from '../core/media-accounts.mjs';
 import { openAudioStream } from './media-streams.mjs';
 import { mediaPolicy, streamContinuation } from '../core/media-policy.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
+import { browserMetadataScript } from '../core/media-title.mjs';
 
 export class MediaBrowser {
-  constructor(getConfig, bridge, log, accounts, resolver) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.resolver = resolver; this.window = null; this.paused = false; this.ducked = false; this.status = null; this.overlayGain = 1; this.volumeRampMs = 0; }
+  constructor(getConfig, bridge, log, accounts, resolver) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.resolver = resolver; this.window = null; this.paused = false; this.ducked = false; this.titleDucked = false; this.status = null; this.overlayGain = 1; this.volumeRampMs = 0; }
   async play(job, signal, { browserOnly = false } = {}) {
-    signal.throwIfAborted(); const c = this.getConfig(); const payload = job.payload;
+    signal.throwIfAborted(); this.job = job; this.localGainSent = null; const c = this.getConfig(); const payload = job.payload;
     const { mode, limitSeconds } = mediaPolicy(payload);
     const url = validateMediaUrl(payload.url, c.media.allowedHosts);
     let stream, selected;
     this.playOptions = null;
     if (!browserOnly && c.media.bandwidthSaving && this.resolver) {
       selected = await this.resolver.resolve(url, signal);
+      if (selected) this.bridge.metadata?.(job, { title: selected.title, body: selected.description, author: selected.author });
       if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45); }
       catch (error) { signal.throwIfAborted(); this.log('warn', '音声配信を開始できないためブラウザの最低画質設定へ切り替えます'); }
     }
@@ -31,7 +33,7 @@ export class MediaBrowser {
     catch (error) { stream?.close(); throw error; }
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
-    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: c.media.output === 'discord' ? 1 : c.media.volume * this.overlayGain, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
+    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
     guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
@@ -44,6 +46,7 @@ export class MediaBrowser {
       try { await Promise.race([window.loadURL(target, stream ? {} : loadOptions), new Promise((_, reject) => { loadingTimer = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); })]); }
       finally { clearTimeout(loadingTimer); }
       const initial = await window.webContents.executeJavaScript(mediaScript(this.playOptions), true);
+      if (!stream) try { this.bridge.metadata?.(job, await window.webContents.executeJavaScript(browserMetadataScript(), true)); } catch {}
       if (!initial.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
         try { await frame.executeJavaScript(mediaScript(this.playOptions), true); } catch {}
       }
@@ -56,8 +59,8 @@ export class MediaBrowser {
       while (!signal.aborted && !window.isDestroyed()) {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
-        const volume = c.media.output === 'discord' ? 1 : this.getConfig().media.volume * (this.ducked ? this.getConfig().media.ducking : 1) * this.overlayGain;
-        const options = this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume, paused: this.paused, volumeRampMs: c.media.output === 'discord' ? 0 : this.volumeRampMs, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
+        this.syncLocalGain();
+        const options = this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
         let state = await window.webContents.executeJavaScript(mediaScript(options), true);
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
@@ -90,17 +93,18 @@ export class MediaBrowser {
       signal.removeEventListener('abort', abort);
       stream?.close();
       if (captureStarted) await this.bridge.stopCapture(job.id, payload.guildId);
-      if (!window.isDestroyed()) window.destroy(); if (this.window === window) this.window = null; this.playOptions = null; this.status = null; this.bridge.changed();
+      if (!window.isDestroyed()) window.destroy(); if (this.window === window) this.window = null; this.playOptions = null; this.status = null; this.job = null; this.bridge.changed();
     }
     return this.play({ ...job, payload: continuation }, signal, { browserOnly: true });
   }
   setPaused(value) { this.paused = value; if (this.playOptions && this.window && !this.window.isDestroyed()) void this.window.webContents.executeJavaScript(mediaScript({ ...this.playOptions, paused: value }), true).catch(() => {}); }
-  setDucked(value) { if (this.ducked === value) return; this.ducked = value; this.applyVolume(value ? this.getConfig().media.duckFadeOutMs : this.getConfig().media.duckFadeInMs); }
+  duckRatio() { const c = this.getConfig().media; return Math.min(this.ducked ? c.ducking : 1, this.titleDucked ? c.titleCallDucking : 1); }
+  localVolume() { return this.getConfig().media.volume * this.duckRatio() * this.overlayGain; }
+  syncLocalGain() { const volume = this.localVolume(); if (this.job && this.localGainSent !== volume) { this.localGainSent = volume; this.bridge.localGain?.(this.job, volume, this.volumeRampMs); } }
+  setDucked(value, titleCall = false) { const key = titleCall ? 'titleDucked' : 'ducked'; if (this[key] === value) return; const before = this.duckRatio(); this[key] = value; this.applyVolume(this.duckRatio() < before ? this.getConfig().media.duckFadeOutMs : this.getConfig().media.duckFadeInMs); }
   applyVolume(ms) {
     this.volumeRampMs = ms;
-    const c = this.getConfig(); if (c.media.output === 'discord' || !this.playOptions || this.window?.isDestroyed()) return;
-    const volume = c.media.volume * (this.ducked ? c.media.ducking : 1) * this.overlayGain;
-    void this.window?.webContents.executeJavaScript(mediaScript({ ...this.playOptions, volume, volumeRampMs: ms }), true).catch(() => {});
+    this.syncLocalGain();
   }
   setOverlayGain(value, ms = 0) {
     this.overlayGain = value; this.applyVolume(ms);
