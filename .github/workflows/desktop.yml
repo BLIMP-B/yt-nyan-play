@@ -27,7 +27,7 @@ jobs:
           done
   tag-verified-source:
     needs: [tests, windows, android-install, hourly-model, live-media]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/codex/windows-desktop-bot' || startsWith(github.ref, 'refs/heads/codex/release-v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
