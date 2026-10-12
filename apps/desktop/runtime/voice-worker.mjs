@@ -37,7 +37,7 @@ class RemoteMixer {
   addBackground(bytes) { this.owner.post({ type: 'pcm', entryId: this.entryId, lane: 'background', bytes }); }
   clearMedia() { this.owner.post({ type: 'clear', entryId: this.entryId, lane: 'media' }); }
   clearBackground() { this.owner.post({ type: 'clear', entryId: this.entryId, lane: 'background' }); }
-  addSpeech(bytes, volume, signal, startAt = 0, titleCall = false) { return this.owner.request({ method: 'speech', entryId: this.entryId, bytes, volume, startAt, titleCall }, signal); }
+  addSpeech(bytes, volume, signal, startAt = 0, titleCall = false, duckMedia = true) { return this.owner.request({ method: 'speech', entryId: this.entryId, bytes, volume, startAt, titleCall, duckMedia }, signal); }
   destroy() { if (!this.destroyed) { this.destroyed = true; this.owner.release(this.entryId); } }
   on() { return this; }
 }

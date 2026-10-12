@@ -32,12 +32,12 @@ export class PcmMixer extends Readable {
   addBackground(chunk) { if (!this.destroyed) this.backgroundBuffer.push(chunk); }
   clearBackground() { this.backgroundBuffer.clear(); this.backgroundEffects.reset(); }
   configureEffects(c) { this.mediaEffects.configure(c.equalizer, c.compressor); this.backgroundEffects.configure(c.equalizer, c.compressor); }
-  addSpeech(buffer, volume, signal, startAt = 0, titleCall = false) {
+  addSpeech(buffer, volume, signal, startAt = 0, titleCall = false, duckMedia = true) {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
       if (this.destroyed || this.readableEnded) throw new Error('Discord音声ストリームが終了しました。次の読み上げで再接続します');
       if (!buffer.length) throw new Error('再生する音声が空です');
-      const track = { buffer, position: 0, volume, resolve, reject, progressAt: Date.now(), startAt, titleCall };
+      const track = { buffer, position: 0, volume, resolve, reject, progressAt: Date.now(), startAt, titleCall, duckMedia };
       track.abort = () => { this.speech = this.speech.filter(t => t !== track); reject(new DOMException('Cancelled', 'AbortError')); };
       track.signal = signal; signal?.addEventListener('abort', track.abort, { once: true }); this.speech.push(track);
     });
@@ -48,7 +48,7 @@ export class PcmMixer extends Readable {
     const backgroundFrame = this.backgroundBuffer.frame(this.network.mediaMs, () => this.onUnderrun?.('background'));
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
-    const out = Buffer.alloc(3840); const duck = Math.min(tracks.some(t => !t.titleCall) ? this.ducking : 1, tracks.some(t => t.titleCall) ? this.titleCallDucking : 1);
+    const out = Buffer.alloc(3840); const duck = Math.min(tracks.some(t => t.duckMedia && !t.titleCall) ? this.ducking : 1, tracks.some(t => t.duckMedia && t.titleCall) ? this.titleCallDucking : 1);
     if (this.duckGain.to !== duck) this.duckGain.fade(duck, duck < this.duckGain.to ? this.duckFadeOutMs : this.duckFadeInMs, now);
     const mediaGain = this.mediaVolume * this.duckGain.value(now) * this.mediaGain.value(now), backgroundGain = this.backgroundVolume * this.backgroundGain.value(now);
     const mediaSamples = mediaFrame ? this.mediaEffects.process(mediaFrame) : null;
@@ -195,7 +195,8 @@ export class VoiceOutput {
     try {
       const entry = await this.connect(guildId); playbackSignal.throwIfAborted();
       if (startAt && Date.now() > startAt + 250) throw new Error('時報の音声接続準備が予約時刻に間に合いませんでした');
-      await entry.mixer.addSpeech(pcm, volume, playbackSignal, startAt);
+      // Hourly audio already has a global overlay; do not duck it a second time.
+      await entry.mixer.addSpeech(pcm, volume, playbackSignal, startAt, false, false);
     } catch (error) {
       // Leaving one empty VC must not abort the common chime in the other guilds.
       if (!controller.signal.aborted || signal?.aborted) throw error;

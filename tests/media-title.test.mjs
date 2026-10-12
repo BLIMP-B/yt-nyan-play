@@ -93,3 +93,9 @@ test('a slow metadata request cannot leave the whole preparation gap silent', as
   await delay(850);assert.deepEqual(spoken,['メディアを取得中です']);
   calls.started('media-id');end.resolve();unit.resolve();await task;metadata.resolve({title:'遅着'});await tick();assert.equal(spoken.length,1);
 });
+
+test('common and custom hourly PCM use global overlay without a second ordinary speech attenuation', async t => {
+  const mixer=new PcmMixer();t.after(()=>mixer.destroy());mixer.mediaVolume=.5;mixer.ducking=.35;mixer.mediaGain.fade(.15);
+  const media=Buffer.alloc(3840*25);for(let i=0;i<media.length;i+=2)media.writeInt16LE(10000,i);mixer.addMedia(media);
+  for(const startAt of [0,1000]){const done=mixer.addSpeech(Buffer.alloc(3840),1,undefined,startAt,false,false);assert.equal(mixer.takeFrame(1000).readInt16LE(0),750);assert.equal(mixer.duckGain.to,1);await done;}
+});

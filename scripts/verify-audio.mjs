@@ -21,7 +21,7 @@ const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/au
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.7', '-ar', '48000', '-ac', '2', join(directory, 'speech.wav')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=320x180:rate=25:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:v', 'libvpx', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-shortest', join(directory, 'video.webm')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
-for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=20`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
+for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=30`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', '-ac', '2', join(directory, 'scope-speech.wav')]);
 const wav = readFileSync(join(directory, 'speech.wav'));
 const synthesisTexts = [];
@@ -321,12 +321,12 @@ try {
   const scopeConfig = structuredClone(restoreScopeConfig);
   scopeConfig.bot.bindings = [{ guildId:'11111',textChannelIds:['22222'],voiceChannelId:'44444' },{ guildId:'33333',textChannelIds:['55555'],voiceChannelId:'66666' }];
   Object.assign(scopeConfig.media,{output:'both',volume:0.5,ducking:0.35,titleCallEnabled:false,duckFadeInMs:0,duckFadeOutMs:0});
-  scopeConfig.media.equalizer.enabled=false;scopeConfig.media.compressor.enabled=false;scopeConfig.speech.output='both';
+  scopeConfig.media.equalizer.enabled=false;scopeConfig.media.compressor.enabled=false;scopeConfig.speech.output='both';Object.assign(scopeConfig.hourly,{output:'both',servers:[],fadeMs:100});
   await call(page,'config:save',scopeConfig);await call(page,'voice:join','11111');await call(page,'voice:join','33333');
   const scopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video',mode:'direct',guildId:'11111'});
   const scopeB=await call(page,'media:add',{url:'http://media-fixture.test/scope-audio',mode:'direct',guildId:'33333'});
   await page.waitForFunction(async ids=>{const s=(await window.nyan.invoke('state')).value;return ids.every(id=>s.jobs.find(j=>j.id===id)?.mediaStartedAt);},[scopeA.id,scopeB.id]);
-  const scopeStats=()=>application.evaluate(()=>Object.fromEntries(['11111','33333'].map(id=>{const e=globalThis.nyanScopeVoice.connections.get(id);return[id,{...e.stats,duck:e.mixer.duckGain.to,speaking:e.mixer.speech.length,mediaVolume:e.mixer.mediaVolume}];})));
+  const scopeStats=()=>application.evaluate(()=>Object.fromEntries(['11111','33333'].map(id=>{const e=globalThis.nyanScopeVoice.connections.get(id);return[id,{...e.stats,duck:e.mixer.duckGain.to,speaking:e.mixer.speech.length,mediaVolume:e.mixer.mediaVolume,overlay:e.mixer.mediaGain.to}];})));
   let beforeScope;const scopeReadyUntil=Date.now()+6000;do{beforeScope=await scopeStats();if(['11111','33333'].every(id=>beforeScope[id].peaks.some(p=>p>500)))break;await page.waitForTimeout(80);}while(Date.now()<scopeReadyUntil);
   assert.ok(beforeScope['11111'].peaks.some(p=>p>500)&&beforeScope['33333'].peaks.some(p=>p>500),'Both guilds must receive independent media PCM: '+JSON.stringify(beforeScope));
   const scopedSpeech=await call(page,'speech:test',{text:'別サーバー読み上げ',guildId:'33333'});
@@ -345,6 +345,13 @@ try {
   const playerVolumes=await application.evaluate(async({BrowserWindow})=>Promise.all(BrowserWindow.getAllWindows().filter(w=>w!==globalThis.nyanAudioProbe.ui).map(w=>w.webContents.executeJavaScript('document.querySelector("video,audio")?.volume'))));
   assert.ok(playerVolumes.length>=2&&playerVolumes.every(v=>v===1),'Capture source must remain independent of PC gain');
   report.guildIsolation={receiverVerified:false,scope:'production-capture-and-mixers',simultaneousGuildMedia:true,discordDuckingIsolated:true,pcDuckingGlobal:true,rawCaptureUnaffected:true,sameGuildReplacementIsolated:true,sourceVolumes:playerVolumes,during: duringScope,pcGains:pcDuring.filter(c=>[scopeA.id,scopeB.id].includes(c.id)).map(c=>c.gain)};
+  const scopeHourly=call(page,'hourly:test',{});scopeHourly.catch(()=>{});
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.075)<0.01);},[nextScopeA.id,scopeB.id]);
+  await page.waitForTimeout(200);const hourlyScopeStats=await scopeStats();
+  assert.ok(Object.values(hourlyScopeStats).every(s=>s.overlay===0.15&&s.duck===1),'Hourly global attenuation must be applied once to every guild');
+  await scopeHourly;
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.5)<0.01);},[nextScopeA.id,scopeB.id]);
+  report.guildIsolation.hourlyDuckingGlobal=true;report.guildIsolation.hourlyNoDoubleDucking=true;
   for(const id of [nextScopeA.id,scopeB.id])await call(page,'job:action',{id,action:'cancel'});
   await page.waitForFunction(()=>window.nyanLocalAudio.snapshot().captureVolumes.length===0);
   await call(page,'voice:leave','11111');await call(page,'voice:leave','33333');await call(page,'config:save',restoreScopeConfig);
