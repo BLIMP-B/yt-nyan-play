@@ -307,6 +307,22 @@ try {
   await waitForJob(page, latinJob.id);
   assert.equal(synthesisTexts.at(-1), latinExpected);
   report.latinReading = { input: latinInput, synthesisText: synthesisTexts.at(-1), singleLetters: true, romaji: true, standaloneN: true, dictionaryPriority: true, urlExcluded: true, passed: true };
+  // Use production education/settings and synthesis IPC. Oversized changes
+  // must reject atomically, and a single Unicode emoji must be teachable.
+  const emojiReading = 'ちぇっく';
+  await call(page, 'reading:save', { source: '✅', reading: emojiReading });
+  const emojiSpeech = await call(page, 'speech:test', { text: '✅' }); await waitForJob(page, emojiSpeech.id);
+  assert.equal(synthesisTexts.at(-1), emojiReading);
+  const boundarySource = '語'.repeat(30), boundaryReading = 'よ'.repeat(30);
+  await call(page, 'reading:save', { source: boundarySource, reading: boundaryReading });
+  for (const data of [{ source: boundarySource + '語', reading: boundaryReading }, { source: boundarySource, reading: boundaryReading + 'よ' }]) {
+    const failed = await page.evaluate(data => window.nyan.invoke('reading:save', data), data);
+    assert.equal(failed.ok, false); assert.match(failed.error, /30文字/);
+  }
+  const boundary = (await call(page, 'state')).readings.find(r => r.source === boundarySource); assert.equal(boundary.reading, boundaryReading);
+  await call(page, 'reading:forget', { source: '✅' }); await call(page, 'reading:forget', { source: boundarySource });
+  assert.ok(!(await call(page, 'state')).readings.some(r => r.source === '✅' || r.source === boundarySource));
+  report.education = { maxCharacters: 30, unicodeEmojiEducated: true, boundaryAccepted: true, overLimitRejected: true, preservedAfterRejection: true, forgotten: true };
   const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));

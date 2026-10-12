@@ -12,7 +12,8 @@ try {
     if ($LASTEXITCODE -ne 1 -or $output -notmatch '"error"') { throw 'Native bridge must report missing user-supplied assembly as JSON' }
     $probe = Join-Path $temporary 'NativeReadingProbe.exe'
     $probeSource = Join-Path $PSScriptRoot 'native-reading-probe.cs'
-    & $compiler /nologo /target:exe /platform:x86 /main:NativeReadingProbe /reference:System.Web.Extensions.dll "/out:$probe" $source $probeSource
+    $educationSource = Join-Path $PSScriptRoot 'native-education-probe.cs'
+    & $compiler /nologo /target:exe /platform:x86 /main:NativeReadingProbe /reference:System.Web.Extensions.dll "/out:$probe" $source $probeSource $educationSource
     if ($LASTEXITCODE -ne 0) { throw 'Native reading probe compilation failed' }
     & $probe
     if ($LASTEXITCODE -ne 0) { throw 'Native reading provenance check failed' }

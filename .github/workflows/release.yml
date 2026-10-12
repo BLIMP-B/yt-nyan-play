@@ -274,6 +274,10 @@ jobs:
                 else assert.ok(t.titleStartMs <= t.mediaStartMs && t.mediaStartMs < t.titleEndMs);
               }
             }
+            if (atLeast(17)) {
+              assert.equal(audio.education.maxCharacters, 30);
+              for (const key of ['unicodeEmojiEducated', 'boundaryAccepted', 'overLimitRejected', 'preservedAfterRejection', 'forgotten']) assert.equal(audio.education[key], true);
+            }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
               assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);

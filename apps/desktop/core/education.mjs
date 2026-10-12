@@ -1,5 +1,10 @@
 import { ReadingText } from './latin-reading.mjs';
 const normalize = value => value.normalize('NFKC');
+export const EDUCATION_MAX_CHARACTERS = 30;
+export function validateEducationLength(source, reading) {
+  const size = [...source].length;
+  if (!size || size > EDUCATION_MAX_CHARACTERS || [...reading].length > EDUCATION_MAX_CHARACTERS) throw new Error('教育する語句は1～30文字、読み方は30文字以内で指定してください');
+}
 export function parseEducationCommand(text) {
   const input = String(text).trim();
   const match = input.match(/^(教育|忘却|無音)\s*[（(]([^()（）]*)[)）]$/u);

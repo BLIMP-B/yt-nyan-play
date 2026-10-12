@@ -69,3 +69,30 @@ test('old configs enable chat education by default; native provider receives fal
   assert.equal(prepareSpeech({ content: '猫猫' }, c), 'ねこ');
   assert.throws(() => normalizeConfig({ education: [{ source: 'a\tb', reading: 'x' }] }));
 });
+test('Discord can educate, mute and forget a one-character Unicode emoji and accepts 30 characters', async t => {
+  const f = setup(t);
+  await f.bot.message(f.message('教育（✅＝ういてちぇっくまーく）'));
+  await f.bot.message(f.message('✅')); assert.equal(f.spoken.at(-1).text, 'ういてちぇっくまーく');
+  await f.bot.message(f.message('無音(✅)')); assert.equal(f.store.config.education[0].reading, '');
+  await f.bot.message(f.message('忘却（✅）')); assert.equal(f.store.config.education.length, 0);
+  const source = '語'.repeat(30), reading = 'よ'.repeat(30);
+  await f.bot.message(f.message(`教育(${source}=${reading})`));
+  await f.bot.message(f.message(source)); assert.equal(f.spoken.at(-1).text, reading);
+  for (const [word, sound] of [[source + '語', reading], [source, reading + 'よ']]) {
+    await f.bot.message(f.message(`教育(${word}=${sound})`)); assert.match(f.replies.at(-1), /30文字/);
+    assert.equal(f.store.config.education.length, 1); assert.equal(f.store.config.education[0].reading, reading);
+  }
+});
+test('education counts astral Unicode characters once and preserves long imported entries for forgetting', async t => {
+  const f = setup(t), source = '😀'.repeat(30), reading = '🐈'.repeat(30);
+  await f.education.apply(parseEducationCommand(`教育(${source}=${reading})`));
+  assert.equal(f.store.config.education[0].reading, reading);
+  await assert.rejects(f.education.apply(parseEducationCommand(`教育(${source}😀=${reading})`)), /30文字/);
+  await assert.rejects(f.education.set(source, reading + '🐈'), /30文字/);
+  const oldWord = '昔'.repeat(40), oldReading = 'よ'.repeat(40);
+  f.store.updateConfig({ ...f.store.config, education: [{ source: oldWord, reading: oldReading }] });
+  const unrelated = f.store.exportConfig(); unrelated.media.volume = .3;
+  await f.education.saveConfig(unrelated, c => f.store.updateConfig(c));
+  assert.equal(f.store.config.education[0].reading, oldReading);
+  await f.education.apply(parseEducationCommand(`忘却(${oldWord})`)); assert.equal(f.store.config.education.length, 0);
+});

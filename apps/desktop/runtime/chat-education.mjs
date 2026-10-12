@@ -1,5 +1,5 @@
 import { normalizeConfig } from '../core/config.mjs';
-import { educationKey } from '../core/education.mjs';
+import { educationKey, validateEducationLength } from '../core/education.mjs';
 import { readingKey, readingSource, readingSlots, setSharedReading } from '../core/shared-readings.mjs';
 export class ChatEducation {
   constructor(store, native = () => null, nativeSync = native) {
@@ -33,6 +33,7 @@ export class ChatEducation {
     if (!source || source.length > 2000 || reading.length > 500 || /[\t\r\n]/u.test(source + reading) || !['Study', 'Mute', 'Forget'].includes(type)) throw new Error('教育する単語・読み方を確認してください');
     const existing = readingSlots(config).find(e => readingKey(e.source) === readingKey(source));
     if (!settings && type === 'Study' && readingKey(source) === educationKey(reading)) type = 'Forget';
+    if (type !== 'Forget') validateEducationLength(source, reading);
     let processor = override || (existing?.native ? this.nativeSync() : this.native());
     if (existing?.native && !processor) throw new Error('取り込んだ棒読みちゃんの教育辞書を接続してから読み方を変更してください');
     const nativeSlot = processor?.lookup ? await processor.lookup(source, signal) : null;
@@ -42,13 +43,14 @@ export class ChatEducation {
     const syncNative = processor && (type === 'Forget'
       ? nativeSlot?.registered || nativeSlot === null && (!existing || !existing.metadataOnly)
       : existing?.native || nativeSlot?.registered || !metadataOnly);
-    if (!settings && !syncNative && type !== 'Forget' && (source.length < 2 || reading.length > 15)) throw new Error('教育は単語2文字以上、読み方15文字以内で指定してください');
     if (type === 'Forget' && !existing && !nativeSlot?.registered && !syncNative) throw new Error(`${source}は教育辞書に登録されていません`);
     let response;
     if (syncNative) {
       response = await processor.learn(type, type === 'Study' ? `${source}=${reading}` : source, signal);
       const previous = nativeSlot || (existing?.native ? { registered: true, source: existing.source, reading: existing.reading } : null);
-      if (previous?.registered) undo.push(() => processor.learn(previous.reading ? 'Study' : 'Mute', previous.reading ? `${previous.source || source}=${previous.reading}` : previous.source || source));
+      // Restoring an imported value must not apply the new-registration limit.
+      const restore = processor.restore?.bind(processor) || processor.learn.bind(processor);
+      if (previous?.registered) undo.push(() => restore(previous.reading ? 'Study' : 'Mute', previous.reading ? `${previous.source || source}=${previous.reading}` : previous.source || source));
       else if (previous && !response.forgot) undo.push(() => processor.learn('Forget', response.source || source));
       source = response.source || source; reading = response.reading ?? reading;
       if (response.forgot) type = 'Forget';

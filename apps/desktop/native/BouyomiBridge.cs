@@ -90,7 +90,18 @@ public static class BouyomiBridge {
         }
         return new Dictionary<string, object> { { "text", output }, { "parts", Invoke(processor, "SplitToShortText", value) }, { "tags", generated }, { "readings", new List<string>(readings) } };
     }
-    static object Learn(string type, string args, XmlDocument settings) {
+    public static int EducationCharacterCount(string text) {
+        int count = 0;
+        for (int i = 0; i < text.Length; i++, count++) if (Char.IsHighSurrogate(text[i]) && i + 1 < text.Length && Char.IsLowSurrogate(text[i + 1])) i++;
+        return count;
+    }
+    public static void ValidateEducationLength(string source, string reading, bool forget, bool restore) {
+        // Keep imported dictionary values and rollback recoverable. Original
+        // dictionary buckets still use UTF-16 length, not this Unicode count.
+        int size = EducationCharacterCount(source);
+        if (!forget && !restore && (size < 1 || size > 30 || EducationCharacterCount(reading) > 30)) throw new ArgumentException("教育する語句は1～30文字、読み方は30文字以内で指定してください");
+    }
+    static object Learn(string type, string args, XmlDocument settings, bool restore) {
         object rules = Field(processor, "ReplaceStudies"); string source, reading = "";
         if (type != "Study" && type != "Forget" && type != "Mute") throw new ArgumentException("教育の操作を確認してください");
         bool forget = type == "Forget", mute = type == "Mute";
@@ -103,8 +114,8 @@ public static class BouyomiBridge {
         source = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(source)).ToString();
         reading = Invoke(processor, "ConvertToUnifiedText", new StringBuilder(reading)).ToString();
         if (source.Length == 0 || source.IndexOfAny(new char[] { '\t', '\r', '\n' }) >= 0 || reading.IndexOfAny(new char[] { '\t', '\r', '\n' }) >= 0) throw new ArgumentException("教育する単語を確認してください");
-        if (!forget && (source.Length < Int32.Parse(Setting(settings, "StudySrcMin", "2")) || reading.Length > Int32.Parse(Setting(settings, "StudyDstMax", "15")))) throw new ArgumentException("教育の文字数制限を確認してください");
-        if (!mute && source == reading) forget = true;
+        if (!restore && !mute && source == reading) forget = true;
+        ValidateEducationLength(source, reading, forget, restore);
         string path = Path.Combine(directory, "ReplaceStudy.dic");
         if (File.Exists(path) && !File.Exists(path + ".before-damare")) File.Copy(path, path + ".before-damare", false);
         if (forget) Invoke(rules, "RemoveRule", source.Length, source);
@@ -143,7 +154,7 @@ public static class BouyomiBridge {
             using (XmlReader reader = XmlReader.Create(Path.Combine(directory, "BouyomiChan.setting"), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit })) settings.Load(reader);
             Load();
             object result;
-            if ((string)request["operation"] == "learn") result = Learn((string)request["type"], (string)request["args"], settings);
+            if ((string)request["operation"] == "learn" || (string)request["operation"] == "restore") result = Learn((string)request["type"], (string)request["args"], settings, (string)request["operation"] == "restore");
             else if ((string)request["operation"] == "lookup") result = Lookup((string)request["source"]);
             else {
                 string mode = (string)request["tagMode"];
