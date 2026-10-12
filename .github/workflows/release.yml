@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - releases/current.json
-      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -41,7 +40,7 @@ jobs:
           assert.ok(typeof selection.title === 'string' && selection.title.length < 200 && !/[\r\n]/.test(selection.title));
           assert.match(selection.notes, /^releases\/notes-v\d+\.\d+\.\d+\.md$/);
           const notes = join(process.env.RUNNER_TEMP, 'nyan-release-notes.md');
-          writeFileSync(notes, readFileSync(selection.notes));
+          writeFileSync(notes, readFileSync(selection.notes) + `\n検証対象ソース: ${selection.sourceSha}\n\n[Windows/Linuxビルドと検証](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${selection.windowsRunId})\n`);
           for (const [name, value] of Object.entries({ tag: selection.tag, sha: selection.sourceSha, run: selection.windowsRunId, title: selection.title, notes })) {
             appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
           }
@@ -109,6 +108,8 @@ jobs:
             unzip -q "$ARCHIVE" -d "verification/$KEY"
           done
       - name: Check voice timing, real Android, local SLM and playback reports
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
@@ -239,7 +240,27 @@ jobs:
           assert.equal(audio.latinReading.urlExcluded, true);
           assert.equal(audio.latinReading.synthesisText, 'エー ビー エヌ エヌ か にゃん CAT URL');
           const effects = audio.mediaEffects;
-          assert.equal(effects.bypassByDefault, true);
+          const version = process.env.RELEASE_TAG.slice(1).split('.').map(Number);
+          const atLeast = patch => version[0] > 0 || version[1] > 5 || version[1] === 5 && version[2] >= patch;
+          const modernRelease = atLeast(13);
+          if (modernRelease) {
+            assert.equal(effects.discordPresetByDefault, 'discord1');
+            assert.equal(effects.discordPresetsSelectable, true);
+            assert.equal(audio.titleCalls.enabledByDefault, true);
+            assert.equal(audio.titleCalls.defaultMediaRatio, 0.8);
+            assert.equal(audio.titleCalls.speedRatio, 0.85);
+            assert.equal(audio.titleCalls.speedSettingSaved, true);
+            assert.equal(audio.titleCalls.synthesisSpeedVerified, true);
+            assert.equal(audio.titleCalls.pageTitleRead, true);
+            assert.ok(audio.titleCalls.completed > 0);
+            assert.equal(audio.titleCalls.receiverVerified, false);
+            for (const key of ['simultaneousGuildMedia', 'discordDuckingIsolated', 'pcDuckingGlobal', 'rawCaptureUnaffected', 'sameGuildReplacementIsolated']) assert.equal(audio.guildIsolation[key], true);
+            assert.equal(audio.guildIsolation.receiverVerified, false);
+            if (atLeast(14)) {
+              assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
+              assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);
+            }
+          } else assert.equal(effects.bypassByDefault, true);
           assert.equal(effects.eqPresetApplied, true);
           assert.equal(effects.compressorPresetApplied, true);
           assert.equal(effects.customSaved, true);
