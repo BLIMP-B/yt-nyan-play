@@ -6,7 +6,7 @@ export function messageTitle(value) {
   return titleText(String(value || '').replace(/(?:^|\s)(?:再生|無限|直接)(?=\s|$)/gu, ' ')
     .replace(/(?:^|\s)(?:mode|startSeconds|start|t|loop|version|type)\s*[=＝:]\s*[^\s]+/giu, ' '));
 }
-export function titleChoice(payload, metadata = {}, pending = false) {
+export function titleChoice(payload, metadata = {}) {
   const given = titleText(payload.title);
   let host; try { host = new URL(payload.url).hostname; } catch {}
   if (given && given !== host) return { text: given, source: 'message' };
@@ -14,8 +14,10 @@ export function titleChoice(payload, metadata = {}, pending = false) {
   const generic = new Set([host, 'YouTube', 'ニコニコ動画', 'X', 'Instagram', 'TikTok', 'Facebook', 'Threads', 'Bluesky']);
   const candidate = titleText(metadata.title), title = generic.has(candidate) ? '' : candidate, body = titleText(metadata.body), author = titleText(metadata.author);
   if (youtubeOrNico && title) return { text: title, source: 'title' };
-  if (!youtubeOrNico && (body || title)) return { text: body || title, source: body ? 'body' : 'title' };
-  if (!pending && (author || titleText(payload.source))) return { text: author || titleText(payload.source), source: 'author' };
+  if (body) return { text: body, source: 'body' };
+  if (title) return { text: title, source: 'title' };
+  // Author identities must come from the linked resource, not Discord provenance.
+  if (author) return { text: author, source: 'author' };
   return { text: 'メディアを取得中です', source: 'pending' };
 }
 const entities = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ' };

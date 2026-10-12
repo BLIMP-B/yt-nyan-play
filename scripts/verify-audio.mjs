@@ -67,6 +67,9 @@ VoiceOutput.prototype.connect = async function(guildId, ...args) {
   this.syncMonitor(); this.changed(); return this.connections.get(guildId);
 };
 VoiceOutput.prototype.disconnect = function(guildId, ...args) { const result = originalDisconnect.call(this, guildId, ...args); if (guildId === '99998' && this.monitorFixtureClient) { this.getClient = this.monitorFixtureClient; this.monitorFixtureClient = null; } return result; };
+import { MediaTitleCalls } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/core/media-title-calls.mjs')).href)};
+const titlePlay = MediaTitleCalls.prototype.play;
+MediaTitleCalls.prototype.play = function(job, ...args) { if (job.payload.url.startsWith('http://media-fixture.test/title-')) job.payload.source = '送信者由来の名前'; return titlePlay.call(this, job, ...args); };
 import { MediaStreamResolver } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href)};
 import { HourlyHistory } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/hourly-history.mjs')).href)};
 const historyRows = Array.from({length:5000},(_,i)=>({id:String(10000+i),guildId:'11111',channelId:'22222',createdTimestamp:i+1,content:'猫が時計を眺める。森の太陽は月の料理を運ぶ。'.repeat(70)}));
@@ -248,12 +251,19 @@ try {
       if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
     });
-    await mediaSession.protocol.handle('http', request => {
+    await mediaSession.protocol.handle('http', async request => {
       if (new URL(request.url).hostname !== 'media-fixture.test') return net.fetch(request, { bypassCustomProtocolHandlers: true });
       const file = new URL(request.url).pathname;
       if (file === '/video.webm') return new Response(new Uint8Array(video), { headers: { 'Content-Type': 'video/webm' } });
       if (file === '/scope-video.ogg' || file === '/scope-audio.ogg') return new Response(new Uint8Array(file.includes('video') ? scopeVideo : scopeAudio), { headers: { 'Content-Type': 'audio/ogg' } });
       if (file === '/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
+      if (file === '/title-unknown' || file === '/title-author') {
+        // Metadata resolves early; actual page loading stays slow enough to
+        // expose a wrong fallback to Discord sender identity after that result.
+        if (file === '/title-unknown' && (request.headers.get('accept') || '').includes('text/html')) await new Promise(resolve => setTimeout(resolve, 5000));
+        const author = file === '/title-author' ? '<meta name="author" content="リンク先の投稿者">' : '';
+        return new Response(`<!doctype html>${author}<video muted controls src="/video.webm"></video>`, { headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' } });
+      }
       const tag = file.includes('audio') ? 'audio' : 'video', source = file.includes('scope') ? (tag === 'audio' ? '/scope-audio.ogg' : '/scope-video.ogg') : tag === 'audio' ? '/audio.ogg' : '/video.webm';
       const replace = file.includes('replace') ? `<script>document.querySelector('${tag}').addEventListener('ended', () => { const next = document.createElement('video'); next.controls = true; next.autoplay = true; next.src = '/video.webm'; document.querySelector('${tag}').replaceWith(next); });</script>` : '';
       return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>${replace}`, { headers: { 'Content-Type': 'text/html' } });
@@ -305,11 +315,24 @@ try {
     report.media.push({ kind, status: 'completed', pcPlayback: true, ...metrics });
     await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   }
+  const titleIdentityJobs = [];
+  for (const kind of ['title-author', 'title-unknown']) {
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: 'direct' });
+    await waitForJob(page, job.id);
+    const savedJob = (await call(page, 'state')).jobs.find(j => j.id === job.id);
+    assert.equal(savedJob.payload.source, '送信者由来の名前', 'The provenance fixture must include a Discord sender');
+    titleIdentityJobs.push(savedJob.id);
+  }
   const titleJobs = (await call(page, 'state')).jobs.filter(j => j.kind === 'speech' && j.payload.titleCall && j.status === 'completed');
   assert.ok(titleJobs.some(j => j.payload.text === 'メディア音声試験'), 'The playback page title did not reach the production speech path');
   const titleSynthesis = synthesisSettings.filter(query => query.verificationText === 'メディア音声試験');
   assert.ok(titleSynthesis.length > 0 && titleSynthesis.every(query => Math.abs(query.speedScale - 0.85) < 1e-6), 'Title speed did not reach VOICEVOX');
-  report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
+  const authorRead = titleJobs.some(j => j.payload.text === 'リンク先の投稿者');
+  const unknownRepeats = titleJobs.filter(j => j.payload.text === 'メディアを取得中です').length;
+  assert.equal(authorRead, true, 'Resource author metadata did not reach speech');
+  assert.ok(unknownRepeats >= 2, 'Missing resource metadata must keep the preparation announcement repeating');
+  assert.ok(!synthesisTexts.includes('送信者由来の名前'), 'Discord sender identity leaked into title speech');
+  report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, resourceAuthorRead: authorRead, discordSenderIgnored: true, unknownMetadataRepeats: unknownRepeats, titleIdentityJobs: titleIdentityJobs.length, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
   await historyTask;
   report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
   assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');

@@ -257,6 +257,12 @@ jobs:
             assert.equal(audio.titleCalls.receiverVerified, false);
             for (const key of ['simultaneousGuildMedia', 'discordDuckingIsolated', 'pcDuckingGlobal', 'rawCaptureUnaffected', 'sameGuildReplacementIsolated']) assert.equal(audio.guildIsolation[key], true);
             assert.equal(audio.guildIsolation.receiverVerified, false);
+            if (atLeast(15)) {
+              assert.equal(audio.titleCalls.resourceAuthorRead, true);
+              assert.equal(audio.titleCalls.discordSenderIgnored, true);
+              assert.ok(audio.titleCalls.unknownMetadataRepeats >= 2);
+              assert.equal(audio.titleCalls.titleIdentityJobs, 2);
+            }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
               assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);

@@ -21,7 +21,11 @@ test('caption text excludes URLs and controls while keeping extension, schema an
   assert.equal(titleChoice({...p,title:'明示した本文'},{title:'サイトの題名'}).source,'message');
   assert.equal(titleChoice({url:'https://x.com/user/status/123',source:'Discord利用者'},{body:'投稿の本文',author:'投稿者'}).source,'body');
   assert.equal(titleChoice({url:p.url},{author:'投稿者'}).text,'投稿者');
-  assert.equal(titleChoice({url:p.url,source:'Discord利用者'}).text,'Discord利用者');
+  assert.equal(titleChoice({url:p.url,source:'Discord利用者'}).text,'メディアを取得中です');
+  assert.equal(titleChoice({url:p.url,source:'Discord利用者'},{author:'リンク先の投稿者'}).text,'リンク先の投稿者');
+  assert.equal(titleChoice({url:p.url,source:'同名の投稿者'},{author:'同名の投稿者'}).source,'author');
+  assert.equal(titleChoice({url:p.url,source:'Discord利用者'},{body:'リンク先の本文'}).source,'body');
+  assert.equal(titleChoice({url:'https://www.nicovideo.jp/watch/sm1',source:'Discord利用者'},{body:'動画の説明文'}).text,'動画の説明文');
   assert.equal(titleChoice({url:p.url}).text,'メディアを取得中です');
   assert.equal(titleChoice({url:p.url},{title:'YouTube'}).source,'pending');
 });
@@ -53,7 +57,7 @@ test('metadata starts with the announcement and supplied title speech does not h
 test('unknown media repeats only until actual playback starts and finishes the current unit', async () => {
   const config=normalizeConfig(), end=deferred(), units=[];
   const calls=new MediaTitleCalls(()=>config,{metadata:async()=>({}),speak:async p=>{if(!p.titleCall)return;const unit=deferred();units.push({text:p.text,...unit});return unit.promise;}});
-  const task=calls.play(job(),new AbortController().signal,()=>end.promise);await tick();assert.equal(units[0].text,'メディアを取得中です');
+  const task=calls.play(job({source:'Discord送信者'}),new AbortController().signal,()=>end.promise);await tick();assert.equal(units[0].text,'メディアを取得中です');
   units[0].resolve();await delay(120);assert.equal(units.length,2);calls.started('media-id');end.resolve();
   let finished=false;task.then(()=>{finished=true;});await tick();assert.equal(finished,false);units[1].resolve();await task;assert.equal(units.length,2);
 });
@@ -98,4 +102,13 @@ test('common and custom hourly PCM use global overlay without a second ordinary 
   const mixer=new PcmMixer();t.after(()=>mixer.destroy());mixer.mediaVolume=.5;mixer.ducking=.35;mixer.mediaGain.fade(.15);
   const media=Buffer.alloc(3840*25);for(let i=0;i<media.length;i+=2)media.writeInt16LE(10000,i);mixer.addMedia(media);
   for(const startAt of [0,1000]){const done=mixer.addSpeech(Buffer.alloc(3840),1,undefined,startAt,false,false);assert.equal(mixer.takeFrame(1000).readInt16LE(0),750);assert.equal(mixer.duckGain.to,1);await done;}
+});
+
+test('link author discovered during pending metadata wakes title speech without using the Discord sender', async () => {
+  const config=normalizeConfig(), lookup=deferred(), end=deferred(), spoken=[];
+  const calls=new MediaTitleCalls(()=>config,{metadata:()=>lookup.promise,speak:async p=>spoken.push(p.text)});
+  const task=calls.play(job({mode:'direct',source:'Discord送信者'}),new AbortController().signal,()=>end.promise);await tick();
+  assert.deepEqual(spoken,[]);calls.update('media-id',{author:'リンク先のアカウント'});await tick();
+  assert.deepEqual(spoken,['リンク先のアカウント']);calls.started('media-id');end.resolve();await task;
+  lookup.resolve({});await tick();assert.deepEqual(spoken,['リンク先のアカウント']);
 });
