@@ -415,6 +415,7 @@ try {
   attributionConfig.bot.bindings = [{ guildId: '71111', voiceChannelId: '73333', textChannelIds: ['72222', '74444'], announceJoinLeave: true }];
   Object.assign(attributionConfig.bot, { autoJoin: false, autoLeave: false, masterTextChannelId: '75555' });
   attributionConfig.speech.speakerSuffixDisabledChannelIds = [];
+  attributionConfig.dictionary.push({ id: 'speaker-bracket-filter', source: '[（(][^）)]*[）)]', replacement: '', regex: true, scope: 'global' });
   await call(page, 'config:save', attributionConfig);
   // Initialize form fields from the fixture before testing automatic checkbox saves.
   await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
@@ -463,7 +464,7 @@ try {
   assert.equal(await emitAttribution('忘却後'), '忘却後、ねこの発言');
   assert.equal(await emitAttribution('名前なし', { nickname: '', username: 'neko' }), '名前なし、ねこの発言');
   assert.equal(await emitAttribution('取得不可', { nickname: '', username: '' }), '取得不可、76666の発言');
-  report.speakerAttribution = { passed: true, channelSwitchSaved: true, channelIsolation: true, nicknamePriority: true, usernameFallback: true, idFallback: true, education: true, mute: true, forget: true, voiceEvents: events, synthesisVerified: true, receiverVerified: false };
+  report.speakerAttribution = { passed: true, bracketSuppressionPreservesName: true, channelSwitchSaved: true, channelIsolation: true, nicknamePriority: true, usernameFallback: true, idFallback: true, education: true, mute: true, forget: true, voiceEvents: events, synthesisVerified: true, receiverVerified: false };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.

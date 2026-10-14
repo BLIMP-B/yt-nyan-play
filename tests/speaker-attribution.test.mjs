@@ -57,7 +57,7 @@ test('unaddressed titles and system previews do not acquire a speaker suffix', (
 test('native preprocessing applies imported education to the suffix after the original body limit', async () => {
   const c = normalizeConfig({ speech: { bouyomiPreprocess: true, bouyomiUseDefaults: false }, education: [{ source: '猫', reading: 'ねこさん', native: true }] }), m = message();
   const text = prepareSpeech({ ...m, content: 'あいうえお' }, c), suffix = prepareSpeakerSuffix(m, c), calls = [], spoken = [];
-  assert.equal(text, 'あいうえお、（猫）の発言');
+  assert.equal(text, 'あいうえお、猫の発言');
   const processor = { process: async (input, mode, _signal, enabled) => {
     calls.push({ input, mode, enabled });
     return { text: applyEducation(new ReadingText(input), c.education).text, tags: [], readings: ['ねこさん'] };
@@ -65,10 +65,40 @@ test('native preprocessing applies imported education to the suffix after the or
   await runNativeSpeech({ text, speakerSuffix: suffix, settings: c.speech, original: { TextLengthEnable: 'true', TextLengthNum: '3', TextLengthAdd: '以下略', BroadcasterMode: 'false' }, pendingCharacters: 0, processor,
     output: async (value, _settings, _signal, readings) => spoken.push(prepareNativeText(value, c, m, readings)),
   }, new AbortController().signal);
-  assert.deepEqual(calls, [{ input: 'あいう以下略、（猫）の発言', mode: 'original', enabled: true }]);
+  assert.deepEqual(calls, [{ input: 'あいう以下略、猫の発言', mode: 'original', enabled: true }]);
   assert.deepEqual(spoken, ['あいう以下略、ねこさんの発言']);
 });
 test('external Bouyomi input includes attribution for its native dictionary processing', () => {
   const c = normalizeConfig({ speech: { provider: 'bouyomi', bouyomiNativeRules: true } });
-  assert.equal(prepareSpeech(message(), c), '本文、（猫）の発言');
+  assert.equal(prepareSpeech(message(), c), '本文、猫の発言');
+});
+
+test('bracket suppression dictionaries preserve the speaker while retaining their configured behavior', () => {
+  const c = normalizeConfig({ dictionary: [{ source: '[（(][^）)]*[）)]', replacement: '', regex: true, scope: 'global' }] });
+  assert.equal(prepareSpeech(message(), c), '本文、猫の発言');
+  assert.equal(prepareSpeech({ ...message(), content: '本文（省略する注釈）' }, c), '本文、猫の発言');
+  c.education = [{ source: '猫', reading: 'ねこさん' }];
+  assert.equal(prepareSpeech(message(), c), '本文、ねこさんの発言');
+  c.education[0].reading = '';
+  assert.equal(prepareSpeech(message(), c), '本文、の発言');
+  c.education = [];
+  assert.equal(prepareSpeech(message(), c), '本文、猫の発言');
+});
+
+test('native bracket suppression runs before education without erasing the attributed speaker', async () => {
+  const c = normalizeConfig({ speech: { bouyomiPreprocess: true, bouyomiUseDefaults: false }, education: [{ source: '猫', reading: 'ねこさん', native: true }] });
+  const m = { ...message(), content: 'あいうえお' }, spoken = [];
+  const processor = { process: async (input, _mode, _signal, educationEnabled) => {
+    // Imported RegexPre/Word rules can erase complete parenthesized contents.
+    const filtered = new ReadingText(input.normalize('NFKC').replace(/\([^)]*\)/gu, ''));
+    return { text: (educationEnabled ? applyEducation(filtered, c.education) : filtered).text, tags: [], readings: c.education.map(e => e.reading) };
+  } };
+  for (const reading of ['ねこさん', '', null]) {
+    c.education = reading === null ? [] : [{ source: '猫', reading, native: true }];
+    await runNativeSpeech({ text: prepareSpeech(m, c), speakerSuffix: prepareSpeakerSuffix(m, c), settings: c.speech,
+      original: { TextLengthEnable: 'true', TextLengthNum: '3', TextLengthAdd: '以下略', BroadcasterMode: 'false' }, pendingCharacters: 0, processor,
+      output: async (value, _settings, _signal, readings) => spoken.push(prepareNativeText(value, c, m, readings)),
+    }, new AbortController().signal);
+  }
+  assert.deepEqual(spoken, ['あいう以下略、ねこさんの発言', 'あいう以下略、の発言', 'あいう以下略、猫の発言']);
 });

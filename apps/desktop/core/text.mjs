@@ -43,7 +43,9 @@ export function speakerName(message) {
 export function speakerSuffix(message, config) {
   if (!message.channelId || config.speech.speakerSuffixDisabledChannelIds?.includes(message.channelId)) return '';
   const name = speakerName(message);
-  return name ? `、（${name}）の発言` : '';
+  // Parentheses are only a UI placeholder. Imported preprocessing/dictionary
+  // rules may erase their complete contents, including the selected name.
+  return name ? `、${name}の発言` : '';
 }
 function fallbackText(content, message, config) {
   const s = config.speech;
