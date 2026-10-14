@@ -349,6 +349,8 @@ try {
   Object.assign(attributionConfig.bot, { autoJoin: false, autoLeave: false, masterTextChannelId: '75555' });
   attributionConfig.speech.speakerSuffixDisabledChannelIds = [];
   await call(page, 'config:save', attributionConfig);
+  // Initialize form fields from the fixture before testing automatic checkbox saves.
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
   await page.locator('[data-view="connections"]').click();
   const suffixControl = channel => page.locator('[data-speaker-channel="' + channel + '"]');
   await suffixControl('72222').waitFor();
