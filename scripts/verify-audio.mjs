@@ -326,6 +326,73 @@ try {
   await call(page, 'reading:forget', { source: '✅' }); await call(page, 'reading:forget', { source: boundarySource });
   assert.ok(!(await call(page, 'state')).readings.some(r => r.source === '✅' || r.source === boundarySource));
   report.education = { maxCharacters: 30, unicodeEmojiEducated: true, boundaryAccepted: true, overLimitRejected: true, preservedAfterRejection: true, forgotten: true };
+  const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
+  assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
+  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  // Validate the full production MediaBrowser with both VIDEO and AUDIO HTML players.
+  for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: kind.endsWith('full') || kind === 'audio' ? 'full' : 'direct' });
+    await application.evaluate(async ({ BrowserWindow }, kind) => {
+      const probe = globalThis.nyanAudioProbe;
+      const until = Date.now() + 8000;
+      while (Date.now() < until) {
+        const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
+        if (target) { probe.target = probe.ui; probe.active = kind; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      throw new Error('Playback window did not open');
+    }, kind);
+    await waitForJob(page, job.id);
+    const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
+    assert.ok(metrics?.mediaToneSamples > 4800, `${kind} audio did not reach PC output (announcement excluded): ${JSON.stringify(metrics)}`);
+    report.media.push({ kind, status: 'completed', pcPlayback: true, ...metrics });
+    await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
+  }
+  const titleIdentityJobs = [];
+  for (const kind of ['title-author', 'title-unknown']) {
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: 'direct' });
+    await waitForJob(page, job.id);
+    const savedJob = (await call(page, 'state')).jobs.find(j => j.id === job.id);
+    assert.equal(savedJob.payload.source, '送信者由来の名前', 'The provenance fixture must include a Discord sender');
+    titleIdentityJobs.push(savedJob.id);
+  }
+  const titleJobs = (await call(page, 'state')).jobs.filter(j => j.kind === 'speech' && j.payload.titleCall && j.status === 'completed');
+  assert.ok(titleJobs.some(j => j.payload.text === 'メディア音声試験'), 'The playback page title did not reach the production speech path');
+  const titleSynthesis = synthesisSettings.filter(query => query.verificationText === 'メディア音声試験');
+  assert.ok(titleSynthesis.length > 0 && titleSynthesis.every(query => Math.abs(query.speedScale - 0.85) < 1e-6), 'Title speed did not reach VOICEVOX');
+  const authorRead = titleJobs.some(j => j.payload.text === 'リンク先の投稿者');
+  const unknownRepeats = titleJobs.filter(j => j.payload.text === 'メディアを取得中です').length;
+  assert.equal(authorRead, true, 'Resource author metadata did not reach speech');
+  assert.ok(unknownRepeats >= 2, 'Missing resource metadata must keep the preparation announcement repeating');
+  assert.ok(!synthesisTexts.includes('送信者由来の名前'), 'Discord sender identity leaked into title speech');
+  report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, resourceAuthorRead: authorRead, discordSenderIgnored: true, unknownMetadataRepeats: unknownRepeats, titleIdentityJobs: titleIdentityJobs.length, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
+  // Hold extraction and title audio independently through the production
+  // browser/capture path. Playback must not wait for the spoken title to end.
+  report.titleCalls.preparationTimings = [];
+  for (const [kind, mode] of [['title-slow-preparation', 'full'], ['title-long-overlap', 'preview'], ['title-direct-overlap', 'direct']]) {
+    const before = new Set((await call(page, 'state')).jobs.map(j => j.id));
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode });
+    const state = await waitForJob(page, job.id, 20000), saved = state.jobs.find(j => j.id === job.id);
+    const speech = state.jobs.filter(j => !before.has(j.id) && j.kind === 'speech');
+    const title = speech.find(j => j.payload.titleCall), announcement = speech.find(j => !j.payload.titleCall);
+    assert.equal(title?.status, 'completed', 'Title speech did not complete');
+    if (mode === 'direct') assert.equal(announcement, undefined);
+    else { assert.equal(announcement?.status, 'completed'); assert.ok(Date.parse(announcement.finishedAt) <= Date.parse(saved.mediaPreparingAt)); }
+    const timing = await application.evaluate((_electron, url) => globalThis.nyanTitleTimings.find(t => t.url === url), saved.payload.url);
+    assert.ok(timing?.extractionFinishedAt, 'The held extraction did not finish');
+    const preparedAt = Date.parse(saved.mediaPreparingAt), titleStartedAt = Date.parse(title.startedAt), titleFinishedAt = Date.parse(title.finishedAt), mediaStartedAt = Date.parse(saved.mediaStartedAt);
+    assert.ok(preparedAt <= timing.extractionStartedAt && timing.extractionStartedAt <= titleStartedAt, 'Media extraction started after title speech');
+    if (kind === 'title-slow-preparation') assert.ok(titleFinishedAt < timing.extractionFinishedAt, 'Title did not play during slow extraction');
+    else assert.ok(titleStartedAt <= mediaStartedAt && mediaStartedAt < titleFinishedAt, 'Playback waited for long title speech to finish');
+    report.titleCalls.preparationTimings.push({ kind, mode, extractionStartMs: timing.extractionStartedAt - preparedAt, extractionEndMs: timing.extractionFinishedAt - preparedAt, titleStartMs: titleStartedAt - preparedAt, titleEndMs: titleFinishedAt - preparedAt, mediaStartMs: mediaStartedAt - preparedAt });
+  }
+  report.titleCalls.extractionConcurrent = true;
+  report.titleCalls.playbackDoesNotWaitForTitle = true;
+  await historyTask;
+  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
+  assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
+  assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
+  assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
   // Inject Discord events through the production Bot, queue, UI and synthesis.
   // This verifies content and PC routing; it does not claim a live VC receiver.
   const attributionBase = (await call(page, 'state')).config;
@@ -399,73 +466,6 @@ try {
   report.speakerAttribution = { passed: true, channelSwitchSaved: true, channelIsolation: true, nicknamePriority: true, usernameFallback: true, idFallback: true, education: true, mute: true, forget: true, voiceEvents: events, synthesisVerified: true, receiverVerified: false };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
   await call(page, 'config:save', attributionBase);
-  const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
-  assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
-  await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
-  // Validate the full production MediaBrowser with both VIDEO and AUDIO HTML players.
-  for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
-    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: kind.endsWith('full') || kind === 'audio' ? 'full' : 'direct' });
-    await application.evaluate(async ({ BrowserWindow }, kind) => {
-      const probe = globalThis.nyanAudioProbe;
-      const until = Date.now() + 8000;
-      while (Date.now() < until) {
-        const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
-        if (target) { probe.target = probe.ui; probe.active = kind; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
-        await new Promise(resolve => setTimeout(resolve, 20));
-      }
-      throw new Error('Playback window did not open');
-    }, kind);
-    await waitForJob(page, job.id);
-    const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
-    assert.ok(metrics?.mediaToneSamples > 4800, `${kind} audio did not reach PC output (announcement excluded): ${JSON.stringify(metrics)}`);
-    report.media.push({ kind, status: 'completed', pcPlayback: true, ...metrics });
-    await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
-  }
-  const titleIdentityJobs = [];
-  for (const kind of ['title-author', 'title-unknown']) {
-    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: 'direct' });
-    await waitForJob(page, job.id);
-    const savedJob = (await call(page, 'state')).jobs.find(j => j.id === job.id);
-    assert.equal(savedJob.payload.source, '送信者由来の名前', 'The provenance fixture must include a Discord sender');
-    titleIdentityJobs.push(savedJob.id);
-  }
-  const titleJobs = (await call(page, 'state')).jobs.filter(j => j.kind === 'speech' && j.payload.titleCall && j.status === 'completed');
-  assert.ok(titleJobs.some(j => j.payload.text === 'メディア音声試験'), 'The playback page title did not reach the production speech path');
-  const titleSynthesis = synthesisSettings.filter(query => query.verificationText === 'メディア音声試験');
-  assert.ok(titleSynthesis.length > 0 && titleSynthesis.every(query => Math.abs(query.speedScale - 0.85) < 1e-6), 'Title speed did not reach VOICEVOX');
-  const authorRead = titleJobs.some(j => j.payload.text === 'リンク先の投稿者');
-  const unknownRepeats = titleJobs.filter(j => j.payload.text === 'メディアを取得中です').length;
-  assert.equal(authorRead, true, 'Resource author metadata did not reach speech');
-  assert.ok(unknownRepeats >= 2, 'Missing resource metadata must keep the preparation announcement repeating');
-  assert.ok(!synthesisTexts.includes('送信者由来の名前'), 'Discord sender identity leaked into title speech');
-  report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, resourceAuthorRead: authorRead, discordSenderIgnored: true, unknownMetadataRepeats: unknownRepeats, titleIdentityJobs: titleIdentityJobs.length, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
-  // Hold extraction and title audio independently through the production
-  // browser/capture path. Playback must not wait for the spoken title to end.
-  report.titleCalls.preparationTimings = [];
-  for (const [kind, mode] of [['title-slow-preparation', 'full'], ['title-long-overlap', 'preview'], ['title-direct-overlap', 'direct']]) {
-    const before = new Set((await call(page, 'state')).jobs.map(j => j.id));
-    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode });
-    const state = await waitForJob(page, job.id, 20000), saved = state.jobs.find(j => j.id === job.id);
-    const speech = state.jobs.filter(j => !before.has(j.id) && j.kind === 'speech');
-    const title = speech.find(j => j.payload.titleCall), announcement = speech.find(j => !j.payload.titleCall);
-    assert.equal(title?.status, 'completed', 'Title speech did not complete');
-    if (mode === 'direct') assert.equal(announcement, undefined);
-    else { assert.equal(announcement?.status, 'completed'); assert.ok(Date.parse(announcement.finishedAt) <= Date.parse(saved.mediaPreparingAt)); }
-    const timing = await application.evaluate((_electron, url) => globalThis.nyanTitleTimings.find(t => t.url === url), saved.payload.url);
-    assert.ok(timing?.extractionFinishedAt, 'The held extraction did not finish');
-    const preparedAt = Date.parse(saved.mediaPreparingAt), titleStartedAt = Date.parse(title.startedAt), titleFinishedAt = Date.parse(title.finishedAt), mediaStartedAt = Date.parse(saved.mediaStartedAt);
-    assert.ok(preparedAt <= timing.extractionStartedAt && timing.extractionStartedAt <= titleStartedAt, 'Media extraction started after title speech');
-    if (kind === 'title-slow-preparation') assert.ok(titleFinishedAt < timing.extractionFinishedAt, 'Title did not play during slow extraction');
-    else assert.ok(titleStartedAt <= mediaStartedAt && mediaStartedAt < titleFinishedAt, 'Playback waited for long title speech to finish');
-    report.titleCalls.preparationTimings.push({ kind, mode, extractionStartMs: timing.extractionStartedAt - preparedAt, extractionEndMs: timing.extractionFinishedAt - preparedAt, titleStartMs: titleStartedAt - preparedAt, titleEndMs: titleFinishedAt - preparedAt, mediaStartMs: mediaStartedAt - preparedAt });
-  }
-  report.titleCalls.extractionConcurrent = true;
-  report.titleCalls.playbackDoesNotWaitForTitle = true;
-  await historyTask;
-  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
-  assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
-  assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
-  assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
   // Real Chromium tab capture, PC gain and two independent production mixers.
   // Only Discord transport is substituted; this does not measure a receiver.
   const restoreScopeConfig = (await call(page, 'state')).config;
