@@ -21,7 +21,7 @@ export const DEFAULT_CONFIG = {
     enabled: true, provider: 'voicevox', engineUrl: 'http://127.0.0.1:50021',
     engineExecutable: '', styleId: 3, speed: 1, pitch: 0, intonation: 1,
     volume: 0.8, output: 'discord', outputDevice: '', maxChars: 500,
-    readNames: true, readUrls: false, readEmoji: true, readStickers: true, readAttachments: true,
+    readNames: true, speakerSuffixDisabledChannelIds: [], readUrls: false, readEmoji: true, readStickers: true, readAttachments: true,
     readSpoilers: false, spoilerText: 'ネタバレ', readCode: false,
     messageTemplate: '$nickname$、$text$', joinTemplate: '$nickname$が$channel$に参加しました',
     leaveTemplate: '$nickname$が$channel$から退出しました',
@@ -138,6 +138,15 @@ export function normalizeConfig(patch, readingBaseline) {
   if (!/^\S{1,20}$/.test(c.bot.prefix)) fail('コマンド接頭辞');
   for (const key of ['allowedWebhookIds', 'controlUserIds']) strings(c.bot[key], key, true);
   for (const key of ['ignoredUserIds', 'allowedUserIds', 'ignoredRoleIds']) strings(c.speech[key], key, true);
+  // Preserve an existing choice to omit names while moving attribution to the end.
+  if (!Object.hasOwn(patch?.speech || {}, 'speakerSuffixDisabledChannelIds') && patch?.speech?.readNames === false) {
+    c.speech.speakerSuffixDisabledChannelIds = [...new Set([
+      ...c.bot.bindings.flatMap(b => [...(b.textChannelIds || []), b.voiceChannelId]),
+      c.bot.masterTextChannelId,
+    ].filter(Boolean))];
+  }
+  strings(c.speech.speakerSuffixDisabledChannelIds, '発言者名を付けないチャンネルID', true);
+  c.speech.speakerSuffixDisabledChannelIds = [...new Set(c.speech.speakerSuffixDisabledChannelIds)];
   strings(c.speech.blockedWords, 'NGワード'); strings(c.media.allowedHosts, '許可ホスト');
   for (const host of c.media.allowedHosts) if (!/^[a-z0-9.-]+$/i.test(host) || host.includes('..') || host.startsWith('.')) fail('許可ホスト');
   const engine = new URL(c.speech.engineUrl);

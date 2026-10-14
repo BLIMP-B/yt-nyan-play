@@ -68,6 +68,9 @@ VoiceOutput.prototype.connect = async function(guildId, ...args) {
   this.syncMonitor(); this.changed(); return this.connections.get(guildId);
 };
 VoiceOutput.prototype.disconnect = function(guildId, ...args) { const result = originalDisconnect.call(this, guildId, ...args); if (guildId === '99998' && this.monitorFixtureClient) { this.getClient = this.monitorFixtureClient; this.monitorFixtureClient = null; } return result; };
+import { DiscordBot } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/bot.mjs')).href)};
+const attributionCatalog = DiscordBot.prototype.catalog;
+DiscordBot.prototype.catalog = function(...args) { globalThis.nyanAttributionBot = this; return attributionCatalog.apply(this, args); };
 import { MediaTitleCalls } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/core/media-title-calls.mjs')).href)};
 const titlePlay = MediaTitleCalls.prototype.play;
 MediaTitleCalls.prototype.play = function(job, ...args) {
@@ -323,6 +326,77 @@ try {
   await call(page, 'reading:forget', { source: '✅' }); await call(page, 'reading:forget', { source: boundarySource });
   assert.ok(!(await call(page, 'state')).readings.some(r => r.source === '✅' || r.source === boundarySource));
   report.education = { maxCharacters: 30, unicodeEmojiEducated: true, boundaryAccepted: true, overLimitRejected: true, preservedAfterRejection: true, forgotten: true };
+  // Inject Discord events through the production Bot, queue, UI and synthesis.
+  // This verifies content and PC routing; it does not claim a live VC receiver.
+  const attributionBase = (await call(page, 'state')).config;
+  await application.evaluate(() => {
+    const bot = globalThis.nyanAttributionBot;
+    globalThis.nyanAttributionOriginalClient = bot.client;
+    const channels = new Map([
+      ['72222', { id: '72222', name: '雑談', voice: false }],
+      ['73333', { id: '73333', name: '作業部屋', voice: true }],
+      ['74444', { id: '74444', name: '別室', voice: false }],
+      ['75555', { id: '75555', name: 'マスタ', voice: false }],
+    ]);
+    for (const channel of channels.values()) Object.assign(channel, { isTextBased: () => true, isVoiceBased: () => channel.voice, permissionsFor: () => ({ has: () => true }) });
+    const guild = { id: '71111', name: '発言者名試験', channels: { cache: channels } };
+    globalThis.nyanAttributionGuild = guild;
+    bot.client = { user: { id: '99999' }, isReady: () => true, guilds: { cache: new Map([[guild.id, guild]]) } };
+    globalThis.nyanAttributionCounter = 0;
+  });
+  const attributionConfig = structuredClone(attributionBase);
+  attributionConfig.bot.bindings = [{ guildId: '71111', voiceChannelId: '73333', textChannelIds: ['72222', '74444'], announceJoinLeave: true }];
+  Object.assign(attributionConfig.bot, { autoJoin: false, autoLeave: false, masterTextChannelId: '75555' });
+  attributionConfig.speech.speakerSuffixDisabledChannelIds = [];
+  await call(page, 'config:save', attributionConfig);
+  await page.locator('[data-view="connections"]').click();
+  const suffixControl = channel => page.locator('[data-speaker-channel="' + channel + '"]');
+  await suffixControl('72222').waitFor();
+  for (const channel of ['72222', '73333', '74444', '75555']) assert.equal(await suffixControl(channel).isChecked(), true);
+  await suffixControl('72222').uncheck();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.speech.speakerSuffixDisabledChannelIds.includes('72222'));
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  await page.locator('[data-view="connections"]').click();
+  assert.equal(await suffixControl('72222').isChecked(), false);
+  assert.equal(await suffixControl('73333').isChecked(), true);
+  await page.screenshot({ path: join(reports, 'speaker-channel-settings.png'), fullPage: true });
+  const emitAttribution = async (content, { channelId = '72222', nickname = 'neko', username = 'user', event } = {}) => {
+    const job = await application.evaluate(async (_electron, args) => {
+      const bot = globalThis.nyanAttributionBot, guild = globalThis.nyanAttributionGuild;
+      const before = new Set(bot.store.jobs.map(j => j.id));
+      const member = { nickname: args.nickname, displayName: '使わないDiscord表示名', user: { id: '76666', username: args.username, bot: false }, roles: { cache: new Map() }, permissions: { has: () => false } };
+      if (args.event) {
+        const state = (channelId, name) => ({ channelId, channel: channelId ? { name: name || '作業部屋' } : null, guild, member, id: '76666' });
+        const previous = state(args.event === 'join' ? null : '73333');
+        const next = state(args.event === 'leave' ? null : args.event === 'move' ? '74444' : '73333', args.event === 'move' ? '別室' : '作業部屋');
+        await bot.voiceState(previous, next);
+      } else {
+        await bot.message({ id: 'speaker-' + ++globalThis.nyanAttributionCounter, content: args.content, author: member.user, member, guildId: guild.id, guild, channelId: args.channelId, channel: guild.channels.cache.get(args.channelId), attachments: new Map(), stickers: new Map(), reply: async () => {} });
+      }
+      const job = bot.store.jobs.find(j => j.kind === 'speech' && !before.has(j.id));
+      if (!job) throw Error('Discord event did not enqueue speech'); return job;
+    }, { content, channelId, nickname, username, event });
+    await waitForJob(page, job.id); return synthesisTexts.at(-1);
+  };
+  assert.equal(await emitAttribution('チェックなし'), 'チェックなし');
+  assert.equal(await emitAttribution('VC内の本文', { channelId: '73333' }), 'ブイシー内の本文、ねこの発言');
+  assert.equal(await emitAttribution('共通の本文', { channelId: '75555' }), '共通の本文、ねこの発言');
+  await suffixControl('72222').check();
+  await page.waitForFunction(async () => !(await window.nyan.invoke('state')).value.config.speech.speakerSuffixDisabledChannelIds.includes('72222'));
+  await emitAttribution('教育(neko=ねこさん)');
+  assert.equal(await emitAttribution('教育後'), '教育後、ねこさんの発言');
+  const events = {};
+  for (const event of ['join', 'move', 'leave']) events[event] = await emitAttribution('', { event });
+  assert.deepEqual(events, { join: 'ねこさんが作業部屋に参加しました', move: 'ねこさんが作業部屋から別室へ移動しました', leave: 'ねこさんが作業部屋から退出しました' });
+  await emitAttribution('無音(neko)');
+  assert.equal(await emitAttribution('無音後'), '無音後、の発言');
+  await emitAttribution('忘却(neko)');
+  assert.equal(await emitAttribution('忘却後'), '忘却後、ねこの発言');
+  assert.equal(await emitAttribution('名前なし', { nickname: '', username: 'neko' }), '名前なし、ねこの発言');
+  assert.equal(await emitAttribution('取得不可', { nickname: '', username: '' }), '取得不可、76666の発言');
+  report.speakerAttribution = { passed: true, channelSwitchSaved: true, channelIsolation: true, nicknamePriority: true, usernameFallback: true, idFallback: true, education: true, mute: true, forget: true, voiceEvents: events, synthesisVerified: true, receiverVerified: false };
+  await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
+  await call(page, 'config:save', attributionBase);
   const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));

@@ -65,6 +65,15 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   }
   const serverSettings = new ServerSettings($('binding-list'), {
     update: updateBinding,
+    setSpeakerSuffix: (channelId, enabled) => {
+      const pending = bindingUpdates.catch(() => {}).then(async () => {
+        const config = draft();
+        config.speech.speakerSuffixDisabledChannelIds = config.speech.speakerSuffixDisabledChannelIds.filter(id => id !== channelId);
+        if (!enabled) config.speech.speakerSuffixDisabledChannelIds.push(channelId);
+        await save(config);
+      });
+      bindingUpdates = pending; return pending;
+    },
     join: async guildId => render(await invoke('voice:join', guildId)),
     leave: async guildId => render(await invoke('voice:leave', guildId)),
     remove: guildId => {

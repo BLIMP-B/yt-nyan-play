@@ -32,7 +32,7 @@ export class ServerSettings {
   }
   render(state) {
     this.state = state;
-    const key = JSON.stringify([state.bot.servers, state.bot.status, state.voices, state.config.bot.bindings, state.config.bot.masterTextChannelId, state.config.bot.announceJoinLeave]);
+    const key = JSON.stringify([state.bot.servers, state.bot.status, state.voices, state.config.bot.bindings, state.config.bot.masterTextChannelId, state.config.bot.announceJoinLeave, state.config.speech.speakerSuffixDisabledChannelIds]);
     if (key === this.key) return;
     this.key = key;
     const focus = this.container.contains(document.activeElement) ? document.activeElement.dataset.focusKey : undefined;
@@ -107,6 +107,7 @@ export class ServerSettings {
       all.querySelector('input').indeterminate = selected > 0 && selected < selectable.length;
       all.querySelector('input').setAttribute('aria-label', `${guild.name}の全チャンネルを選択`);
       selection.append(selectionTitle, all); body.append(selection);
+      body.append(node('p', '「発言者名を付ける」をオンにすると、本文の後に「（名前）の発言」を読みます。サーバーニックネーム、ユーザー名、IDの順で選び、名前にも教育・辞書を適用します。', 'help'));
       for (const group of groups.values()) {
         const fieldset = node('fieldset', undefined, 'channel-group'); fieldset.append(node('legend', group.name));
         const list = node('div', undefined, 'channel-grid');
@@ -124,7 +125,13 @@ export class ServerSettings {
           label.title = `${channel.name} · ${channel.id}`;
           if (master || channel.voice || channel.unavailable || channel.canRead === false) label.append(node('small', master ? 'マスタ' : channel.canRead === false ? '閲覧権限なし' : channel.unavailable ? '未取得' : 'VC内テキスト', 'subtle'));
           if (master) label.title += '（マスタチャンネルの読み上げは共通設定）';
-          list.append(label);
+          const row = node('div', undefined, 'channel-row');
+          const speaker = this.checkbox('発言者名を付ける', !state.config.speech.speakerSuffixDisabledChannelIds.includes(channel.id), channel.canRead === false,
+            `${guild.id}:${channel.id}:speaker`, value => this.actions.setSpeakerSuffix(channel.id, value));
+          speaker.classList.add('channel-speaker');
+          speaker.querySelector('input').dataset.speakerChannel = channel.id;
+          speaker.querySelector('input').setAttribute('aria-label', `${guild.name}: ${channel.name}に発言者名を付ける`);
+          row.append(label, speaker); list.append(row);
         }
         fieldset.append(list); body.append(fieldset);
       }

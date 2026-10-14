@@ -278,6 +278,12 @@ jobs:
               assert.equal(audio.education.maxCharacters, 30);
               for (const key of ['unicodeEmojiEducated', 'boundaryAccepted', 'overLimitRejected', 'preservedAfterRejection', 'forgotten']) assert.equal(audio.education[key], true);
             }
+            if (atLeast(18)) {
+              const attribution = audio.speakerAttribution;
+              for (const key of ['passed', 'channelSwitchSaved', 'channelIsolation', 'nicknamePriority', 'usernameFallback', 'idFallback', 'education', 'mute', 'forget', 'synthesisVerified']) assert.equal(attribution[key], true);
+              assert.equal(attribution.receiverVerified, false);
+              assert.deepEqual(attribution.voiceEvents, { join: 'ねこさんが作業部屋に参加しました', move: 'ねこさんが作業部屋から別室へ移動しました', leave: 'ねこさんが作業部屋から退出しました' });
+            }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
               assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);

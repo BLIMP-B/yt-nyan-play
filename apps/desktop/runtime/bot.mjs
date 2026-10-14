@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits, ActivityType } from 'discord.js';
 import { parseBotCommand, parseMediaCommand } from '../core/protocol.mjs';
-import { shouldRead, shouldReceive, prepareSpeech, formatTemplate } from '../core/text.mjs';
+import { shouldRead, shouldReceive, prepareSpeech, prepareSpeakerSuffix, speakerName, formatTemplate } from '../core/text.mjs';
 import { parseEducationCommand } from '../core/education.mjs';
 import { hasHumanListeners } from '../core/voice-audience.mjs';
 
@@ -67,7 +67,7 @@ export class DiscordBot {
   normalize(message) {
     return {
       id: message.id, content: message.content || '', userId: message.author.id,
-      userName: message.author.username, displayName: message.member?.displayName || message.author.globalName || message.author.username,
+      userName: message.author.username, serverNickname: message.member?.nickname || '', displayName: message.member?.displayName || message.author.globalName || message.author.username,
       guildId: message.guildId || '', guildName: message.guild?.name || '', channelId: message.channelId, channelName: message.channel?.name || 'DM',
       webhookId: message.webhookId || '', isBot: message.author.bot, isSelf: message.author.id === this.client?.user?.id,
       isSystem: message.system, roleIds: [...(message.member?.roles.cache.keys() || [])],
@@ -136,7 +136,7 @@ export class DiscordBot {
     const clip = c.speech.soundClips.find(s => s.trigger === normalized.content.trim());
     if (clip) { await this.handlers.speech({ clipPath: clip.path, text: clip.trigger, guildId: normalized.guildId, userId: normalized.userId }); this.store.remember(`message:${message.id}`); return; }
     const text = prepareSpeech(normalized, c);
-    if (text) { await this.handlers.speech({ text, guildId: normalized.guildId, userId: normalized.userId, source: normalized.displayName }); this.store.remember(`message:${message.id}`); }
+    if (text) { await this.handlers.speech({ text, speakerSuffix: prepareSpeakerSuffix(normalized, c), channelId: normalized.channelId, guildId: normalized.guildId, userId: normalized.userId, source: normalized.displayName }); this.store.remember(`message:${message.id}`); }
     } finally { this.receiving.delete(message.id); }
   }
   async reply(message, text) { await message.reply({ content: String(text).slice(0, 1900), allowedMentions: { parse: [], repliedUser: false } }); }
@@ -183,9 +183,12 @@ export class DiscordBot {
     if (c.bot.autoJoin || c.bot.autoLeave || c.desktop.voiceMonitorGuildId === binding.guildId) await this.reconcileVoice(binding.guildId, { previous, next });
     if (c.speech.enabled && (binding.announceJoinLeave ?? c.bot.announceJoinLeave) && next.member && !c.speech.ignoredUserIds.includes(next.id) && [previous.channelId, next.channelId].includes(binding.voiceChannelId)) {
       const template = !previous.channelId ? c.speech.joinTemplate : !next.channelId ? c.speech.leaveTemplate : c.speech.moveTemplate;
-      const text = formatTemplate(template, { nickname: next.member.displayName, username: next.member.user.username, server: next.guild.name,
+      const name = speakerName({ serverNickname: next.member.nickname, userName: next.member.user.username, userId: next.id });
+      const announcement = formatTemplate(template, { nickname: name, username: next.member.user.username || next.id, userid: next.id, server: next.guild.name,
         channel: next.channel?.name || previous.channel?.name || '', 'channel-prev': previous.channel?.name || '', 'channel-next': next.channel?.name || '' });
-      this.handlers.speech({ text, guildId: binding.guildId, userId: next.id });
+      // Use the ordinary/native reading pipeline, without adding a chat suffix.
+      const text = prepareSpeech({ content: announcement, guildId: binding.guildId, userId: next.id }, { ...c, speech: { ...c.speech, readNames: false } });
+      if (text) await this.handlers.speech({ text, guildId: binding.guildId, userId: next.id });
     }
   }
   catalog() {

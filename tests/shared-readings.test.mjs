@@ -69,7 +69,7 @@ test('unrelated stale UI saves preserve chat updates received after the UI snaps
 
 test('real Discord message handling updates a settings-created slot and forgetting removes both', async t => {
   const { store, service } = setup(t);
-  store.updateConfig({ ...store.config, bot: { ...store.config.bot, bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } });
+  store.updateConfig({ ...store.config, speech: { ...store.config.speech, speakerSuffixDisabledChannelIds: ['22222'] }, bot: { ...store.config.bot, bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } });
   const output = [], bot = new DiscordBot(store, { education: command => service.apply(command), speech: p => output.push(p) }); bot.client = { user: { id: '99999' } }; let id = 0;
   const message = content => ({ id: String(++id), content, author: { id: '44444', username: 'fixture' }, guildId: '11111', channelId: '22222', attachments: new Map(), stickers: new Map(), reply: async () => {} });
   await service.set('erai', '設定'); await bot.message(message('教育（erai＝チャット）')); await bot.message(message(emoji));

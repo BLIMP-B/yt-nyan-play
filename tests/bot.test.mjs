@@ -7,7 +7,7 @@ import { Store } from '../apps/desktop/core/store.mjs';
 import { DiscordBot } from '../apps/desktop/runtime/bot.mjs';
 import { PermissionFlagsBits, Events } from 'discord.js';
 import { EventEmitter } from 'node:events';
-function setup(t) { const path = mkdtempSync(join(tmpdir(), 'nyan-bot-')); t.after(() => rmSync(path, { recursive: true, force: true })); const store = new Store(path); store.updateConfig({ bot: { bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } }); const speech = [], media = [], replies = [], controls = []; const bot = new DiscordBot(store, { speech: p => speech.push(p), media: p => media.push(p), control: c => controls.push(c), speakers: async () => [{ name: 'ずんだもん', styles: [{ id: 3 }] }] }); bot.client = { user: { id: '99999' } }; const message = (content, id = '1', admin = false) => ({ id, content, author: { id: '44444', username: '猫', bot: false }, member: { displayName: 'ねこ', roles: { cache: new Map() }, permissions: { has: () => admin } }, guildId: '11111', channelId: '22222', guild: { name: 'サーバー' }, channel: { name: 'テキスト' }, attachments: new Map(), reply: async r => replies.push(r) }); return { store, bot, message, speech, media, replies, controls }; }
+function setup(t) { const path = mkdtempSync(join(tmpdir(), 'nyan-bot-')); t.after(() => rmSync(path, { recursive: true, force: true })); const store = new Store(path); store.updateConfig({ bot: { bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } }); const speech = [], media = [], replies = [], controls = []; const bot = new DiscordBot(store, { speech: p => speech.push(p), media: p => media.push(p), control: c => controls.push(c), speakers: async () => [{ name: 'ずんだもん', styles: [{ id: 3 }] }] }); bot.client = { user: { id: '99999' } }; const message = (content, id = '1', admin = false) => ({ id, content, author: { id: '44444', username: '猫', bot: false }, member: { nickname: 'ねこ', displayName: 'ねこ', roles: { cache: new Map() }, permissions: { has: () => admin } }, guildId: '11111', channelId: '22222', guild: { name: 'サーバー' }, channel: { name: 'テキスト' }, attachments: new Map(), reply: async r => replies.push(r) }); return { store, bot, message, speech, media, replies, controls }; }
 test('extension webhook queues media once, without also speaking the command', async t => {
   const s = setup(t); s.store.config.speech.enabled = false; const m = s.message('https://youtu.be/abc再生\n**【猫】**'); m.webhookId = '55555'; m.author.bot = true;
   await s.bot.message(m); await s.bot.message(m); assert.equal(s.media.length, 1); assert.equal(s.speech.length, 0); assert.equal(s.media[0].guildId, '11111');
@@ -20,8 +20,8 @@ test('invalid self-service command cannot mutate stored profile', async t => {
   const s = setup(t); await s.bot.message(s.message('!nyan speed 9')); assert.equal(s.store.config.speech.profiles.length, 0); assert.match(s.replies[0].content, /話速/);
   await s.bot.message(s.message('!nyan speed 1.2', '2')); assert.equal(s.store.config.speech.profiles[0].speed, 1.2);
 });
-test('ordinary speech uses template while unconfigured channels and self messages are ignored', async t => {
-  const s = setup(t); await s.bot.message(s.message('こんにちは')); assert.equal(s.speech[0].text, 'ねこ、こんにちは');
+test('ordinary speech appends the server nickname while unconfigured channels and self messages are ignored', async t => {
+  const s = setup(t); await s.bot.message(s.message('こんにちは')); assert.equal(s.speech[0].text, 'こんにちは、ねこの発言');
   const m = s.message('無視', '2'); m.channelId = '77777'; await s.bot.message(m); m.channelId = '22222'; m.author.id = '99999'; await s.bot.message(m); assert.equal(s.speech.length, 1);
 });
 test('URL modes and fixed-schema media work outside speech channels, with server and sender isolation', async t => {
@@ -78,11 +78,11 @@ test('VC text is read and can be disabled through read-channel', async t => {
 });
 test('VC join, move and leave are announced for the configured channel only', async t => {
   const s = setup(t); s.store.config.bot.announceJoinLeave = true; s.store.config.bot.autoLeave = false;
-  const guild = { id: '11111', name: 'サーバー', channels: { cache: new Map() } }, member = { displayName: 'ねこ', user: { username: '猫', bot: false } };
+  const guild = { id: '11111', name: 'サーバー', channels: { cache: new Map() } }, member = { nickname: 'ねこ', displayName: 'ねこ', user: { username: '猫', bot: false } };
   const state = (id, name) => ({ channelId: id, channel: id ? { name } : null, guild, member, id: '44444' });
   await s.bot.voiceState(state(null), state('33333', 'VC')); await s.bot.voiceState(state('33333', 'VC'), state('55555', '別VC')); await s.bot.voiceState(state('33333', 'VC'), state(null));
   await s.bot.voiceState(state('55555', '別VC'), state('66666', '無関係'));
-  assert.deepEqual(s.speech.map(p => p.text), ['ねこがVCに参加しました', 'ねこがVCから別VCへ移動しました', 'ねこがVCから退出しました']);
+  assert.deepEqual(s.speech.map(p => p.text), ['ねこがブイシーに参加しました', 'ねこがブイシーから別ブイシーへ移動しました', 'ねこがブイシーから退出しました']);
 });
 test('Bot activity prioritizes master then newest media, reverts on end and clears on stop', t => {
   const s = setup(t), presence = []; s.bot.status = 'online'; s.bot.client.user.setPresence = p => presence.push(p);
@@ -113,7 +113,7 @@ test('server speech mute preserves media commands and master speech and stays is
 test('per-server VC notifications override global defaults independently from chat speech', async t => {
   const s = setup(t); s.store.config.bot.autoLeave = false;
   const guild = { id: '11111', name: 'サーバー', channels: { cache: new Map() } };
-  const member = { displayName: 'ねこ', user: { username: '猫', bot: false } };
+  const member = { nickname: 'ねこ', displayName: 'ねこ', user: { username: '猫', bot: false } };
   const state = id => ({ channelId: id, channel: id ? { name: 'VC' } : null, guild, member, id: '44444' });
   s.store.config.bot.bindings[0].readEnabled = false; s.store.config.bot.bindings[0].announceJoinLeave = true;
   await s.bot.voiceState(state(null), state('33333')); assert.equal(s.speech.length, 1);
@@ -137,4 +137,35 @@ test('catalog supplies category names and Bot permission checks and refreshes on
   assert.equal(channels[1].canConnect, true); assert.equal(channels[2].canRead, false); assert.equal(channels[2].canConnect, false);
   let changes = 0; s.store.on('change', () => changes++); name = '更新した名前'; client.emit(Events.ChannelUpdate);
   assert.equal(changes, 1); assert.equal(s.bot.catalog()[0].channels[0].name, '更新した名前'); s.bot.stop();
+});
+
+test('VC join/move/leave names receive education, scoped dictionaries, mute and forget', async t => {
+  const s = setup(t); s.store.config.bot.autoLeave = false; s.store.config.bot.announceJoinLeave = true;
+  const guild = { id: '11111', name: 'サーバー', channels: { cache: new Map() } };
+  const member = { nickname: 'neko', displayName: '使わない表示名', user: { username: 'other', bot: false } };
+  const state = (id, name = '作業部屋') => ({ channelId: id, channel: id ? { name } : null, guild, member, id: '44444' });
+  s.store.config.education = [{ source: 'neko', reading: 'ねこさん' }];
+  await s.bot.voiceState(state(null), state('33333'));
+  await s.bot.voiceState(state('33333'), state('55555', '別室'));
+  await s.bot.voiceState(state('33333'), state(null));
+  assert.deepEqual(s.speech.map(p => p.text), ['ねこさんが作業部屋に参加しました', 'ねこさんが作業部屋から別室へ移動しました', 'ねこさんが作業部屋から退出しました']);
+  s.store.config.education[0].reading = ''; await s.bot.voiceState(state(null), state('33333'));
+  assert.equal(s.speech.at(-1).text, 'が作業部屋に参加しました');
+  s.store.config.education = []; await s.bot.voiceState(state(null), state('33333'));
+  assert.equal(s.speech.at(-1).text, 'ねこが作業部屋に参加しました');
+  s.store.config.dictionary = [{ source: 'neko', replacement: 'CAT', scope: 'user', scopeId: '44444', regex: false }];
+  await s.bot.voiceState(state('33333'), state(null));
+  assert.equal(s.speech.at(-1).text, 'CATが作業部屋から退出しました');
+  s.store.config.dictionary = []; member.nickname = ''; member.user.username = 'neko';
+  await s.bot.voiceState(state(null), state('33333')); assert.equal(s.speech.at(-1).text, 'ねこが作業部屋に参加しました');
+  member.user.username = ''; await s.bot.voiceState(state(null), state('33333')); assert.equal(s.speech.at(-1).text, '44444が作業部屋に参加しました');
+});
+test('native VC notifications preserve raw names for original dictionaries without adding chat attribution', async t => {
+  const s = setup(t); s.store.config.bot.autoLeave = false; s.store.config.bot.announceJoinLeave = true; s.store.config.speech.bouyomiPreprocess = true;
+  s.store.config.education = [{ source: 'neko', reading: 'CAT', native: true }];
+  const guild = { id: '11111', name: 'サーバー', channels: { cache: new Map() } }, member = { nickname: 'neko', user: { username: 'other', bot: false } };
+  const state = id => ({ channelId: id, channel: id ? { name: '作業部屋' } : null, guild, member, id: '44444' });
+  await s.bot.voiceState(state(null), state('33333'));
+  assert.equal(s.speech.at(-1).text, 'nekoが作業部屋に参加しました');
+  assert.equal(s.speech.at(-1).speakerSuffix, undefined);
 });

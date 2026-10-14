@@ -9,7 +9,7 @@ import { prepareSpeech, shouldRead, applyDictionary } from '../apps/desktop/core
 import { Store } from '../apps/desktop/core/store.mjs';
 import { JobRunner } from '../apps/desktop/core/queue.mjs';
 export const config = () => normalizeConfig({ bot: { bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } });
-const message = () => ({ content: 'こんにちは', userId: '44444', userName: 'user', displayName: 'ねこ', guildId: '11111', channelId: '22222', roleIds: [] });
+const message = () => ({ content: 'こんにちは', userId: '44444', userName: 'user', serverNickname: 'ねこ', displayName: 'ねこ', guildId: '11111', channelId: '22222', roleIds: [] });
 function temporary(t) { const path = mkdtempSync(join(tmpdir(), 'nyan-test-')); t.after(() => rmSync(path, { recursive: true, force: true })); return path; }
 test('configuration rejects invalid IDs, speeds and unknown fields without mutating defaults', () => {
   const c = config(); c.speech.speed = 9; assert.throws(() => normalizeConfig(c));
@@ -51,8 +51,8 @@ test('bot and webhook policies are independent and enforce binding and exclusion
 });
 test('speech resolves mentions, suppresses spoilers and handles attachments', () => {
   const c = config(), m = message(); m.content = '<@55555> ||秘密|| https://example.test/a <a:cat:66666>'; m.mentions = { '55555': 'あお' }; m.attachments = [{ name: 'image.png' }];
-  assert.equal(prepareSpeech(m, c), 'ねこ、あお ネタバレ URL シーあティー。添付ファイル1件、画像ファイル');
-  c.speech.maxChars = 4; m.content = '猫😀猫'; assert.equal([...prepareSpeech(m, c)].length, 4);
+  assert.equal(prepareSpeech(m, c), 'あお ネタバレ URL シーあティー。添付ファイル1件、画像ファイル、ねこの発言');
+  c.speech.maxChars = 4; m.content = '猫😀猫'; assert.equal(prepareSpeech(m, c), '猫😀猫。、ねこの発言');
 });
 test('dictionary applies only matching scopes and safely handles literal punctuation', () => {
   const entries = normalizeConfig({ dictionary: [{ source: 'C++', replacement: 'シープラスプラス', scope: 'global' }, { source: '猫', replacement: 'にゃん', scope: 'user', scopeId: '44444' }, { source: '猫', replacement: 'ねこ', scope: 'guild', scopeId: '99999' }] }).dictionary;

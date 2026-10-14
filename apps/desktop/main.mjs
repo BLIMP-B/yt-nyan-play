@@ -322,7 +322,7 @@ else {
         const { settings: original } = inspectBouyomi(bouyomi.directory);
         const pendingCharacters = store.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status) && j.payload.guildId === job.payload.guildId).reduce((n, j) => n + String(j.payload.text || '').length, 0);
         const pipelineController = new AbortController(); const pipelineSignal = AbortSignal.any([signal, pipelineController.signal]);
-        try { await runNativeSpeech({ text: job.payload.text, settings, original, pendingCharacters, processor: {
+        try { await runNativeSpeech({ text: job.payload.text, speakerSuffix: job.payload.speakerSuffix, settings, original, pendingCharacters, processor: {
           process: (...args) => bouyomiProcessor.process(...args),
           learn: (type, args, tagSignal) => education.applyTag(type, args, tagSignal, bouyomiProcessor),
         },
@@ -335,7 +335,7 @@ else {
             await output('', { ...options, volume: Number(original.SoundVolume || 100) / 100 }, soundSignal, file);
           },
         }, pipelineSignal); } catch (error) { pipelineController.abort(); throw error; }
-      } else await output(job.payload.system ? job.payload.text : [...job.payload.text].slice(0, settings.maxChars).join(''), settings, signal, job.payload.clipPath);
+      } else await output(job.payload.system || job.payload.speakerSuffix ? job.payload.text : [...job.payload.text].slice(0, settings.maxChars).join(''), settings, signal, job.payload.clipPath);
     });
     androidNotifications = new AndroidNotifications(android, getConfig, {
       speech: payload => {
