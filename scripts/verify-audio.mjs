@@ -341,7 +341,7 @@ try {
     for (const channel of channels.values()) Object.assign(channel, { isTextBased: () => true, isVoiceBased: () => channel.voice, permissionsFor: () => ({ has: () => true }) });
     const guild = { id: '71111', name: '発言者名試験', channels: { cache: channels } };
     globalThis.nyanAttributionGuild = guild;
-    bot.client = { user: { id: '99999' }, isReady: () => true, guilds: { cache: new Map([[guild.id, guild]]) } };
+    bot.client = { user: { id: '99999' }, destroy() {}, isReady: () => true, guilds: { cache: new Map([[guild.id, guild]]) } };
     globalThis.nyanAttributionCounter = 0;
   });
   const attributionConfig = structuredClone(attributionBase);
@@ -730,5 +730,9 @@ try {
 } catch (error) { report.passed = false; report.error = error.stack; process.exitCode = 1; }
 finally {
   writeFileSync(join(reports, 'audio-report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));
-  monitor?.kill(); await application?.close(); engine.close(); rmSync(directory, { recursive: true, force: true });
+  monitor?.kill();
+  if (application) await application.evaluate(() => {
+    if (globalThis.nyanAttributionBot && Object.hasOwn(globalThis, 'nyanAttributionOriginalClient')) globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient;
+  }).catch(() => {});
+  await application?.close(); engine.close(); rmSync(directory, { recursive: true, force: true });
 }
