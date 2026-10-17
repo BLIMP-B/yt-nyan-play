@@ -248,7 +248,8 @@ jobs:
           NYAN_REQUIRE_LIVE_SERVICES: 'soundcloud,youtube,niconico'
           NYAN_VERIFY_SOUNDCLOUD_BROWSER: '1'
       - name: Require real SoundCloud audio in streaming and browser fallback
-        run: node --input-type=module -e "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const r=JSON.parse(readFileSync('dist/audio-verification/audio-report.json')); for(const browserOnly of [false,true]) {const p=r.liveMedia.find(p=>p.service==='soundcloud' && p.browserOnly===browserOnly && p.verifiedAudio); assert.ok(p,'SoundCloud audio missing: browserOnly='+browserOnly); assert.ok(p.playback.some(s=>s.shareExpanded===true),'Native short-link expansion was not verified'); assert.ok(p.discordEncoder.nonSilentSamples>4800); }"
+        run: |
+          node --input-type=module -e "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const r=JSON.parse(readFileSync('dist/audio-verification/audio-report.json')); for(const browserOnly of [false,true]) {const p=r.liveMedia.find(p=>p.service==='soundcloud' && p.browserOnly===browserOnly && p.verifiedAudio); assert.ok(p,'SoundCloud audio missing: browserOnly='+browserOnly); assert.ok(p.playback.some(s=>s.shareExpanded===true),'Native short-link expansion was not verified'); assert.ok(p.discordEncoder.nonSilentSamples>4800); }"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
