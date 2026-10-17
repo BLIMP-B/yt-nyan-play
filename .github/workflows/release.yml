@@ -312,6 +312,11 @@ jobs:
                 assert.ok(Math.abs(sample.gain - sample.expected) < 0.025);
               }
             }
+            if (atLeast(22)) {
+              assert.equal(audio.nativeRedirect.status, 302);
+              assert.equal(audio.nativeRedirect.destinationRequests, 0);
+              for (const key of ['detected', 'pauseResume', 'naturalEnd']) assert.equal(audio.soundcloud.detachedAudio[key], true);
+            }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
               assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);

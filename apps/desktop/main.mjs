@@ -41,7 +41,7 @@ import { resolveDestination, outputTargets, discordOutput } from './core/destina
 import { AudioBridge } from './runtime/audio-bridge.mjs';
 import { browserUserAgent } from './core/browser-user-agent.mjs';
 import { MediaStreamResolver } from './runtime/media-streams.mjs';
-import { playbackSession } from './runtime/media-session.mjs';
+import { playbackSession, fetchPlaybackRedirect } from './runtime/media-session.mjs';
 
 const directory = dirname(fileURLToPath(import.meta.url));
 const smoke = process.argv.includes('--smoke');
@@ -280,7 +280,7 @@ else {
       }, (l, t) => store.log(l, t), accounts, streamResolver); return browser;
     };
     titleCalls = new MediaTitleCalls(getConfig, {
-      metadata: (url, signal) => fetchTitleMetadata(url, getConfig().media.allowedHosts, (url, options) => playbackSession().fetch(url, options), signal),
+      metadata: (url, signal) => fetchTitleMetadata(url, getConfig().media.allowedHosts, (url, options) => new URL(url).hostname === 'on.soundcloud.com' ? fetchPlaybackRedirect(url, options) : playbackSession().fetch(url, options), signal),
       speak: (payload, options) => {
         const c = getConfig();
         const text = payload.titleCall ? prepareSpeech({ content: payload.text, guildId: payload.guildId }, { ...c, speech: { ...c.speech, readNames: false, bouyomiPreprocess: false, provider: 'voicevox' } }) : payload.text;

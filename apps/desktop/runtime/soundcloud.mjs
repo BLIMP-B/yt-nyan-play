@@ -1,6 +1,30 @@
 import { validateMediaUrl } from '../core/config.mjs';
 import { validateMediaNavigation } from '../core/media-navigation.mjs';
 
+// Chromium fetch rejects manual redirects instead of exposing a 3xx Response.
+// Read ClientRequest's redirect event without following an unvalidated target.
+export function nativeRedirectResponse(requestFactory, url, { signal } = {}) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const request = requestFactory({ url, method: 'GET', redirect: 'manual' });
+    let settled = false;
+    const finish = (error, response) => {
+      if (settled) return;
+      settled = true; signal?.removeEventListener('abort', abort);
+      error ? reject(error) : resolve(response);
+      request.abort();
+    };
+    const abort = () => finish(signal.reason);
+    // Keep the error listener after abort: cancellation can emit an error later.
+    request.on('error', error => finish(error));
+    request.once('close', () => { if (!settled) finish(new Error('SoundCloudの転送確認が途中で終了しました')); });
+    request.once('redirect', (status, _method, destination) => finish(null, new Response(null, { status, headers: { location: destination } })));
+    request.once('response', response => finish(null, new Response(null, { status: response.statusCode })));
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort(); else request.end();
+  });
+}
+
 // Expand HTTP share links before opening Chromium, which can otherwise follow
 // a mobile app transition and reject it with an unhelpful ERR_FAILED.
 export async function resolveSoundCloudShare(raw, allowedHosts, fetcher, signal) {

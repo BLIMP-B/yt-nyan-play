@@ -8,8 +8,8 @@ import { MEDIA_EXTRACTOR, streamingService, selectStream } from '../core/media-s
 import { mediaPolicy } from '../core/media-policy.mjs';
 
 export class MediaStreamResolver {
-  constructor(directory, log, fetcher, cookies, { budgetMs = 20000 } = {}) {
-    this.directory = join(directory, 'media-tools'); this.log = log; this.fetcher = fetcher; this.cookies = cookies; this.budgetMs = budgetMs;
+  constructor(directory, log, fetcher, cookies, { budgetMs = 20000, installBudgetMs = 120000 } = {}) {
+    this.directory = join(directory, 'media-tools'); this.log = log; this.fetcher = fetcher; this.cookies = cookies; this.budgetMs = budgetMs; this.installBudgetMs = installBudgetMs;
     mkdirSync(this.directory, { recursive: true });
     for (const file of readdirSync(this.directory)) if (/^session-[a-f0-9]+\.txt$/.test(file)) try { unlinkSync(join(this.directory, file)); } catch {}
   }
@@ -33,7 +33,8 @@ export class MediaStreamResolver {
   async resolve(url, signal) {
     const service = streamingService(url); if (!service) return null;
     signal.throwIfAborted();
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(new DOMException('Extraction timeout', 'TimeoutError')), this.budgetMs);
+    const controller = new AbortController();
+    let timer = setTimeout(() => controller.abort(new DOMException('Installation timeout', 'TimeoutError')), this.installBudgetMs);
     const extractionSignal = AbortSignal.any([signal, controller.signal]);
     const withinBudget = operation => new Promise((resolve, reject) => {
       const abort = () => { extractionSignal.removeEventListener('abort', abort); reject(extractionSignal.reason); };
@@ -43,10 +44,12 @@ export class MediaStreamResolver {
     });
     let cookieFile;
     try {
-      // Include installation, cookie access and process exit in one deadline.
-      // A shared first-time download can finish in the background for next time.
+      // First-time installation has its own bounded budget. Stop still cancels
+      // this request immediately; the shared download may finish for next time.
       const executable = await withinBudget(this.install());
       extractionSignal.throwIfAborted();
+      clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(new DOMException('Extraction timeout', 'TimeoutError')), this.budgetMs);
       const cookies = (await withinBudget(this.cookies())).filter(c => service[1].some(h => c.domain.replace(/^\./,'') === h || c.domain.replace(/^\./,'').endsWith('.' + h)));
       extractionSignal.throwIfAborted();
       cookieFile = join(this.directory, 'session-' + randomBytes(16).toString('hex') + '.txt');

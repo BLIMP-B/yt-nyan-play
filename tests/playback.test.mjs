@@ -71,6 +71,23 @@ test('無限 and 直接 play once to natural end without the 45-second cutoff', 
     p.video.ended = true; p.video.paused = true; assert.equal(p.read().ended, true); assert.equal(p.video.paused, true);
   }
 });
+test('detached audio is controlled and finishes in every mode, even when no DOM media exists', async () => {
+  for (const mode of ['preview', 'full', 'direct']) {
+    const p = player(mode, 0); p.video.tagName = 'AUDIO';
+    p.context.document.querySelectorAll = () => [];
+    p.context.window.__nyanMediaElements = () => [p.video];
+    assert.equal(p.read().found, true); assert.equal(p.video.paused, false); await tick();
+    assert.equal(p.read(true).paused, true);
+    p.read(false); assert.equal(p.video.paused, false);
+    p.video.currentTime = 60;
+    if (mode === 'preview') { p.fire('timeupdate'); assert.equal(p.read().previewFinished, true); }
+    else {
+      assert.equal(p.read().ended, false); assert.equal(p.video.paused, false);
+      p.video.currentTime = 300; p.video.ended = true; p.video.paused = true; p.fire('ended');
+      assert.equal(p.read().ended, true); p.read(); assert.equal(p.video.paused, true);
+    }
+  }
+});
 test('a previous preview timer is removed when full or direct controls reach the same media element', () => {
   for (const mode of ['full','direct']) {
     const p = player('preview', 0); p.read(); p.fire('playing'); assert.equal(p.timers.size, 1);

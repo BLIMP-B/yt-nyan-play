@@ -72,11 +72,11 @@ test('FFmpeg EOF is validated against the original duration instead of accepting
   assert.match(stream.error, /終端より前/);
 });
 
-test('the format deadline includes installation and cookie access; stop still cancels instead of falling back', async t => {
+test('installation and extraction have separate bounded deadlines; stop cancels instead of falling back', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'nyan-deadline-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
   for (const stage of ['install', 'cookies', 'extract']) {
     const logs = [], pending = () => new Promise(() => {});
-    const resolver = new MediaStreamResolver(directory, (_level, text) => logs.push(text), null, stage === 'cookies' ? pending : async () => [], { budgetMs: 25 });
+    const resolver = new MediaStreamResolver(directory, (_level, text) => logs.push(text), null, stage === 'cookies' ? pending : async () => [], { budgetMs: 25, installBudgetMs: 25 });
     resolver.install = stage === 'install' ? pending : async () => 'executable'; resolver.extract = pending;
     const start = performance.now();
     assert.equal(await resolver.resolve('https://www.nicovideo.jp/watch/sm9', new AbortController().signal), null);
@@ -86,4 +86,19 @@ test('the format deadline includes installation and cookie access; stop still ca
   resolver.install = () => new Promise(() => {}); const controller = new AbortController();
   const resolving = resolver.resolve('https://youtu.be/jNQXAC9IVRw', controller.signal); controller.abort();
   await assert.rejects(resolving, { name: 'AbortError' });
+});
+
+test('a cold installation does not consume the format budget and cancelled preparation never starts extraction', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nyan-cold-install-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const resolver = new MediaStreamResolver(directory, () => {}, null, async () => [], { budgetMs: 25, installBudgetMs: 1000 });
+  let installed;
+  resolver.install = () => new Promise(resolve => { installed = resolve; });
+  let extractions = 0;
+  resolver.extract = async () => { extractions++; return { formats: [{ url: 'https://cf-media.sndcdn.com/audio', acodec: 'opus', vcodec: 'none' }] }; };
+  const first = resolver.resolve('https://soundcloud.com/artist/track', new AbortController().signal);
+  await new Promise(resolve => setTimeout(resolve, 75)); installed('executable');
+  assert.equal((await first).audioOnly, true); assert.equal(extractions, 1);
+  const controller = new AbortController(), cancelled = resolver.resolve('https://soundcloud.com/artist/track', controller.signal);
+  controller.abort(); await assert.rejects(cancelled, { name: 'AbortError' }); installed('executable');
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(extractions, 1);
 });

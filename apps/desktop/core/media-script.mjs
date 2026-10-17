@@ -27,10 +27,16 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
     if (advertisement) playback.afterAd = true;
     const blockedReason = playability && !['OK', 'LIVE_STREAM_OFFLINE'].includes(playability.status) ? String(playability.reason || playability.status).slice(0, 300) : '';
     const loginRequired = playability?.status === 'LOGIN_REQUIRED';
-    const videos = [...document.querySelectorAll('video,audio')];
+    const videos = [...new Set([...document.querySelectorAll('video,audio'), ...(window.__nyanMediaElements?.() || [])])];
     if (playback.finished) { for (const video of videos) video.pause(); return { found: true, ended: true, advertisement: false, endedReason: playback.reason, currentTime: playback.endedTime, duration: playback.endedDuration }; }
     const chosen = document.querySelector('#movie_player video') || videos.find(v => !v.paused && !v.ended) || videos.sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0];
-    if (!chosen) return { found: false, blockedReason, loginRequired };
+    if (!chosen) {
+      if (!options.paused && !window.__nyanSitePlayRequested && /(^|\\.)soundcloud\\.com$/.test(window.location?.hostname || '')) {
+        const button = document.querySelector('.soundTitle__playButton .playButton,button.playControl');
+        if (button) { window.__nyanSitePlayRequested = true; button.click(); }
+      }
+      return { found: false, blockedReason, loginRequired };
+    }
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
     const finish = reason => {

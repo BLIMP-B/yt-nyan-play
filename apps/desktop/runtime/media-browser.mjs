@@ -1,10 +1,11 @@
 import { BrowserWindow } from 'electron';
+import { fileURLToPath } from 'node:url';
 import { validateMediaUrl } from '../core/config.mjs';
 import { mediaServiceName } from '../core/protocol.mjs';
 
 import { mediaScript } from '../core/media-script.mjs';
 import { APP_ICON } from './app-icon.mjs';
-import { playbackSession, guardMediaWindow } from './media-session.mjs';
+import { playbackSession, guardMediaWindow, fetchPlaybackRedirect } from './media-session.mjs';
 import { mediaAuthHosts } from '../core/media-accounts.mjs';
 import { openAudioStream } from './media-streams.mjs';
 import { mediaPolicy, streamContinuation } from '../core/media-policy.mjs';
@@ -21,7 +22,7 @@ export class MediaBrowser {
     if (!browserOnly) this.bridge.preparing?.(job);
     let url = originalUrl;
     if (new URL(url).hostname === 'on.soundcloud.com') {
-      try { url = await resolveSoundCloudShare(url, c.media.allowedHosts, (target, options) => playbackSession().fetch(target, options), signal); }
+      try { url = await resolveSoundCloudShare(url, c.media.allowedHosts, fetchPlaybackRedirect, signal); }
       catch (error) { signal.throwIfAborted(); this.log('warn', `${error.message}。元の共有ページから再生を試みます`); }
     }
     let stream, selected;
@@ -36,7 +37,7 @@ export class MediaBrowser {
     const ses = playbackSession();
     let window;
     try { window = new BrowserWindow({ width: 1050, height: 720, show: c.media.showWindow, title: payload.title || 'にゃんとーく〜Damare〜 再生',
-      icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } }); }
+      icon: APP_ICON, autoHideMenuBar: true, webPreferences: { session: ses, preload: fileURLToPath(new URL('./media-preload.cjs', import.meta.url)), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } }); }
     catch (error) { stream?.close(); throw error; }
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
@@ -75,7 +76,7 @@ export class MediaBrowser {
         if (state.found && !state.advertisement && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); this.bridge.played?.(job); }
         if (seen && !qualityReported && c.media.bandwidthSaving && !stream) { qualityReported = true; this.log(state.lowestQuality ? 'info' : 'warn', state.lowestQuality ? 'ブラウザの最低画質を指定しました' : 'このページは画質制御APIを公開していません。再生画面の画質設定をご確認ください'); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
-        this.status = { ...state, title, service: mediaServiceName(url), mode, limitSeconds, startedAt: playbackStartedAt, paused: this.paused, delivery: stream ? selected.audioOnly ? 'audio-only' : 'lowest-video' : 'browser' }; this.bridge.changed();
+        this.status = { ...state, title, service: mediaServiceName(url), mode, limitSeconds, shareExpanded: url !== originalUrl, startedAt: playbackStartedAt, paused: this.paused, delivery: stream ? selected.audioOnly ? 'audio-only' : 'lowest-video' : 'browser' }; this.bridge.changed();
         if (state.blockedReason && state.blockedReason !== reportedBlock) {
           const youtube = /(^|\.)youtube\.com$|^youtu\.be$/.test(new URL(url).hostname);
           reportedBlock = state.blockedReason; this.log('warn', `${mediaServiceName(url)}の再生条件: ${state.blockedReason}${state.loginRequired ? youtube ? '。「再生アカウント」で通常ブラウザのログインを引き継いでから再実行してください' : '。再生画面からログインしてください（Chromeとは別のCookie領域です）' : ''}`);

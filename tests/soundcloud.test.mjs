@@ -4,11 +4,27 @@ import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { parseMediaCommand, mediaAnnouncement, mediaServiceName } from '../apps/desktop/core/protocol.mjs';
 import { validateMediaNavigation } from '../apps/desktop/core/media-navigation.mjs';
 import { mediaAccount } from '../apps/desktop/core/media-accounts.mjs';
-import { resolveSoundCloudShare } from '../apps/desktop/runtime/soundcloud.mjs';
+import { resolveSoundCloudShare, nativeRedirectResponse } from '../apps/desktop/runtime/soundcloud.mjs';
+import { EventEmitter } from 'node:events';
 import { fetchTitleMetadata } from '../apps/desktop/runtime/media-title-metadata.mjs';
 
 const short = 'https://on.soundcloud.com/example', allowed = ['on.soundcloud.com'];
 const target = 'https://soundcloud.com/artist/track/s-private?secret_token=s-token&si=keep';
+test('native redirects are read before expected cancellation errors and abort stops the request', async () => {
+  let request;
+  const factory = options => {
+    assert.equal(options.redirect, 'manual'); request = new EventEmitter();
+    request.abort = () => { request.aborted = true; queueMicrotask(() => request.emit('error', Error('Redirect was cancelled'))); };
+    request.end = () => request.emit('redirect', 302, 'GET', target, {});
+    return request;
+  };
+  const response = await nativeRedirectResponse(factory, short, { signal: new AbortController().signal });
+  assert.equal(response.status, 302); assert.equal(response.headers.get('location'), target); assert.equal(request.aborted, true);
+  const controller = new AbortController();
+  const waiting = nativeRedirectResponse(options => { const r = factory(options); r.end = () => {}; return r; }, short, { signal: controller.signal });
+  controller.abort(); await assert.rejects(waiting, { name: 'AbortError' }); assert.equal(request.aborted, true);
+  await new Promise(resolve => setImmediate(resolve));
+});
 test('SoundCloud is recognized for every playback mode, activity, service announcement and account session', () => {
   const c = normalizeConfig();
   for (const suffix of ['再生', '無限', '直接']) assert.equal(parseMediaCommand(short + suffix, c).url, short);

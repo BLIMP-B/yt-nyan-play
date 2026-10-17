@@ -164,6 +164,23 @@ try {
   application = await _electron.launch({ executablePath: require('electron'), args: [directory, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
   application.on('console', message => console.log('Electron:', message.text()));
   const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
+  // Use Chromium's real network stack, not a fetch mock or custom protocol.
+  report.nativeRedirect = await application.evaluate(async ({ net }, moduleUrl) => {
+    const { createServer } = await import('node:http');
+    const { nativeRedirectResponse } = await import(moduleUrl);
+    let destinationRequests = 0;
+    const server = createServer((request, response) => {
+      if (request.url === '/share') response.writeHead(302, { location: '/track' }).end();
+      else { destinationRequests++; response.end('track'); }
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const response = await nativeRedirectResponse(options => net.request(options), 'http://127.0.0.1:' + server.address().port + '/share', { signal: AbortSignal.timeout(5000) });
+      return { status: response.status, location: response.headers.get('location'), destinationRequests };
+    } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+  }, pathToFileURL(join(root, 'apps/desktop/runtime/soundcloud.mjs')).href);
+  assert.equal(report.nativeRedirect.status, 302); assert.equal(report.nativeRedirect.destinationRequests, 0);
+  assert.ok(report.nativeRedirect.location.endsWith('/track'));
   const fadeFields = ['media.duckFadeOutMs', 'media.duckFadeInMs', 'hourly.bgmFadeInMs', 'hourly.bgmFadeOutMs'];
   for (const key of fadeFields) assert.equal(await page.locator(`[data-config="${key}"]`).inputValue(), '3');
   await page.locator('[data-view="settings"]').click();
@@ -268,7 +285,7 @@ try {
       const url = new URL(request.url);
       if (url.hostname === 'on.soundcloud.com' && url.pathname === '/NyanVerification') return new Response(null, { status: 302, headers: { location: 'https://soundcloud.com/nyan-verification/audio' } });
       if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
-      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><audio controls autoplay src="/nyan-verification/audio.ogg"></audio>', { headers: { 'Content-Type': 'text/html' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><script>const detached = new Audio("/nyan-verification/audio.ogg"); detached.play();</script>', { headers: { 'Content-Type': 'text/html' } });
       if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
     });
@@ -536,6 +553,19 @@ try {
       const spokenBefore = synthesisTexts.length;
       try {
         const job = await call(page, 'media:add', { url: 'https://on.soundcloud.com/NyanVerification', mode: bandwidthSaving ? 'direct' : 'full', guildId: '71111' });
+        await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.some(m => m.scope === '71111' && m.startedAt && m.currentTime > 0.1));
+        const playback = (await call(page, 'state')).media.find(m => m.scope === '71111');
+        assert.equal(playback.shareExpanded, true, 'A successful extractor must not mask a failed short-link expansion');
+        if (!bandwidthSaving) {
+          const domCount = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w !== globalThis.nyanAudioProbe.ui).webContents.executeJavaScript('document.querySelectorAll("audio,video").length'));
+          assert.equal(domCount, 0, 'The fallback fixture must play without DOM media');
+          await call(page, 'control', 'pause'); await new Promise(resolve => setTimeout(resolve, 650));
+          const paused = (await call(page, 'state')).media.find(m => m.scope === '71111');
+          assert.equal(paused.paused, true);
+          await new Promise(resolve => setTimeout(resolve, 600));
+          assert.ok(Math.abs((await call(page, 'state')).media.find(m => m.scope === '71111').currentTime - paused.currentTime) < 0.05);
+          await call(page, 'control', 'resume');
+        }
         await waitForJob(page, job.id);
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
         assert.ok(metrics?.mediaToneSamples > 4800, 'SoundCloud short link did not produce PC media audio: ' + JSON.stringify(metrics));
@@ -545,6 +575,7 @@ try {
     }
   } finally { await application.evaluate(() => { globalThis.nyanSoundCloudFixture = false; }); }
   report.soundcloud = { passed: true, shortLinkExpanded: true, shortOnlyAllowlist: true, browserPC: true, audioStreamPC: true, serviceAnnouncement: true, actualServiceAudio: false, receiverVerified: false, cases: soundcloudCases };
+  report.soundcloud.detachedAudio = { detected: true, pauseResume: true, naturalEnd: true };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.
@@ -769,13 +800,18 @@ try {
   });
   // Public sites can require login, consent or block hosted CI. Record failures explicitly.
   const verifiedServices = new Set();
-  for (const url of JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]')) {
+  const liveUrls = JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]');
+  const liveConfig = (await call(page, 'state')).config;
+  const liveCases = liveUrls.map(url => ({ url, browserOnly: false }));
+  if (process.env.NYAN_VERIFY_SOUNDCLOUD_BROWSER && liveUrls.some(url => liveService(url) === 'soundcloud')) liveCases.push({ url: liveUrls.find(url => liveService(url) === 'soundcloud'), browserOnly: true });
+  for (const { url, browserOnly } of liveCases) {
     const service = liveService(url);
-    if (process.env.NYAN_REQUIRE_LIVE_SERVICES && verifiedServices.has(service)) continue;
-    const outcome = { url, service, verifiedAudio: false };
+    if (process.env.NYAN_REQUIRE_LIVE_SERVICES && verifiedServices.has(service) && !browserOnly) continue;
+    const outcome = { url, service, browserOnly, verifiedAudio: false };
     let job;
     try {
-      job = await call(page, 'media:add', { url, mode: 'direct' });
+      liveConfig.media.bandwidthSaving = !browserOnly; await call(page, 'config:save', liveConfig);
+      job = await call(page, 'media:add', { url, mode: browserOnly ? 'full' : 'direct' });
       await application.evaluate(async ({ BrowserWindow }, label) => {
         const probe = globalThis.nyanAudioProbe; probe.active = label;
         const until = Date.now() + 180000;
@@ -798,7 +834,10 @@ try {
         if (current.status === 'failed') throw new Error(current.error);
         const playback = state.media.find(m => m.scope === mediaScope(job.payload));
         if (playback?.loginRequired && playback.ready === 0 && Date.now() - began > 5000) throw new Error(playback.blockedReason || 'Site requires login before playback');
-        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
+        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) {
+          if (new URL(url).hostname === 'on.soundcloud.com') assert.equal(playback.shareExpanded, true, 'Short-link expansion failed before audible playback');
+          Object.assign(outcome, metrics, { verifiedAudio: true }); break;
+        }
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       outcome.playback = (await call(page, 'state')).media;
