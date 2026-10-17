@@ -21,6 +21,7 @@ const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/au
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.7', '-ar', '48000', '-ac', '2', join(directory, 'speech.wav')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=320x180:rate=25:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:v', 'libvpx', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-shortest', join(directory, 'video.webm')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=8', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'soundcloud.ogg')]);
 for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=30`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', '-ac', '2', join(directory, 'scope-speech.wav')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-ar', '48000', '-ac', '2', join(directory, 'long-title.wav')]);
@@ -108,7 +109,7 @@ HourlyHistory.prototype.sync = function(...args) {
 };
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
-  if (globalThis.nyanSoundCloudFixture && url === 'https://soundcloud.com/nyan-verification/audio') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'soundcloud', headers: {}, duration: 4 });
+  if (globalThis.nyanSoundCloudFixture && url === 'https://soundcloud.com/nyan-verification/audio') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'soundcloud.ogg'))}, audioOnly: true, service: 'soundcloud', headers: {}, duration: 8 });
   if (['/title-slow-preparation', '/title-long-overlap', '/title-direct-overlap'].includes(new URL(url).pathname)) {
     const timing = { url, extractionStartedAt: Date.now() }; (globalThis.nyanTitleTimings ||= []).push(timing);
     return new Promise((resolve, reject) => {
@@ -253,7 +254,7 @@ try {
   report.mediaEffects = { discordPresetByDefault: 'discord1', discordPresetsSelectable: true, eqPresetApplied: true, compressorPresetApplied: true, customSaved: true, rendererReloadVerified: true, equalizer: effectSettings.equalizer, compressor: effectSettings.compressor };
   await page.locator('[data-view="overview"]').click();
   // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
-  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio, scopeVideo, scopeAudio }) => {
+  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio, soundcloudAudio, scopeVideo, scopeAudio }) => {
     const ui = BrowserWindow.getAllWindows()[0];
     const probe = globalThis.nyanAudioProbe = { ui, target: ui, active: 'speech', metrics: {}, chunks: {} };
     ui.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
@@ -287,7 +288,7 @@ try {
     await mediaSession.protocol.handle('https', request => {
       const url = new URL(request.url);
       if (url.hostname === 'on.soundcloud.com' && url.pathname === '/NyanVerification') return new Response(null, { status: 302, headers: { location: 'https://soundcloud.com/nyan-verification/audio' } });
-      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio.ogg') return new Response(new Uint8Array(soundcloudAudio), { headers: { 'Content-Type': 'audio/ogg' } });
       if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><script>const detached = new Audio("/nyan-verification/audio.ogg"); detached.play();</script>', { headers: { 'Content-Type': 'text/html' } });
       if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
@@ -310,7 +311,7 @@ try {
       return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>${replace}`, { headers: { 'Content-Type': 'text/html' } });
     });
     ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture', 'speaker-selection'].includes(permission)));
-  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))], scopeVideo: [...readFileSync(join(directory, 'scope-video.ogg'))], scopeAudio: [...readFileSync(join(directory, 'scope-audio.ogg'))] });
+  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))], soundcloudAudio: [...readFileSync(join(directory, 'soundcloud.ogg'))], scopeVideo: [...readFileSync(join(directory, 'scope-video.ogg'))], scopeAudio: [...readFileSync(join(directory, 'scope-audio.ogg'))] });
   await application.evaluate(() => { globalThis.nyanAudioProbe.capture = true; });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
@@ -556,8 +557,8 @@ try {
       const spokenBefore = synthesisTexts.length;
       try {
         const job = await call(page, 'media:add', { url: 'https://on.soundcloud.com/NyanVerification', mode: bandwidthSaving ? 'direct' : 'full', guildId: '71111' });
-        await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.some(m => m.scope === '71111' && m.startedAt && m.currentTime > 0.1));
-        const playback = (await call(page, 'state')).media.find(m => m.scope === '71111');
+        const playing = await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.find(m => m.scope === '71111' && m.startedAt && m.currentTime > 0.1) || false);
+        const playback = await playing.jsonValue(); await playing.dispose();
         assert.equal(playback.shareExpanded, true, 'A successful extractor must not mask a failed short-link expansion');
         if (!bandwidthSaving) {
           const domCount = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w !== globalThis.nyanAudioProbe.ui).webContents.executeJavaScript('document.querySelectorAll("audio,video").length'));
@@ -569,11 +570,11 @@ try {
           assert.ok(Math.abs((await call(page, 'state')).media.find(m => m.scope === '71111').currentTime - paused.currentTime) < 0.05);
           await call(page, 'control', 'resume');
         }
-        await waitForJob(page, job.id);
+        await waitForJob(page, job.id, 20000);
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
         assert.ok(metrics?.mediaToneSamples > 4800, 'SoundCloud short link did not produce PC media audio: ' + JSON.stringify(metrics));
         if (!bandwidthSaving) assert.ok(synthesisTexts.slice(spokenBefore).includes('さうんどくらうどを再生します'));
-        soundcloudCases.push({ bandwidthSaving, mode: job.payload.mode, pcPlayback: true, ...metrics });
+        soundcloudCases.push({ bandwidthSaving, mode: job.payload.mode, pcPlayback: true, playback, ...metrics });
       } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
     }
   } finally { await application.evaluate(() => { globalThis.nyanSoundCloudFixture = false; }); }
