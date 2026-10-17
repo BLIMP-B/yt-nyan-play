@@ -271,7 +271,7 @@ jobs:
           assert.ok(direct?.playback.some(s => s.shareExpanded === true));
           assert.ok(direct.discordEncoder.nonSilentSamples > 4800);
           const browser = r.liveMedia.find(p => p.service === 'soundcloud' && p.browserOnly);
-          assert.ok(browser?.playback.some(s => s.shareExpanded === true));
+          assert.ok(browser?.playback?.some(s => s.shareExpanded === true), browser?.error || 'No SoundCloud browser state');
           if (browser.verifiedAudio) assert.ok(browser.discordEncoder.nonSilentSamples > 4800);
           else {
             // Anonymous CI may be required to sign in. This verifies the real

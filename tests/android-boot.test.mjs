@@ -11,7 +11,7 @@ test('first boot can progress beyond the old three-minute limit and waits for Go
     if (args.includes('path')) return ++packageChecks >= 2 ? 'package:/product/priv-app/Phonesky/Phonesky.apk' : '';
     throw new Error('unexpected ADB call');
   }, { now: () => clock, delay: async ms => { clock += ms; }, changed: state => phases.push(state.phase) });
-  assert.ok(state.elapsedMs > 180000); assert.equal(packageChecks, 2); assert.ok(phases.includes('Androidシステムの初期化')); assert.equal(state.properties['sys.boot_completed'], '1');
+  assert.ok(state.elapsedMs > 180000); assert.equal(packageChecks, 4); assert.ok(phases.includes('Androidシステムの初期化')); assert.equal(state.properties['sys.boot_completed'], '1');
 });
 test('offline ADB during startup is retried and an unchanged boot has a bounded recovery deadline', async () => {
   let clock = 0;
@@ -77,4 +77,16 @@ test('Play focus verification retries slow launch requests and succeeds when the
   let clock = 0, launches = 0;
   const state = await waitForPlayWindow(async () => launches > 1 ? 'mCurrentFocus=Window{1 com.android.vending/MainActivity}' : 'mCurrentFocus=Window{1 com.google.android.apps.nexuslauncher/Main}', async () => { if (++launches === 1) throw new Error('initialization timeout'); }, { now: () => clock, maxMs: 60000, delay: async ms => { clock += ms; } });
   assert.equal(launches, 2); assert.match(state.focus, /com.android.vending/);
+});
+
+test('boot completion must remain reachable after the first-boot ADB restart', async () => {
+  let clock = 0, packages = 0; const phases = [];
+  const result = await waitForAndroidBoot(async args => {
+    if (clock === 3000) throw new Error("adb.exe: device 'emulator-5580' not found");
+    if (args.includes('getprop')) return '[sys.boot_completed]: [1]';
+    if (args.includes('path')) { packages++; return 'package:/product/priv-app/Phonesky/Phonesky.apk'; }
+    return '';
+  }, { now: () => clock, delay: async ms => { clock += ms; }, changed: state => phases.push(state) });
+  assert.ok(result.elapsedMs >= 12000); assert.equal(packages, 4);
+  assert.ok(phases.some(s => s.error?.includes('not found')));
 });

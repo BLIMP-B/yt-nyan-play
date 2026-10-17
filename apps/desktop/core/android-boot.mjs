@@ -16,7 +16,7 @@ export async function waitForAndroidBoot(adb, {
   signal, maxMs = 720000, stallMs = 300000, now = Date.now,
   delay = ms => wait(ms, undefined, { signal }), changed = () => {},
 } = {}) {
-  const began = now(); let progressed = began, last = '', state = { phase: '端末への接続待ち', properties: {}, events: '' };
+  const began = now(); let stable = 0, progressed = began, last = '', state = { phase: '端末への接続待ち', properties: {}, events: '' };
   while (now() - began < maxMs) {
     signal?.throwIfAborted();
     try {
@@ -28,9 +28,12 @@ export async function waitForAndroidBoot(adb, {
       if (token !== last) { progressed = now(); last = token; }
       if (properties['sys.boot_completed'] === '1') {
         const installed = await adb(['shell', 'pm', 'path', 'com.android.vending'], { signal, timeout: 15000 });
-        if (/^package:/m.test(installed)) return { ...state, elapsedMs: now() - began };
-      }
-    } catch (error) { signal?.throwIfAborted(); state.error = error.message; }
+        // First boot can restart adbd after setting boot_completed. A single
+        // successful package query is not proof that the transport is stable.
+        if (/^package:/m.test(installed)) { if (++stable >= 3) return { ...state, elapsedMs: now() - began }; }
+        else stable = 0;
+      } else stable = 0;
+    } catch (error) { signal?.throwIfAborted(); stable = 0; state.error = error.message; }
     changed({ ...state, elapsedMs: now() - began });
     if (now() - progressed >= stallMs) throw new AndroidBootError('Androidの起動が進んでいません。復旧起動を試します', state);
     await delay(3000);

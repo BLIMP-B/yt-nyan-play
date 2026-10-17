@@ -871,16 +871,26 @@ try {
     try {
       liveConfig.media.bandwidthSaving = !browserOnly; await call(page, 'config:save', liveConfig);
       job = await call(page, 'media:add', { url, mode: browserOnly ? 'full' : 'direct' });
-      await application.evaluate(async (_electron, { id, label }) => {
-        const probe = globalThis.nyanAudioProbe; probe.active = label;
-        const until = Date.now() + 180000;
-        while (Date.now() < until) {
-          const target = globalThis.nyanProbeBrowsers.get(id)?.window;
-          if (target && !target.isDestroyed()) { probe.target = target; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
-          await new Promise(resolve => setTimeout(resolve, 50));
+      const openingUntil = Date.now() + 180000; let captured = false;
+      while (!captured && Date.now() < openingUntil) {
+        const opening = await call(page, 'state'), current = opening.jobs.find(j => j.id === job.id);
+        if (current && !['waiting', 'running'].includes(current.status)) {
+          outcome.startup = { status: current.status, error: current.error };
+          throw new Error(current.error || 'Playback ended before its window opened: ' + current.status);
         }
+        captured = await application.evaluate(async (_electron, { id, label }) => {
+          const probe = globalThis.nyanAudioProbe, target = globalThis.nyanProbeBrowsers.get(id)?.window;
+          if (!target || target.isDestroyed()) return false;
+          probe.active = label; probe.target = target; probe.capture = true;
+          await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return true;
+        }, { id: job.id, label: 'live-' + job.id });
+        if (!captured) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!captured) {
+        const waiting = await call(page, 'state');
+        outcome.startup = { job: waiting.jobs.find(j => j.id === job.id), paused: waiting.paused, activeSpeech: waiting.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status)), logs: waiting.logs.slice(-8) };
         throw new Error('Playback window did not open');
-      }, { id: job.id, label: 'live-' + job.id });
+      }
       const began = Date.now(), until = began + 55000; let adSamples = 0;
       while (Date.now() < until) {
         // A truncated audio stream can continue in a fresh browser window.
