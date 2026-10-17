@@ -15,6 +15,10 @@
 
 `scripts/verify-soundcloud-links.mjs`は同じ短縮リンク展開処理にNodeのHTTP GETを渡し、HTTPステータス・公式転送先をWindowsで記録します。Electronでの曲の実音声取得は別の実サイト試験へ記録します。HTTP転送の成功だけを音声再生の成功とは扱いません。
 
+Windowsで新旧の指定リンクを確認したところ、`on.soundcloud.com/mnTxXSOAB7VR8gVSVm`と`on.soundcloud.com/mSGisM2jW5ftxL72bf`はいずれもHTTP 302で`https://soundcloud.com/uxu-169830723/2831ca85-5370-4159-a751-319145ce6c0f`へ転送されました。ここでは追跡クエリを表示から省いていますが、実装は転送先のクエリを保持します。
+
+v0.5.20の実サイト試験にはローカル素材用HTTP(S)ハンドラーが残っており、転送元のURLに転送先の本文を返すなど、実際のネットワークとは異なる観測になり得ました。v0.5.21の実サイト試験ではこれを解除してから接続します。v0.5.20で表示された「ユーザーが見つからない」というページだけを根拠に、指定短縮リンクを無効と判断しません。
+
 参照元:
 
 - [yt-dlpメンテナによるSoundCloud短縮リンクのHTTP転送の説明](https://github.com/yt-dlp/yt-dlp/issues/12751)

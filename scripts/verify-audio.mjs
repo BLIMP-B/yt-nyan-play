@@ -761,6 +761,12 @@ try {
   report.localFallback = { speech: true, media: true, hourly: true, botInVC: false, passed: true };
   report.passed = true;
   report.liveMedia = [];
+  // Fixture handlers proxy unmatched requests and can conceal the original
+  // redirect response/cookie session. Real sites must use production networking.
+  if (JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]').length) await application.evaluate(({ session }) => {
+    const protocol = session.fromPartition('persist:nyan-playback').protocol;
+    protocol.unhandle('https'); protocol.unhandle('http');
+  });
   // Public sites can require login, consent or block hosted CI. Record failures explicitly.
   const verifiedServices = new Set();
   for (const url of JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]')) {
