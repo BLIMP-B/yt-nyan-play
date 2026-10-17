@@ -261,6 +261,7 @@ jobs:
           NYAN_REQUIRE_LIVE_SERVICES: 'soundcloud,youtube,niconico'
           NYAN_VERIFY_SOUNDCLOUD_BROWSER: '1'
       - name: Require real SoundCloud streaming audio and verify the browser outcome
+        shell: bash
         run: |
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
