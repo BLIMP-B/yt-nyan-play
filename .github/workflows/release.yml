@@ -287,7 +287,7 @@ jobs:
             }
             if (atLeast(20)) {
               const conversion = audio.mediaConversions;
-              for (const key of ['passed', 'chatRegistration', 'unicodeEmoji', 'uiSave', 'reload', 'directMode', 'bodyReplaced', 'noAnnouncement', 'deduplicated', 'forgotten', 'pcPlayback']) assert.equal(conversion[key], true);
+              for (const key of ['passed', 'chatRegistration', 'unicodeEmoji', 'uiSave', 'reload', 'directMode', 'bodyReplaced', 'noAnnouncement', 'titleCallsFollowSettings', 'deduplicated', 'forgotten', 'pcPlayback']) assert.equal(conversion[key], true);
               assert.equal(conversion.receiverVerified, false);
               assert.ok(conversion.mediaToneSamples > 4800);
             }

@@ -489,6 +489,7 @@ try {
   const reloadedConversion = (await call(page, 'state')).config.mediaConversions.find(e => e.source === '✅');
   assert.equal(reloadedConversion.url, 'http://media-fixture.test/audio?from=conversion');
   const synthesisBeforeConversion = synthesisTexts.length;
+  const beforeConversionJobs = new Set((await call(page, 'state')).jobs.map(j => j.id));
   await page.waitForFunction(() => Boolean(window.nyanCapture && window.nyanLocalAudio));
   await application.evaluate(async () => {
     const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'conversion-audio'; probe.capture = true;
@@ -503,13 +504,17 @@ try {
     await waitForJob(page, converted[0].id);
     conversionMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics['conversion-audio']);
     assert.ok(conversionMetrics?.mediaToneSamples > 4800, 'Converted media did not reach PC output: ' + JSON.stringify(conversionMetrics));
-    assert.equal(synthesisTexts.length, synthesisBeforeConversion, 'Direct conversion must not speak the body, service announcement or title call');
+    // Direct playback skips the body and service announcement. Title calls
+    // remain independent and follow the existing titleCallEnabled setting.
+    const titleSpeech = (await call(page, 'state')).jobs.filter(j => !beforeConversionJobs.has(j.id) && j.kind === 'speech');
+    assert.ok(titleSpeech.every(j => j.payload.titleCall === true && j.payload.system === true), 'Direct conversion must not speak the body or service announcement: ' + JSON.stringify(titleSpeech));
+    assert.equal(synthesisTexts.length - synthesisBeforeConversion, titleSpeech.length);
   } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
   const forgotten = await emitConversion('忘却（✅）', 'conversion-forget'); await waitForJob(page, forgotten[0].id);
   assert.ok(!(await call(page, 'state')).config.mediaConversions.some(e => e.source === '✅'));
   const ordinary = await emitConversion('忘却後✅', 'conversion-after-forget');
   assert.equal(ordinary.length, 1); assert.equal(ordinary[0].kind, 'speech'); await waitForJob(page, ordinary[0].id);
-  report.mediaConversions = { passed: true, chatRegistration: true, unicodeEmoji: true, uiSave: true, reload: true, directMode: true, bodyReplaced: true, noAnnouncement: true, deduplicated: true, forgotten: true, pcPlayback: true, receiverVerified: false, ...conversionMetrics };
+  report.mediaConversions = { passed: true, chatRegistration: true, unicodeEmoji: true, uiSave: true, reload: true, directMode: true, bodyReplaced: true, noAnnouncement: true, titleCallsFollowSettings: true, deduplicated: true, forgotten: true, pcPlayback: true, receiverVerified: false, ...conversionMetrics };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.
