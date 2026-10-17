@@ -806,6 +806,9 @@ try {
   const monitorConfig = (await call(page, 'state')).config;
   monitorConfig.bot.bindings.push({ guildId: '99998', voiceChannelId: '33333', textChannelIds: [] });
   monitorConfig.desktop.voiceMonitorGuildId = '99998'; monitorConfig.desktop.voiceMonitorVolume = 0.65;
+  // Earlier settings tests intentionally save a balanced/custom bitrate through
+  // the UI. Explicitly select the poor-network profile for this jitter budget.
+  monitorConfig.desktop.networkProfile = 'poor'; monitorConfig.desktop.audioBitrateKbps = 48;
   const availableSpeakers = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default').map(d => ({ deviceId: d.deviceId, label: d.label })));
   monitorConfig.desktop.outputDevice = availableSpeakers[0]?.deviceId || '';
   await call(page, 'config:save', monitorConfig); await call(page, 'voice:join', '99998');
