@@ -9,7 +9,7 @@ import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 // production browser controller and audible page, not a Discord receiver.
 app.setPath('userData', mkdtempSync(join(tmpdir(), 'nyan-soundcloud-browser-')));
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-await app.whenReady();
+app.whenReady().then(async () => {
 const directory = resolve('dist/soundcloud-browser-verification'); mkdirSync(directory, { recursive: true });
 const config = normalizeConfig({ media: { output: 'local', bandwidthSaving: false, showWindow: true } });
 const report = { passed: false, platform: process.platform, receiverVerified: false, captureVerified: false, states: [], logs: [] };
@@ -40,3 +40,5 @@ finally {
   console.log(JSON.stringify({ passed: report.passed, error: report.error, page: report.page, last: report.states.at(-1) }));
   app.exit(report.passed ? 0 : 1);
 }
+
+}).catch(error => { console.error(error.message); app.exit(1); });
