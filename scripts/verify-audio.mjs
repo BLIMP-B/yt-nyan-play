@@ -15,6 +15,7 @@ import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 import { verifyAudioNetwork } from './audio-network-probe.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { mediaScope } from '../apps/desktop/core/media-pool.mjs';
+import { pcmWav } from '../apps/desktop/core/hourly-audio.mjs';
 import { verifyVoiceMonitorContinuity } from './voice-monitor-probe.mjs';
 import { createMediaNetworkFixture, pcmContinuity } from './media-buffer-probe.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
@@ -309,6 +310,10 @@ try {
         for (let i = 0; i + 3 < buffer.length; i += 4) { const sample = buffer.readInt16LE(i); framePeak = Math.max(framePeak, Math.abs(sample)); if (i && (sample >= 0) !== (previous >= 0)) crossings++; previous = sample; }
         const frequency = crossings * 48000 / (2 * (buffer.length / 4));
         if (framePeak > 100 && Math.abs(frequency - expected) < 75) metrics.mediaToneSamples = (metrics.mediaToneSamples || 0) + buffer.length / 4;
+        if (label === 'video' && globalThis.nyanAudioHistory?.syncing && framePeak > 100) {
+          if (Math.abs(frequency - 880) < 75) metrics.historyMediaSamples = (metrics.historyMediaSamples || 0) + buffer.length / 4;
+          if (Math.abs(frequency - 440) < 75) metrics.historySpeechSamples = (metrics.historySpeechSamples || 0) + buffer.length / 4;
+        }
       }
       if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
     });
@@ -344,8 +349,7 @@ try {
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
   const historyConfig=(await call(page,'state')).config; historyConfig.hourly.servers=[{guildId:'11111',channelIds:['22222'],enabled:true,bgm:false}];
-  await call(page,'config:save',historyConfig);
-  const historyTask=call(page,'hourly:sync'); historyTask.catch(()=>{});
+  let historyTask;
   const jobs = [];
   for (let n = 1; n <= 3; n++) jobs.push(await call(page, 'speech:test', { text: `連続読み上げ${n}`, styleId: 3 }));
   for (const job of jobs) { await waitForJob(page, job.id); report.speech.push({ text: job.payload.text, status: 'completed' }); }
@@ -395,6 +399,17 @@ try {
       }
       throw new Error('Playback window did not open');
     }, kind);
+    if (kind === 'video') {
+      // The import must overlap audible media, not finish during UI/education
+      // checks before the player starts on a fast or heavily loaded runner.
+      await waitForPlayback(page, job);
+      const concurrentConfig = (await call(page, 'state')).config;
+      concurrentConfig.hourly.servers = historyConfig.hourly.servers;
+      await call(page, 'config:save', concurrentConfig);
+      historyTask = call(page, 'hourly:sync'); historyTask.catch(() => {});
+      const speech = await call(page, 'speech:test', { text: '履歴取得中の読み上げ', styleId: 3 });
+      await waitForJob(page, speech.id);
+    }
     await waitForJob(page, job.id);
     const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
     assert.ok(metrics?.mediaToneSamples > 4800, `${kind} audio did not reach PC output (announcement excluded): ${JSON.stringify(metrics)}`);
@@ -442,7 +457,7 @@ try {
   report.titleCalls.extractionConcurrent = true;
   report.titleCalls.playbackDoesNotWaitForTitle = true;
   await historyTask;
-  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
+  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.video.historySpeechSamples||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.historyMediaSamples||0}));
   assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
   assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
   assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
@@ -806,21 +821,24 @@ try {
   for (let i = 0; i < 960; i++) { const sample = Math.round(8000 * Math.sin(i * 2 * Math.PI * 1000 / 48000)); monitorPcm.writeInt16LE(sample, i * 4); monitorPcm.writeInt16LE(sample, i * 4 + 2); }
   try { for (let i = 0; i < 600; i++) monitorPackets.push([...monitorEncoder.encode(monitorPcm, 960)]); } finally { monitorEncoder.delete(); }
   const voiceResult = await application.evaluate(async (_electron, packets) => {
-    const fixture = globalThis.nyanMonitorFixture, began = performance.now(); let previous = 0;
+    const fixture = globalThis.nyanMonitorFixture, began = performance.now(); let previous = 0, maximumLateMs = 0;
     for (let i = 0; i < packets.length; i++) {
       let due = i * 20 + (i % 100 >= 20 && i % 100 < 28 ? 180 : 0);
       if (due % 2000 >= 900 && due % 2000 < 1060) due += 1060 - due % 2000;
       due = Math.max(previous, due); previous = due;
       const delay = due - (performance.now() - began); if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      maximumLateMs = Math.max(maximumLateMs, performance.now() - began - due);
       fixture.streams.get('44444').write(Buffer.from(packets[i]));
     }
     const receivedUsers = fixture.streams.size; fixture.monitor.remove('44444');
     await new Promise(resolve => setTimeout(resolve, 850));
     const chunks = globalThis.nyanAudioProbe.chunks['voice-monitor'] || [];
-    return { selfExcluded: !fixture.streams.has('99999'), receivedUsers, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'], pcm: Buffer.concat(chunks).toString('base64') };
+    return { inputClock: { maximumLateMs, packets: packets.length }, selfExcluded: !fixture.streams.has('99999'), receivedUsers, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'], pcm: Buffer.concat(chunks).toString('base64') };
   }, monitorPackets);
-  const monitorContinuity = pcmContinuity(Buffer.from(voiceResult.pcm, 'base64')); delete voiceResult.pcm;
+  const monitorBytes = Buffer.from(voiceResult.pcm, 'base64'), monitorContinuity = pcmContinuity(monitorBytes); delete voiceResult.pcm;
+  writeFileSync(join(reports, 'vc-monitor.wav'), pcmWav(monitorBytes));
   const playout = await page.evaluate(() => window.nyanLocalAudio.snapshot().monitorStats);
+  report.voiceMonitor = { ...voiceResult, continuity: { ...monitorContinuity, playout }, passed: false };
   assert.equal(voiceResult.selfExcluded, true); assert.ok(voiceResult.metrics.nonSilentSamples > 1000);
   assert.ok(monitorContinuity.audibleFrames >= 540, JSON.stringify(monitorContinuity));
   assert.equal(monitorContinuity.gapsOver100ms, 0, JSON.stringify(monitorContinuity));
