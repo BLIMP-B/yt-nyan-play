@@ -33,9 +33,16 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
     if (playback.finished) { for (const video of videos) video.pause(); return { found: true, ended: true, advertisement: false, endedReason: playback.reason, currentTime: playback.endedTime, duration: playback.endedDuration }; }
     const chosen = document.querySelector('#movie_player video') || videos.find(v => !v.paused && !v.ended) || videos.sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0];
     if (!chosen) {
-      if (!options.paused && !window.__nyanSitePlayRequested && /(^|\\.)soundcloud\\.com$/.test(window.location?.hostname || '')) {
-        const button = document.querySelector('.soundTitle__playButton .playButton,button.playControl');
-        if (button) { window.__nyanSitePlayRequested = true; button.click(); }
+      if (!options.paused && /(^|\\.)soundcloud\\.com$/.test(window.location?.hostname || '')) {
+        const root = document.querySelector('.soundTitle__playButton');
+        const button = root?.matches('button,a') ? root : root?.querySelector('button,a,.playButton') || document.querySelector('button.playControl');
+        const active = document.querySelector('button.playControl.playing,.soundTitle__playButton.playing,.soundTitle__playButton .playing') || /pause/i.test(button?.getAttribute('aria-label') || '');
+        const attempt = window.__nyanSitePlay ||= { count: 0, at: -Infinity };
+        // The visible button can precede the site's click handler. Retry only
+        // while no media exists and the site's own controls say it is paused.
+        if (button && !button.disabled && !active && attempt.count < 8 && Date.now() - attempt.at >= 2000) {
+          attempt.count++; attempt.at = Date.now(); button.click();
+        }
       }
       return { found: false, blockedReason, loginRequired };
     }

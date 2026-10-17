@@ -112,6 +112,9 @@ HourlyHistory.prototype.sync = function(...args) {
   return sync.apply(this,args).finally(()=>clearInterval(timer));
 };
 import { MediaBrowser } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-browser.mjs')).href)};
+globalThis.nyanProbeBrowsers = new Map();
+const browserPlay = MediaBrowser.prototype.play;
+MediaBrowser.prototype.play = function(job, ...args) { globalThis.nyanProbeBrowsers.set(job.id, this); return browserPlay.call(this, job, ...args); };
 const bufferPolicy = MediaBrowser.prototype.streamBufferOptions;
 MediaBrowser.prototype.streamBufferOptions = function(profile) {
   if (this.job?.payload.url === 'http://media-fixture.test/network-buffer-baseline') return { startupSeconds: 0, burstSeconds: 0 };
@@ -313,7 +316,7 @@ try {
       const url = new URL(request.url);
       if (url.hostname === 'on.soundcloud.com' && url.pathname === '/NyanVerification') return new Response(null, { status: 302, headers: { location: 'https://soundcloud.com/nyan-verification/audio' } });
       if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio.ogg') return new Response(new Uint8Array(soundcloudAudio), { headers: { 'Content-Type': 'audio/ogg' } });
-      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><script>const detached = new Audio("/nyan-verification/audio.ogg"); detached.play();</script>', { headers: { 'Content-Type': 'text/html' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><button class="soundTitle__playButton playButton" aria-label="Play">Play</button><script>setTimeout(() => document.querySelector("button").onclick = () => { if (window.detached) return; window.detached = new Audio("/nyan-verification/audio.ogg"); detached.play(); }, 1000);</script>', { headers: { 'Content-Type': 'text/html' } });
       if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
     });
@@ -868,16 +871,16 @@ try {
     try {
       liveConfig.media.bandwidthSaving = !browserOnly; await call(page, 'config:save', liveConfig);
       job = await call(page, 'media:add', { url, mode: browserOnly ? 'full' : 'direct' });
-      await application.evaluate(async ({ BrowserWindow }, label) => {
+      await application.evaluate(async (_electron, { id, label }) => {
         const probe = globalThis.nyanAudioProbe; probe.active = label;
         const until = Date.now() + 180000;
         while (Date.now() < until) {
-          const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
-          if (target) { probe.target = target; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
+          const target = globalThis.nyanProbeBrowsers.get(id)?.window;
+          if (target && !target.isDestroyed()) { probe.target = target; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         throw new Error('Playback window did not open');
-      }, url);
+      }, { id: job.id, label: url });
       const began = Date.now(), until = began + 55000; let adSamples = 0;
       while (Date.now() < until) {
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
