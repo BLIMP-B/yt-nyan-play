@@ -12,6 +12,14 @@ export function bootPhase(props) {
 export class AndroidBootError extends Error {
   constructor(message, state) { super(message); this.name = 'AndroidBootError'; this.state = state; }
 }
+export function systemUiAnrClosePoint(xml) {
+  const button = xml.match(/<node\b[^>]*resource-id="android:id\/aerr_close"[^>]*>/g)?.find(node => /package="android"/.test(node) && /enabled="true"/.test(node));
+  const bounds = button?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+  if (!bounds) return null;
+  const [left, top, right, bottom] = bounds.slice(1).map(Number);
+  if (left >= right || top >= bottom || right > 8192 || bottom > 8192) return null;
+  return [Math.floor((left + right) / 2), Math.floor((top + bottom) / 2)];
+}
 export async function waitForAndroidBoot(adb, {
   signal, maxMs = 720000, stallMs = 300000, now = Date.now,
   delay = ms => wait(ms, undefined, { signal }), changed = () => {},
@@ -55,14 +63,27 @@ export async function waitForPlayWindow(adb, launch, {
       // Opening Play may reveal a first-boot launcher or Play ANR. Recover
       // each of these packages once; keep their data and other apps untouched.
       const failedPackage = /Application (?:Not Responding|Error)/.test(focus)
-        ? ['com.google.android.apps.nexuslauncher', 'com.android.vending'].find(id => new RegExp(id.replaceAll('.', '\\.') + '(?:[}\\s]|$)').test(focus)) : null;
+        ? ['com.google.android.apps.nexuslauncher', 'com.android.vending', 'com.android.systemui'].find(id => new RegExp(id.replaceAll('.', '\\.') + '(?:[}\\s]|$)').test(focus)) : null;
       if (failedPackage && !recovered.has(failedPackage)) {
-        changed(failedPackage === 'com.android.vending' ? '初回起動のGoogle Playを復旧しています' : '初回起動のホーム画面を復旧しています');
-        recovered.add(failedPackage);
-        await adb(['shell', 'am', 'force-stop', failedPackage], { signal, timeout: 10000 });
+        changed(failedPackage === 'com.android.systemui' ? '初回起動のシステムUIを復旧しています' : failedPackage === 'com.android.vending' ? '初回起動のGoogle Playを復旧しています' : '初回起動のホーム画面を復旧しています');
+        if (failedPackage === 'com.android.systemui') {
+          // Use the framework's own Close app button. Force-stopping System UI
+          // can leave system services stopped; never clear its data or tap a
+          // guessed screen position, and never interact with another app's ANR.
+          await adb(['shell', 'uiautomator', 'dump', '--compressed', '/data/local/tmp/nyantalk-anr.xml'], { signal, timeout: 15000 });
+          const point = systemUiAnrClosePoint(await adb(['shell', 'cat', '/data/local/tmp/nyantalk-anr.xml'], { signal, timeout: 10000 }));
+          if (!point) throw new Error('システムUIの復旧ボタンを確認できません');
+          const current = (await adb(['shell', 'dumpsys', 'window', 'displays'], { signal, timeout: 10000 })).match(/mCurrentFocus[^\r\n]*/)?.[0] || '';
+          if (!/Application (?:Not Responding|Error).*com\.android\.systemui(?:[}\s]|$)/.test(current)) { stable = 0; await delay(1000); continue; }
+          recovered.add(failedPackage);
+          await adb(['shell', 'input', 'tap', ...point.map(String)], { signal, timeout: 10000 });
+        } else {
+          recovered.add(failedPackage);
+          await adb(['shell', 'am', 'force-stop', failedPackage], { signal, timeout: 10000 });
+        }
         await launch(); stable = 0; lastLaunch = now();
       } else if (/com\.android\.vending\//.test(focus) && !/Application (?:Not Responding|Error)/.test(focus)) {
-        if (++stable >= 3) return { focus, launcherRecovered: recovered.has('com.google.android.apps.nexuslauncher'), playRecovered: recovered.has('com.android.vending'), elapsedMs: now() - began };
+        if (++stable >= 3) return { focus, launcherRecovered: recovered.has('com.google.android.apps.nexuslauncher'), playRecovered: recovered.has('com.android.vending'), systemUiRecovered: recovered.has('com.android.systemui'), elapsedMs: now() - began };
       } else stable = 0;
     } catch (error) { signal?.throwIfAborted(); lastError = error.message; stable = 0; }
     if (!stable && now() - lastLaunch >= 15000) {

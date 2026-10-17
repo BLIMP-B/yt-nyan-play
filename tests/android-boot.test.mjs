@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootProperties, waitForAndroidBoot, waitForPlayWindow, emulatorArguments } from '../apps/desktop/core/android-boot.mjs';
+import { bootProperties, waitForAndroidBoot, waitForPlayWindow, emulatorArguments, systemUiAnrClosePoint } from '../apps/desktop/core/android-boot.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 
 test('first boot can progress beyond the old three-minute limit and waits for Google Play package readiness', async () => {
@@ -89,4 +89,51 @@ test('boot completion must remain reachable after the first-boot ADB restart', a
   }, { now: () => clock, delay: async ms => { clock += ms; }, changed: state => phases.push(state) });
   assert.ok(result.elapsedMs >= 12000); assert.equal(packages, 4);
   assert.ok(phases.some(s => s.error?.includes('not found')));
+});
+
+
+test('System UI ANR recovery clicks only the framework Close app button and still requires stable Play focus', async () => {
+  let clock = 0, closed = false; const commands = [];
+  const xml = '<hierarchy><node package="android" resource-id="android:id/aerr_close" enabled="true" bounds="[100,600][620,740]" /></hierarchy>';
+  const state = await waitForPlayWindow(async args => {
+    commands.push(args);
+    if (args.includes('uiautomator')) return 'UI hierarchy dumped';
+    if (args[1] === 'cat') return xml;
+    if (args.includes('tap')) { closed = true; return ''; }
+    return closed ? 'mCurrentFocus=Window{1 com.android.vending/Main}' : 'mCurrentFocus=Window{2 Application Not Responding: com.android.systemui}';
+  }, async () => {}, { now: () => clock, delay: async ms => { clock += ms; } });
+  assert.equal(state.systemUiRecovered, true); assert.equal(state.playRecovered, false);
+  assert.deepEqual(commands.filter(args => args.includes('tap')), [['shell', 'input', 'tap', '360', '670']]);
+  assert.ok(!commands.some(args => args.includes('force-stop') || args.includes('clear'))); assert.ok(state.elapsedMs >= 3000);
+});
+test('unidentified, foreign-package and invalid-bounds ANR controls are never clicked', async () => {
+  assert.equal(systemUiAnrClosePoint('<node resource-id="android:id/aerr_close" package="com.other.app" enabled="true" bounds="[1,1][2,2]"/>'), null);
+  assert.equal(systemUiAnrClosePoint('<node resource-id="android:id/aerr_close" package="android" enabled="true" bounds="[10,10][9000,20]"/>'), null);
+  assert.equal(systemUiAnrClosePoint('<node resource-id="android:id/aerr_close" package="android" enabled="false" bounds="[1,1][2,2]"/>'), null);
+  let clock = 0, taps = 0;
+  await assert.rejects(waitForPlayWindow(async args => {
+    if (args.includes('tap')) taps++;
+    return args.includes('dumpsys') ? 'mCurrentFocus=Window{2 Application Not Responding: com.android.systemui}' : '<hierarchy />';
+  }, async () => {}, { now: () => clock, maxMs: 3000, delay: async ms => { clock += ms; } }), /Google Play/);
+  assert.equal(taps, 0);
+});
+test('a persistent System UI ANR is clicked at most once and retains its original failure', async () => {
+  let clock = 0, taps = 0;
+  await assert.rejects(waitForPlayWindow(async args => {
+    if (args.includes('tap')) { taps++; return ''; }
+    if (args[1] === 'cat') return '<node resource-id="android:id/aerr_close" package="android" enabled="true" bounds="[100,100][200,200]"/>';
+    return 'mCurrentFocus=Window{2 Application Not Responding: com.android.systemui}';
+  }, async () => {}, { now: () => clock, maxMs: 5000, delay: async ms => { clock += ms; } }), /Google Play/);
+  assert.equal(taps, 1);
+});
+
+test('a System UI dialog that disappears during inspection is never tapped', async () => {
+  let clock = 0, queries = 0, taps = 0;
+  const state = await waitForPlayWindow(async args => {
+    if (args.includes('dumpsys')) return ++queries === 1 ? 'mCurrentFocus=Window{2 Application Not Responding: com.android.systemui}' : 'mCurrentFocus=Window{1 com.android.vending/Main}';
+    if (args[1] === 'cat') return '<node resource-id="android:id/aerr_close" package="android" enabled="true" bounds="[100,100][200,200]"/>';
+    if (args.includes('tap')) taps++;
+    return '';
+  }, async () => {}, { now: () => clock, delay: async ms => { clock += ms; } });
+  assert.equal(taps, 0); assert.equal(state.systemUiRecovered, false);
 });
