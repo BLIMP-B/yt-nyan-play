@@ -120,6 +120,16 @@ test('settings snapshots preserve custom allowed hosts when validating converted
   await f.education.saveConfig(c, next => f.store.updateConfig(next));
   assert.equal(f.store.config.mediaConversions.length, 0);
 });
+test('forget removes a conversion and unmirrored native education atomically', async t => {
+  const f = fixture(t), calls = []; await f.register();
+  const native = { lookup: async () => ({ registered: true, source: '✅', reading: 'ちぇっく' }), learn: async (type, source) => { calls.push([type, source]); return { forgot: true, text: '忘れました' }; } };
+  const education = new ChatEducation(f.store, () => native);
+  await education.apply(parseEducationCommand('忘却(✅)'));
+  assert.deepEqual(calls, [['Forget', '✅']]); assert.equal(f.store.config.mediaConversions.length, 0);
+  await f.register(); native.learn = async () => { throw Error('native write failed'); };
+  await assert.rejects(education.apply(parseEducationCommand('忘却(✅)')), /native write failed/);
+  assert.equal(f.store.config.mediaConversions.length, 1);
+});
 test('failed media enqueue remains retryable and does not speak the conversion body', async t => {
   const f = fixture(t); await f.register(); f.speech.length = 0;
   const handler = f.bot.handlers.media; f.bot.handlers.media = () => { throw Error('queue full'); };

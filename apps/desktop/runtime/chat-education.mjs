@@ -41,9 +41,6 @@ export class ChatEducation {
       config.mediaConversions = withoutConversion().concat({ source, url });
       return { text: `${source} を 直接再生する変換を覚えました` };
     }
-    if (type === 'Forget' && converted && !existing) {
-      config.mediaConversions = withoutConversion(); return { text: `${source} の変換を忘れました` };
-    }
     if (!settings && type === 'Study' && readingKey(source) === educationKey(reading)) type = 'Forget';
     if (type !== 'Forget') validateEducationLength(source, reading);
     let processor = override || (existing?.native ? this.nativeSync() : this.native());
@@ -55,7 +52,7 @@ export class ChatEducation {
     const syncNative = processor && (type === 'Forget'
       ? nativeSlot?.registered || nativeSlot === null && (!existing || !existing.metadataOnly)
       : existing?.native || nativeSlot?.registered || !metadataOnly);
-    if (type === 'Forget' && !existing && !nativeSlot?.registered && !syncNative) throw new Error(`${source}は教育辞書に登録されていません`);
+    if (type === 'Forget' && !existing && !converted && !nativeSlot?.registered && !syncNative) throw new Error(`${source}は教育辞書に登録されていません`);
     let response;
     if (syncNative) {
       response = await processor.learn(type, type === 'Study' ? `${source}=${reading}` : source, signal);
