@@ -8,7 +8,7 @@ export function createMediaNetworkFixture(ogg) {
     const granule = ogg.readBigInt64LE(offset + 6);
     pages.push({ at: granule > 0 ? Number(granule) / 48 : 0, bytes: ogg.subarray(offset, offset + size) }); offset += size;
   }
-  const interruptions = [[3000, 3700], [6000, 7400], [9000, 11100]];
+  const interruptions = [[3000, 4400], [6000, 8800], [10000, 13600]];
   return { interruptions, handle(request, response) {
     if (!request.url.startsWith('/network.ogg')) return false;
     response.writeHead(200, { 'Content-Type': 'audio/ogg', 'Cache-Control': 'no-store' });
