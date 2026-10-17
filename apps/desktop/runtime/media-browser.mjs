@@ -107,10 +107,10 @@ export class MediaBrowser {
   setPaused(value) { this.paused = value; if (this.playOptions && this.window && !this.window.isDestroyed()) void this.window.webContents.executeJavaScript(mediaScript({ ...this.playOptions, paused: value }), true).catch(() => {}); }
   duckRatio() { const c = this.getConfig().media; return Math.min(this.ducked ? c.ducking : 1, this.titleDucked ? c.titleCallDucking : 1); }
   localVolume() { return this.getConfig().media.volume * this.duckRatio() * this.overlayGain; }
-  syncLocalGain() { const volume = this.localVolume(); if (this.job && this.localGainSent !== volume) { this.localGainSent = volume; this.bridge.localGain?.(this.job, volume, this.volumeRampMs); } }
-  setDucked(value, titleCall = false) { const key = titleCall ? 'titleDucked' : 'ducked'; if (this[key] === value) return; const before = this.duckRatio(); this[key] = value; this.applyVolume(this.duckRatio() < before ? this.getConfig().media.duckFadeOutMs : this.getConfig().media.duckFadeInMs); }
-  applyVolume(ms) {
-    this.volumeRampMs = ms;
+  syncLocalGain() { const volume = this.localVolume(); if (this.job && this.localGainSent !== volume) { this.localGainSent = volume; this.bridge.localGain?.(this.job, volume, this.volumeRampMs, this.volumeRampCurve || 'linear'); } }
+  setDucked(value, titleCall = false) { const key = titleCall ? 'titleDucked' : 'ducked'; if (this[key] === value) return; const before = this.duckRatio(); this[key] = value; const after = this.duckRatio(); this.applyVolume(after < before ? this.getConfig().media.duckFadeOutMs : this.getConfig().media.duckFadeInMs, after > before ? 'accelerate' : 'linear'); }
+  applyVolume(ms, curve = 'linear') {
+    this.volumeRampMs = ms; this.volumeRampCurve = curve;
     this.syncLocalGain();
   }
   setOverlayGain(value, ms = 0) {

@@ -1,3 +1,5 @@
+import { scheduleGain } from '../core/gain-curve.mjs';
+
 (() => {
   if (!window.nyan) return;
   const playing = new Map(); const captures = new Map();
@@ -32,7 +34,7 @@
     else if (message.type === 'stop' && monitor?.id === message.id) stopMonitor();
     else if (message.type === 'pcm' && monitor?.id === message.id) monitor.processor?.port.postMessage(new Uint8Array(message.bytes));
   });
-  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId), captureVolumes: [...captures].map(([id, c]) => ({ id, volume: c.volume, gain: c.gain?.gain.value })) }), update: state => {
+  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId), captureVolumes: [...captures].map(([id, c]) => ({ id, volume: c.volume, gain: c.gain?.gain.value, time: c.context?.currentTime, ramp: c.ramp })) }), update: state => {
     const previous = config; config = state.config.desktop;
     if (state.voiceMonitor?.id) void startMonitor(state.voiceMonitor.id, state.voiceMonitor.rendererMs); else if (monitor) stopMonitor();
     if (monitor?.gain) monitor.gain.gain.setTargetAtTime(config.voiceMonitorVolume, monitor.context.currentTime, 0.02);
@@ -49,7 +51,7 @@
     if (message.type === 'capture:gain') {
       const capture = captures.get(message.id); if (!capture) return;
       capture.volume = capture.local ? Math.max(0, Math.min(1, Number(message.volume) || 0)) : 0;
-      if (capture.gain) { const gain = capture.gain.gain, at = capture.context.currentTime; gain.cancelAndHoldAtTime(at); gain.linearRampToValueAtTime(capture.volume, at + Math.max(0, Number(message.ms) || 0) / 1000); }
+      if (capture.gain) capture.ramp = scheduleGain(capture.gain.gain, capture.volume, capture.context.currentTime, Math.max(0, Number(message.ms) || 0) / 1000, message.curve);
       return;
     }
     if (message.type === 'cancel') { const audio = playing.get(message.id); if (audio?.cancel) audio.cancel(); else { audio?.pause(); audio?.dispatchEvent(new Event('ended')); } return; }

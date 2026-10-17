@@ -552,7 +552,7 @@ try {
   const restoreScopeConfig = (await call(page, 'state')).config;
   const scopeConfig = structuredClone(restoreScopeConfig);
   scopeConfig.bot.bindings = [{ guildId:'11111',textChannelIds:['22222'],voiceChannelId:'44444' },{ guildId:'33333',textChannelIds:['55555'],voiceChannelId:'66666' }];
-  Object.assign(scopeConfig.media,{output:'both',volume:0.5,ducking:0.35,titleCallEnabled:false,duckFadeInMs:0,duckFadeOutMs:0});
+  Object.assign(scopeConfig.media,{output:'both',volume:0.5,ducking:0.35,titleCallEnabled:false,duckFadeInMs:1200,duckFadeOutMs:0});
   scopeConfig.media.equalizer.enabled=false;scopeConfig.media.compressor.enabled=false;scopeConfig.speech.output='both';Object.assign(scopeConfig.hourly,{output:'both',servers:[],fadeMs:100});
   await call(page,'config:save',scopeConfig);await call(page,'voice:join','11111');await call(page,'voice:join','33333');
   const scopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video',mode:'direct',guildId:'11111'});
@@ -569,6 +569,21 @@ try {
   assert.ok(duringScope['11111'].peaks.slice(-5).every(p=>p>1000),'Other-guild speech attenuated Discord media');
   const pcDuring=await page.evaluate(()=>window.nyanLocalAudio.snapshot().captureVolumes);
   await waitForJob(page,scopedSpeech.id);
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>volumes.find(c=>c.id===id)?.ramp?.curve==='accelerate');},[scopeA.id,scopeB.id]);
+  const recoverySamples=[];
+  for(let i=0;i<3;i++){
+    await page.waitForTimeout(200);
+    const samples=await page.evaluate(ids=>window.nyanLocalAudio.snapshot().captureVolumes.filter(c=>ids.includes(c.id)),[scopeA.id,scopeB.id]);
+    for(const sample of samples){
+      const {from,to,startAt,duration,curve}=sample.ramp,progress=(sample.time-startAt)/duration;
+      assert.equal(curve,'accelerate');assert.equal(duration,1.2);
+      if(progress>0.1&&progress<0.85){const expected=from+(to-from)*progress**2;assert.ok(Math.abs(sample.gain-expected)<0.025,'PC gain does not follow the accelerating envelope: '+JSON.stringify(sample));assert.ok(sample.gain<from+(to-from)*progress-0.025);recoverySamples.push({...sample,progress,expected});}
+    }
+  }
+  assert.ok([scopeA.id,scopeB.id].every(id=>recoverySamples.filter(s=>s.id===id).length>=2),'PC recovery must have multiple measured points for both guilds');
+  const discordRecovery=await application.evaluate(()=>{const m=globalThis.nyanScopeVoice.connections.get('33333').mixer;return{curve:m.duckGain.curve,duration:m.duckGain.duration};});
+  assert.equal(discordRecovery.curve,'accelerate');assert.equal(discordRecovery.duration,1200);
+  report.duckRecovery={passed:true,curve:'quadratic',power:2,pcSamples:recoverySamples,discord:discordRecovery,receiverVerified:false};
   await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.5)<0.01);},[scopeA.id,scopeB.id]);
   const beforeReplacement=await scopeStats();
   const nextScopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video-new',mode:'direct',guildId:'11111'});

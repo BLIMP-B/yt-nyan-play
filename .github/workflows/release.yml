@@ -297,6 +297,21 @@ jobs:
               assert.equal(soundcloud.cases.length, 2);
               assert.ok(soundcloud.cases.every(c => c.pcPlayback && c.mediaToneSamples > 4800));
             }
+            if (atLeast(21)) {
+              const recovery = audio.duckRecovery;
+              assert.equal(recovery.passed, true);
+              assert.equal(recovery.curve, 'quadratic');
+              assert.equal(recovery.power, 2);
+              assert.equal(recovery.receiverVerified, false);
+              assert.equal(recovery.discord.curve, 'accelerate');
+              assert.equal(recovery.discord.duration, 1200);
+              assert.ok(recovery.pcSamples.length >= 4);
+              for (const sample of recovery.pcSamples) {
+                assert.equal(sample.ramp.curve, 'accelerate');
+                assert.ok(sample.progress > 0.1 && sample.progress < 0.85);
+                assert.ok(Math.abs(sample.gain - sample.expected) < 0.025);
+              }
+            }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
               assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);

@@ -101,7 +101,7 @@ test('Discord title overlap uses its own factor and the same restoration fade as
   const done=m.addSpeech(Buffer.alloc(3840),1,undefined,0,true);
   assert.equal(m.takeFrame(1000).readInt16LE(0),8000);await done;
   assert.equal(m.takeFrame(1020).readInt16LE(0),8000);
-  assert.equal(m.takeFrame(1070).readInt16LE(0),9000);
+  assert.equal(m.takeFrame(1070).readInt16LE(0),8500);
   assert.equal(m.takeFrame(1120).readInt16LE(0),10000);
   const regular=m.addSpeech(Buffer.alloc(3840),1);assert.equal(m.takeFrame(1140).readInt16LE(0),2000);await regular;
 });

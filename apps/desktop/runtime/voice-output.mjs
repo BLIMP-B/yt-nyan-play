@@ -49,7 +49,7 @@ export class PcmMixer extends Readable {
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
     const out = Buffer.alloc(3840); const duck = Math.min(tracks.some(t => t.duckMedia && !t.titleCall) ? this.ducking : 1, tracks.some(t => t.duckMedia && t.titleCall) ? this.titleCallDucking : 1);
-    if (this.duckGain.to !== duck) this.duckGain.fade(duck, duck < this.duckGain.to ? this.duckFadeOutMs : this.duckFadeInMs, now);
+    if (this.duckGain.to !== duck) this.duckGain.fade(duck, duck < this.duckGain.to ? this.duckFadeOutMs : this.duckFadeInMs, now, duck > this.duckGain.value(now) ? 'accelerate' : 'linear');
     const mediaGain = this.mediaVolume * this.duckGain.value(now) * this.mediaGain.value(now), backgroundGain = this.backgroundVolume * this.backgroundGain.value(now);
     const mediaSamples = mediaFrame ? this.mediaEffects.process(mediaFrame) : null;
     const backgroundSamples = backgroundFrame ? this.backgroundEffects.process(backgroundFrame) : null;

@@ -58,7 +58,7 @@ test('speech ducking fades down and back without changing the independent BGM ga
   mixer.takeFrame(13000); assert.ok(Math.abs(mixer.duckGain.value(13000)-0.05) < 1e-10);
   assert.equal(mixer.backgroundGain.value(13000), 1);
   controller.abort(); await assert.rejects(speech, { name: 'AbortError' }); mixer.takeFrame(13000);
-  mixer.takeFrame(14500); assert.equal(mixer.duckGain.value(14500), 0.525);
+  mixer.takeFrame(14500); assert.ok(Math.abs(mixer.duckGain.value(14500) - 0.2875) < 1e-10);
   mixer.takeFrame(16000); assert.equal(mixer.duckGain.value(16000), 1);
   assert.equal(normalizeConfig({ media: { duckFadeOutMs: 0 }, hourly: { bgmFadeOutMs: 800 } }).hourly.bgmFadeOutMs, 800);
 });
