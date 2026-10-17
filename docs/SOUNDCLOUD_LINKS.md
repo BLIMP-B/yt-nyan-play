@@ -34,3 +34,11 @@ v0.5.20の実サイト試験にはローカル素材用HTTP(S)ハンドラーが
 - [SoundCloud公式：AAC HLS移行と配信URL](https://developers.soundcloud.com/blog/api-streaming-urls/)
 - [Electron公式：ClientRequestの手動転送とredirectイベント](https://www.electronjs.org/docs/latest/api/client-request)
 - [Electron公式：contextBridgeのメインワールドでの実行](https://www.electronjs.org/docs/latest/api/context-bridge)
+
+## 未ログインのサイト内再生（v0.5.23）
+
+2026-10-17のWindows検証では、指定の短縮URLの展開と音声のみの配信取得・実音声・Opus処理は成功しました。同じ曲を未ログインのSoundCloudサイト内で再生すると、`https://secure.soundcloud.com/web-auth` の公式ログイン画面が表示され、音声要素はまだ作られませんでした。この状態を音声要素の検出失敗やリンク切れとは判定しません。
+
+アプリは実際に表示中の公式認証フレームを検出し、ログインが必要なことを表示して再生画面を開き、ログイン完了を待ちます。ログイン画面が閉じた後は再生開始を再試行します。隠れた認証フレームや別オリジンのフレームは判定対象にしません。
+
+CIのサイト内再生は「実音声を捕捉した」と「公式ログイン画面を確認した」を別に記録します。後者はログイン後の実サイト音声を検証したことを意味しません。音声配信側の実音声・Opus通過と、Electron試験音源によるDOM外の音声要素・遅延する再生ボタン・一時停止・再開・自然終了の検証は維持します。診断には認証のnonceやPKCEパラメーターを保存しません。

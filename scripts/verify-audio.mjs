@@ -901,7 +901,10 @@ try {
         const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
         if (current.status === 'failed') throw new Error(current.error);
         const playback = state.media.find(m => m.scope === mediaScope(job.payload));
-        if (playback?.loginRequired && playback.ready === 0 && Date.now() - began > 5000) throw new Error(playback.blockedReason || 'Site requires login before playback');
+        if (playback?.loginRequired && !(playback.ready > 0) && Date.now() - began > 5000) {
+          outcome.loginRequired = true; outcome.playback = state.media;
+          throw new Error(playback.blockedReason || 'Site requires login before playback');
+        }
         if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) {
           if (new URL(url).hostname === 'on.soundcloud.com') assert.equal(playback.shareExpanded, true, 'Short-link expansion failed before audible playback');
           Object.assign(outcome, metrics, { verifiedAudio: true }); break;
