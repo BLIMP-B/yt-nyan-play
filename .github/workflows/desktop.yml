@@ -112,7 +112,8 @@ jobs:
           name: playback-duration-verification-linux
           path: dist/playback-duration-verification
   windows:
-    needs: tests
+    # The scheduler is OS-dependent; Windows validation can run beside Linux.
+    needs: prepare
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
