@@ -8,7 +8,7 @@ const services = [
   ['facebook', ['facebook.com', 'fb.watch'], ['fbcdn.net', 'fbsbx.com']],
   ['threads', ['threads.com', 'threads.net'], ['cdninstagram.com', 'fbcdn.net']],
   ['bluesky', ['bsky.app'], ['bsky.app', 'bsky.social', 'bsky.network']],
-  ['soundcloud', ['soundcloud.com'], ['sndcdn.com']],
+  ['soundcloud', ['soundcloud.com'], ['sndcdn.com', 'media-streaming.soundcloud.cloud']],
 ];
 const matches = (host, roots) => roots.some(r => host === r || host.endsWith('.' + r));
 export function streamingService(url) {

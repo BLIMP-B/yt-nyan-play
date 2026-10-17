@@ -184,6 +184,8 @@ v0.4.4のWindows CIではSDK・Playイメージ導入とAVD作成は成功しま
 
 共有リンクの扱いは [yt-dlpメンテナの説明](https://github.com/yt-dlp/yt-dlp/issues/12751)、限定公開トークンは [SoundCloud公式ヘルプ](https://help.soundcloud.com/hc/en-us/articles/115003450427-Sharing-a-private-track-or-playlist-within-SoundCloud) を参照しています。原サービスの曲を取得する実サイト試験と、ローカル応答を使った転送・PC音声出力の検証は区別します。
 
+短縮リンク・通常の曲URL・APIリソース・音声配信URLの違いと公式資料は[リンク展開の調査記録](SOUNDCLOUD_LINKS.md)に記載しています。
+
 ## 読み上げ終了後の音量復帰（v0.5.21）
 
 設定の「読み上げ・タイトルコール終了時の復帰時間」は、前半はゆっくり、後半ほど速く元のメディア音量へ戻る加速曲線です。復帰量は経過時間の2乗で、設定時間の半分で25%、終端で100%まで戻ります。初期値は3秒で、保存済みの秒数も使用します。0秒なら即時に戻ります。

@@ -26,7 +26,7 @@ jobs:
             if test "$RUN_ID" -lt "$PREPARE_RUN_ID"; then gh api --method POST "repos/$PREPARE_REPOSITORY/actions/runs/$RUN_ID/cancel"; fi
           done
   tag-verified-source:
-    needs: [tests, windows, android-install, hourly-model, live-media]
+    needs: [tests, windows, android-install, hourly-model, live-media, soundcloud-links]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/codex/windows-desktop-bot' || startsWith(github.ref, 'refs/heads/codex/release-v'))
     runs-on: ubuntu-latest
     permissions:
@@ -215,6 +215,21 @@ jobs:
         with:
           name: hourly-model-verification-windows
           path: dist/hourly-model-verification
+  soundcloud-links:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Record official SoundCloud share-link redirects
+        run: node scripts/verify-soundcloud-links.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soundcloud-links-windows
+          path: dist/soundcloud-link-verification
   live-media:
     needs: tests
     runs-on: windows-latest
