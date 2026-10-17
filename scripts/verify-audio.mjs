@@ -38,6 +38,22 @@ writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
 writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'nyan-audio-verification', type: 'module', main: 'audio-bootstrap.mjs', version: JSON.parse(readFileSync(join(root, 'package.json'))).version }));
 writeFileSync(join(directory, 'audio-bootstrap.mjs'), `
 import { app, session } from 'electron';
+import { net } from 'electron';
+import { createServer } from 'node:http';
+import { nativeRedirectResponse } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/soundcloud.mjs')).href)};
+globalThis.nyanNativeRedirectProbe = async () => {
+    let destinationRequests = 0;
+    const server = createServer((request, response) => {
+      if (request.url === '/share') response.writeHead(302, { location: '/track' }).end();
+      else { destinationRequests++; response.end('track'); }
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const response = await nativeRedirectResponse(options => net.request(options), 'http://127.0.0.1:' + server.address().port + '/share', { signal: AbortSignal.timeout(5000) });
+      return { status: response.status, location: response.headers.get('location'), destinationRequests };
+    } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+
+};
 app.whenReady().then(() => { const originalDisplayHandler = session.defaultSession.setDisplayMediaRequestHandler;
 session.defaultSession.setDisplayMediaRequestHandler = function(handler, ...args) { globalThis.nyanProductionDisplayHandler = handler; this.setDisplayMediaRequestHandler = originalDisplayHandler; return originalDisplayHandler.call(this, handler, ...args); }; });
 import { VoiceOutput, PcmMixer } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/voice-output.mjs')).href)};
@@ -165,20 +181,7 @@ try {
   application.on('console', message => console.log('Electron:', message.text()));
   const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
   // Use Chromium's real network stack, not a fetch mock or custom protocol.
-  report.nativeRedirect = await application.evaluate(async ({ net }, moduleUrl) => {
-    const { createServer } = await import('node:http');
-    const { nativeRedirectResponse } = await import(moduleUrl);
-    let destinationRequests = 0;
-    const server = createServer((request, response) => {
-      if (request.url === '/share') response.writeHead(302, { location: '/track' }).end();
-      else { destinationRequests++; response.end('track'); }
-    });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    try {
-      const response = await nativeRedirectResponse(options => net.request(options), 'http://127.0.0.1:' + server.address().port + '/share', { signal: AbortSignal.timeout(5000) });
-      return { status: response.status, location: response.headers.get('location'), destinationRequests };
-    } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
-  }, pathToFileURL(join(root, 'apps/desktop/runtime/soundcloud.mjs')).href);
+  report.nativeRedirect = await application.evaluate(() => globalThis.nyanNativeRedirectProbe());
   assert.equal(report.nativeRedirect.status, 302); assert.equal(report.nativeRedirect.destinationRequests, 0);
   assert.ok(report.nativeRedirect.location.endsWith('/track'));
   const fadeFields = ['media.duckFadeOutMs', 'media.duckFadeInMs', 'hourly.bgmFadeInMs', 'hourly.bgmFadeOutMs'];
