@@ -159,6 +159,18 @@ const waitForJob = async (page, id, timeout = 15000) => {
   }
   throw new Error(`Job ${id} did not complete within ${timeout}ms`);
 };
+const waitForPlayback = async (page, job, timeout = 20000) => {
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    const state = await call(page, 'state');
+    const saved = state.jobs.find(j => j.id === job.id);
+    assert.notEqual(saved?.status, 'failed', saved?.error);
+    const playback = state.media.find(m => m.scope === mediaScope(job.payload) && m.startedAt && m.currentTime > 0.1);
+    if (playback) return playback;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Playback state was not observed for ' + job.id);
+};
 async function encodedAudio(pcm) {
   const mixer = new PcmMixer(); mixer.mediaVolume = 1;
   const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
@@ -557,8 +569,7 @@ try {
       const spokenBefore = synthesisTexts.length;
       try {
         const job = await call(page, 'media:add', { url: 'https://on.soundcloud.com/NyanVerification', mode: bandwidthSaving ? 'direct' : 'full', guildId: '71111' });
-        const playing = await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.media.find(m => m.scope === '71111' && m.startedAt && m.currentTime > 0.1) || false);
-        const playback = await playing.jsonValue(); await playing.dispose();
+        const playback = await waitForPlayback(page, job);
         assert.equal(playback.shareExpanded, true, 'A successful extractor must not mask a failed short-link expansion');
         if (!bandwidthSaving) {
           const domCount = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w !== globalThis.nyanAudioProbe.ui).webContents.executeJavaScript('document.querySelectorAll("audio,video").length'));
