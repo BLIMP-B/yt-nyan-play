@@ -18,23 +18,39 @@ import { scheduleGain } from '../core/gain-curve.mjs';
     monitorEpoch++; const previous = monitor; monitor = null;
     previous?.processor?.disconnect(); previous?.gain?.disconnect(); void previous?.context.close();
   };
-  const startMonitor = async (id, rendererMs = 120) => {
+  const forwardMonitor = message => {
+    if (monitor?.id !== message.id) return;
+    if (monitor.processor) monitor.processor.port.postMessage(message);
+    else {
+      monitor.pending.push(message); monitor.pendingBytes += message.bytes?.length || 0;
+      while (monitor.pendingBytes > 6144000 || monitor.pending.length > 2048) monitor.pendingBytes -= monitor.pending.shift().bytes?.length || 0;
+    }
+  };
+  const startMonitor = async (id, rendererMs = 360) => {
     if (monitor?.id === id) return;
     stopMonitor(); const epoch = monitorEpoch;
-    const context = new AudioContext({ sampleRate: 48000 }), current = monitor = { id, context };
+    const context = new AudioContext({ sampleRate: 48000 }), current = monitor = { id, context, pending: [], pendingBytes: 0, reportAt: Date.now() };
     try {
       await setDevice(context, config.outputDevice); await context.audioWorklet.addModule('voice-monitor-worklet.js');
       if (epoch !== monitorEpoch) return;
       const processor = new AudioWorkletNode(context, 'nyan-voice-monitor', { outputChannelCount: [2], processorOptions: { bufferMs: rendererMs } }), gain = context.createGain();
-      current.processor = processor; current.gain = gain; gain.gain.value = config.voiceMonitorVolume; processor.connect(gain).connect(context.destination); await context.resume();
+      current.gain = gain; gain.gain.value = config.voiceMonitorVolume; processor.connect(gain).connect(context.destination); await context.resume();
+      if (epoch !== monitorEpoch) { processor.disconnect(); return; }
+      processor.port.onmessage = ({ data }) => {
+        if (monitor !== current) return; current.stats = data;
+        if (Date.now() - current.reportAt >= 60000) { current.reportAt = Date.now(); window.nyan.audioResult({ type: 'monitor:stats', id, stats: data }); }
+      };
+      processor.onprocessorerror = () => { if (monitor === current) { stopMonitor(); window.nyan.audioResult({ type: 'monitor:error', id, error: '通話音声のPC再生が停止しました' }); } };
+      for (const message of current.pending) processor.port.postMessage(message);
+      current.pending = []; current.pendingBytes = 0; current.processor = processor;
     } catch (error) { if (epoch === monitorEpoch) { stopMonitor(); window.nyan.audioResult({ type: 'monitor:error', error: error.message }); } }
   };
   window.nyan.onVoiceMonitor(message => {
     if (message.type === 'start') void startMonitor(message.id, message.rendererMs);
     else if (message.type === 'stop' && monitor?.id === message.id) stopMonitor();
-    else if (message.type === 'pcm' && monitor?.id === message.id) monitor.processor?.port.postMessage(new Uint8Array(message.bytes));
+    else if (message.type === 'pcm' || message.type === 'end') forwardMonitor(message.type === 'pcm' ? { ...message, bytes: new Uint8Array(message.bytes) } : message);
   });
-  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId), captureVolumes: [...captures].map(([id, c]) => ({ id, volume: c.volume, gain: c.gain?.gain.value, time: c.context?.currentTime, ramp: c.ramp })) }), update: state => {
+  window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, monitorStats: monitor?.stats, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId), captureVolumes: [...captures].map(([id, c]) => ({ id, volume: c.volume, gain: c.gain?.gain.value, time: c.context?.currentTime, ramp: c.ramp })) }), update: state => {
     const previous = config; config = state.config.desktop;
     if (state.voiceMonitor?.id) void startMonitor(state.voiceMonitor.id, state.voiceMonitor.rendererMs); else if (monitor) stopMonitor();
     if (monitor?.gain) monitor.gain.gain.setTargetAtTime(config.voiceMonitorVolume, monitor.context.currentTime, 0.02);

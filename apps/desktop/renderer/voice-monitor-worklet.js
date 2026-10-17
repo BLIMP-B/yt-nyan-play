@@ -1,25 +1,33 @@
+import { VoiceMonitorBuffer } from '../core/voice-monitor-buffer.mjs';
+
 class NyanVoiceMonitorProcessor extends AudioWorkletProcessor {
   constructor(options) {
-    super(); this.queue = []; this.offset = 0; this.samples = 0; this.primed = false; this.primeSamples = (options?.processorOptions?.bufferMs || 120) * 96;
-    this.port.onmessage = event => {
-      const bytes = event.data;
-      if (!(bytes instanceof Uint8Array) || bytes.length > 32768 || bytes.length % 4) return;
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), samples = new Float32Array(bytes.length / 2);
-      for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
-      this.queue.push(samples); this.samples += samples.length;
-      // Bound latency even after the renderer resumes from a CPU stall.
-      while (this.samples > 48000 && this.queue.length > 1) { this.samples -= this.queue.shift().length - this.offset; this.offset = 0; }
+    super(); this.users = new Map(); this.clock = 0; this.nextReport = 48000;
+    this.bufferMs = options?.processorOptions?.bufferMs || 360; this.totals = { underruns: 0, discardedSamples: 0 };
+    this.port.onmessage = ({ data }) => {
+      if (!data || typeof data.userId !== 'string' || typeof data.streamId !== 'string') return;
+      let user = this.users.get(data.userId);
+      if (data.type === 'end') { if (user?.streamId === data.streamId) user.ended = true; return; }
+      if (data.type !== 'pcm' || !(data.bytes instanceof Uint8Array) || !data.bytes.length || data.bytes.length > 32768 || data.bytes.length % 4) return;
+      if (!user) { if (this.users.size >= 32) return; user = new VoiceMonitorBuffer(this.bufferMs); this.users.set(data.userId, user); }
+      user.streamId = data.streamId; user.push(data.bytes, this.clock);
     };
   }
   process(_inputs, outputs) {
     const output = outputs[0]; if (!output?.length) return true;
-    if (!this.primed && this.samples >= this.primeSamples) this.primed = true;
-    for (let i = 0; i < output[0].length; i++) {
-      if (!this.primed || !this.queue.length) { this.primed = false; break; }
-      const frame = this.queue[0]; output[0][i] = frame[this.offset++];
-      const right = frame[this.offset++]; if (output[1]) output[1][i] = right;
-      this.samples -= 2;
-      if (this.offset >= frame.length) { this.queue.shift(); this.offset = 0; }
+    for (const channel of output) channel.fill(0);
+    for (const [id, user] of this.users) {
+      user.mix(output, this.clock);
+      if (user.drained || this.clock - user.lastAt > 3 * 48000) {
+        this.totals.underruns += user.underruns; this.totals.discardedSamples += user.discarded; this.users.delete(id);
+      }
+    }
+    for (const channel of output) for (let i = 0; i < channel.length; i++) channel[i] = Math.max(-1, Math.min(1, channel[i]));
+    this.clock += output[0].length;
+    if (this.clock >= this.nextReport) {
+      this.nextReport = this.clock + 48000;
+      const users = [...this.users.values()].map(user => user.snapshot());
+      this.port.postMessage({ users, underruns: this.totals.underruns + users.reduce((n, u) => n + u.underruns, 0), discardedSamples: this.totals.discardedSamples + users.reduce((n, u) => n + u.discardedSamples, 0) });
     }
     return true;
   }

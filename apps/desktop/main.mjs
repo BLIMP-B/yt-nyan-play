@@ -415,7 +415,12 @@ else {
     ipcMain.on('nyan:audio-result', (event, data) => {
       if (!trusted(event)) return;
       if (data?.type === 'device:warning') { store.log('warn', '指定のスピーカーが利用できないため既定のデバイスで再生します'); return; }
-      if (data?.type === 'monitor:error') { voice.monitor.stop(String(data.error || 'PC通話モニターの再生に失敗しました').slice(0, 300)); store.log('warn', voice.monitor.error); return; }
+      if (data?.type === 'monitor:stats') {
+        if (data.id !== voice.monitor.snapshot().id) return;
+        const stats = data.stats, count = n => Number.isSafeInteger(n) && n >= 0 ? n : 0;
+        store.log('info', `PC通話の再生診断: バッファ不足${count(stats?.underruns)}回・上限超過による破棄${count(stats?.discardedSamples)}サンプル（受信開始からの累計）`); return;
+      }
+      if (data?.type === 'monitor:error') { if (data.id && data.id !== voice.monitor.snapshot().id) return; voice.monitor.stop(String(data.error || 'PC通話モニターの再生に失敗しました').slice(0, 300)); store.log('warn', voice.monitor.error); return; }
       if (data?.type === 'capture:error' && captures.has(data.id)) captures.get(data.id).error = String(data.error || 'メディア音声の転送が停止しました').slice(0, 300);
       else audioBridge.result(data);
     });

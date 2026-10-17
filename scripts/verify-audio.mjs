@@ -15,6 +15,7 @@ import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 import { verifyAudioNetwork } from './audio-network-probe.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { mediaScope } from '../apps/desktop/core/media-pool.mjs';
+import { verifyVoiceMonitorContinuity } from './voice-monitor-probe.mjs';
 import { createMediaNetworkFixture, pcmContinuity } from './media-buffer-probe.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const directory = mkdtempSync(join(tmpdir(), 'damare-audio-'));
@@ -801,15 +802,34 @@ try {
   if (availableSpeakers.length) await page.waitForFunction(id => window.nyanLocalAudio.snapshot().monitorSink === id, availableSpeakers[0].deviceId);
   report.speakerSelection = { availableDevices: availableSpeakers.length, actualSinkVerified: Boolean(availableSpeakers.length) };
   const monitorEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO); monitorEncoder.encoderCTL(4006, 0); monitorEncoder.encoderCTL(4002, 48000);
-  const monitorPcm = wav.subarray(44), monitorPackets = [];
-  try { for (let i = 0; i < 100; i++) { const offset = i * 3840 % (Math.floor(monitorPcm.length / 3840) * 3840); monitorPackets.push([...monitorEncoder.encode(monitorPcm.subarray(offset, offset + 3840), 960)]); } } finally { monitorEncoder.delete(); }
+  const monitorPcm = Buffer.alloc(3840), monitorPackets = [];
+  for (let i = 0; i < 960; i++) { const sample = Math.round(8000 * Math.sin(i * 2 * Math.PI * 1000 / 48000)); monitorPcm.writeInt16LE(sample, i * 4); monitorPcm.writeInt16LE(sample, i * 4 + 2); }
+  try { for (let i = 0; i < 600; i++) monitorPackets.push([...monitorEncoder.encode(monitorPcm, 960)]); } finally { monitorEncoder.delete(); }
   const voiceResult = await application.evaluate(async (_electron, packets) => {
-    const fixture = globalThis.nyanMonitorFixture;
-    for (const packet of packets) { fixture.streams.get('44444').write(Buffer.from(packet)); await new Promise(resolve => setTimeout(resolve, 20)); }
-    await new Promise(resolve => setTimeout(resolve, 650));
-    return { selfExcluded: !fixture.streams.has('99999'), receivedUsers: fixture.streams.size, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'] };
+    const fixture = globalThis.nyanMonitorFixture, began = performance.now(); let previous = 0;
+    for (let i = 0; i < packets.length; i++) {
+      let due = i * 20 + (i % 100 >= 20 && i % 100 < 28 ? 180 : 0);
+      if (due % 2000 >= 900 && due % 2000 < 1060) due += 1060 - due % 2000;
+      due = Math.max(previous, due); previous = due;
+      const delay = due - (performance.now() - began); if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      fixture.streams.get('44444').write(Buffer.from(packets[i]));
+    }
+    const receivedUsers = fixture.streams.size; fixture.monitor.remove('44444');
+    await new Promise(resolve => setTimeout(resolve, 850));
+    const chunks = globalThis.nyanAudioProbe.chunks['voice-monitor'] || [];
+    return { selfExcluded: !fixture.streams.has('99999'), receivedUsers, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'], pcm: Buffer.concat(chunks).toString('base64') };
   }, monitorPackets);
+  const monitorContinuity = pcmContinuity(Buffer.from(voiceResult.pcm, 'base64')); delete voiceResult.pcm;
+  const playout = await page.evaluate(() => window.nyanLocalAudio.snapshot().monitorStats);
   assert.equal(voiceResult.selfExcluded, true); assert.ok(voiceResult.metrics.nonSilentSamples > 1000);
+  assert.ok(monitorContinuity.audibleFrames >= 540, JSON.stringify(monitorContinuity));
+  assert.equal(monitorContinuity.gapsOver100ms, 0, JSON.stringify(monitorContinuity));
+  assert.equal(playout.underruns, 0); assert.equal(playout.discardedSamples, 0);
+  const { baselinePcm, fixedPcm, ...continuityModel } = verifyVoiceMonitorContinuity();
+  voiceResult.continuity = { ...monitorContinuity, durationMs: 12000, packetJitterMs: 180, ipcBatchingMs: 160, actualDiscordReceiver: false, playout };
+  voiceResult.continuityModel = continuityModel;
+  // Keep a separate real subscriber alive for the existing 32-decoder lifecycle check.
+  await application.evaluate((_electron, packet) => { const f = globalThis.nyanMonitorFixture; f.speaking.emit('start', '44444'); f.streams.get('44444').write(Buffer.from(packet)); }, monitorPackets[0]);
   const longOpusPacket = Buffer.concat([Buffer.from([(monitorPackets[0][0] & 252) | 3, 6]), ...Array(6).fill(Buffer.from(monitorPackets[0]).subarray(1))]);
   report.network.electronLifecycle = await application.evaluate((_electron, bytes) => {
     const fixture = globalThis.nyanMonitorFixture; let recycled = 0;
@@ -817,7 +837,7 @@ try {
       for (let id = 0; id < 31; id++) {
         const key = String(55000 + id); fixture.speaking.emit('start', key); fixture.streams.get(key).write(Buffer.from(bytes)); fixture.streams.get(key).write(Buffer.from(bytes));
       }
-      if (!fixture.monitor.frame().some(byte => byte)) throw new Error('Concurrent Opus PCM is silent');
+      if (fixture.monitor.users.size !== 32) throw new Error('Concurrent Opus decoding failed');
       for (let id = 0; id < 31; id++) {
         const key = String(55000 + id), retired = fixture.streams.get(key); fixture.monitor.users.get(key).ended = true;
         fixture.speaking.emit('start', key); retired.emit('error', new Error('retired subscription'));
