@@ -118,3 +118,26 @@ test('receiver idle notification uses wall time and is cancelled when a stream i
   t.mock.timers.tick(1); assert.equal(s.messages.filter(m => m.type === 'idle').length, 1);
   s.streams.get('44444').write(s.packet()); s.monitor.remove('44444'); t.mock.timers.tick(1000); assert.equal(s.messages.filter(m => m.type === 'idle').length, 1);
 });
+
+
+test('profile changes re-subscribe after the actual Discord receiver releases a cached destroyed stream', async t => {
+  const { VoiceReceiver } = await import('@discordjs/voice');
+  const s = setup(t), receiver = s.entry.connection.receiver;
+  receiver.subscriptions = new Map(); receiver.subscribe = VoiceReceiver.prototype.subscribe;
+  s.monitor.attach(s.entry, '11111', '99999'); receiver.speaking.users.set('44444', true); receiver.speaking.emit('start', '44444');
+  const old = receiver.subscriptions.get('44444'); old.push(s.packet()); await new Promise(resolve => setImmediate(resolve)); const originalId = s.monitor.users.get('44444').streamId;
+  s.monitor.attach(s.entry, '11111', '99999', 'balanced');
+  await new Promise(resolve => setImmediate(resolve));
+  const current = receiver.subscriptions.get('44444'); assert.notEqual(current, old); assert.equal(current.destroyed, false);
+  assert.notEqual(s.monitor.users.get('44444').streamId, originalId); current.push(s.packet()); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(s.messages.filter(m => m.type === 'pcm').length, 2);
+  // A pending retry must not revive a monitor that was stopped meanwhile.
+  s.monitor.attach(s.entry, '11111', '99999', 'poor'); s.monitor.stop(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(s.monitor.users.size, 0); assert.equal(s.monitor.snapshot().status, 'waiting');
+});
+test('a subscription receiving no first packet releases its decoder after three seconds', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] }); const s = setup(t);
+  s.monitor.attach(s.entry, '11111', '99999'); s.speaking.emit('start', '44444');
+  t.mock.timers.tick(2999); assert.equal(s.monitor.users.size, 1); t.mock.timers.tick(1); assert.equal(s.monitor.users.size, 0);
+  assert.equal(s.streams.get('44444').destroyed, true);
+});

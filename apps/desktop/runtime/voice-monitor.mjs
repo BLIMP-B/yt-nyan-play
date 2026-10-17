@@ -15,7 +15,7 @@ export class VoiceMonitor {
     this.send({ type: 'start', id: this.id, rendererMs: this.snapshot().rendererMs }); this.changed();
     for (const userId of entry.connection.receiver.speaking.users.keys()) this.receive(userId);
   }
-  receive(userId) {
+  receive(userId, retried = false) {
     if (!this.entry || userId === this.selfId) return;
     const old = this.users.get(userId);
     if (old && !old.ended) return;
@@ -25,8 +25,18 @@ export class VoiceMonitor {
     try {
       decoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
       stream = this.entry.connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 } });
+      if (stream.destroyed) {
+        decoder.delete();
+        // VoiceReceiver caches a subscription until its asynchronous close
+        // handler runs. A profile change can reattach before that handler.
+        const generation = this.id;
+        if (!retried) setImmediate(() => { if (this.id === generation) this.receive(userId, true); });
+        return;
+      }
     } catch (error) { decoder?.delete(); this.log('warn', `通話音声の受信: ${error.message}`); return; }
     const user = { decoder, stream, streamId: crypto.randomUUID() }; this.users.set(userId, user);
+    // AfterSilence starts counting only when the first packet arrives.
+    user.idleTimer = setTimeout(() => { if (this.users.get(userId) === user) this.remove(userId); }, 3000); user.idleTimer.unref?.();
     stream.on('data', packet => {
       if (this.users.get(userId) !== user) return;
       try {
