@@ -15,7 +15,7 @@ test('native redirects are read before expected cancellation errors and abort st
   const factory = options => {
     assert.equal(options.redirect, 'manual'); request = new EventEmitter();
     request.abort = () => { request.aborted = true; queueMicrotask(() => request.emit('error', Error('Redirect was cancelled'))); };
-    request.end = () => request.emit('redirect', 302, 'GET', target, {});
+    request.end = () => { request.emit('close'); setImmediate(() => request.emit('redirect', 302, 'GET', target, {})); };
     return request;
   };
   const response = await nativeRedirectResponse(factory, short, { signal: new AbortController().signal });

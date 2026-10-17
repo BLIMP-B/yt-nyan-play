@@ -17,9 +17,10 @@ export function nativeRedirectResponse(requestFactory, url, { signal } = {}) {
     const abort = () => finish(signal.reason);
     // Keep the error listener after abort: cancellation can emit an error later.
     request.on('error', error => finish(error));
-    request.once('close', () => { if (!settled) finish(new Error('SoundCloudの転送確認が途中で終了しました')); });
+    // ClientRequest is a Writable: 'close' can follow end() before Chromium
+    // supplies the response. Network errors and the abort signal end the wait.
     request.once('redirect', (status, _method, destination) => finish(null, new Response(null, { status, headers: { location: destination } })));
-    request.once('response', response => finish(null, new Response(null, { status: response.statusCode })));
+    request.once('response', response => { response.on('error', () => {}); finish(null, new Response(null, { status: response.statusCode })); });
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort(); else request.end();
   });
