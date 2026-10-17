@@ -244,7 +244,7 @@ jobs:
           name: soundcloud-links-windows
           path: dist/soundcloud-link-verification
   live-media:
-    needs: tests
+    needs: prepare
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
