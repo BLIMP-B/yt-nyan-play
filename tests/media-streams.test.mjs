@@ -17,6 +17,7 @@ test('each service chooses audio-only first, then the smallest playable video wi
     ['https://tiktok.com/@example/video/1', 'media.tiktokcdn.com'], ['https://facebook.com/watch/?v=1', 'video.fbcdn.net'],
     ['https://threads.net/@example/post/abc', 'video.cdninstagram.com'], ['https://bsky.app/profile/example/post/abc', 'video.bsky.app'],
     ['https://example.social/@user/123', 'example.social'],
+    ['https://on.soundcloud.com/example', 'cf-hls-media.sndcdn.com'], ['https://soundcloud.com/artist/track', 'cf-media.sndcdn.com'],
   ];
   for (const [source, host] of sources) {
     const formats = [{ url: `https://${host}/large`, acodec: 'aac', vcodec: 'h264', height: 720 }, { url: `https://${host}/small`, acodec: 'aac', vcodec: 'h264', height: 144 }, { url: `https://${host}/audio`, acodec: 'opus', vcodec: 'none', abr: 48 }];

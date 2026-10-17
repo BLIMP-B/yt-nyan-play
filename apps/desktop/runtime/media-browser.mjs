@@ -10,14 +10,20 @@ import { openAudioStream } from './media-streams.mjs';
 import { mediaPolicy, streamContinuation } from '../core/media-policy.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { browserMetadataScript } from '../core/media-title.mjs';
+import { resolveSoundCloudShare } from './soundcloud.mjs';
 
 export class MediaBrowser {
   constructor(getConfig, bridge, log, accounts, resolver) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.resolver = resolver; this.window = null; this.paused = false; this.ducked = false; this.titleDucked = false; this.status = null; this.overlayGain = 1; this.volumeRampMs = 0; }
   async play(job, signal, { browserOnly = false } = {}) {
     signal.throwIfAborted(); this.job = job; this.localGainSent = null; const c = this.getConfig(); const payload = job.payload;
     const { mode, limitSeconds } = mediaPolicy(payload);
-    const url = validateMediaUrl(payload.url, c.media.allowedHosts);
+    const originalUrl = validateMediaUrl(payload.url, c.media.allowedHosts);
     if (!browserOnly) this.bridge.preparing?.(job);
+    let url = originalUrl;
+    if (new URL(url).hostname === 'on.soundcloud.com') {
+      try { url = await resolveSoundCloudShare(url, c.media.allowedHosts, (target, options) => playbackSession().fetch(target, options), signal); }
+      catch (error) { signal.throwIfAborted(); this.log('warn', `${error.message}。元の共有ページから再生を試みます`); }
+    }
     let stream, selected;
     this.playOptions = null;
     if (!browserOnly && c.media.bandwidthSaving && this.resolver) {
@@ -35,7 +41,7 @@ export class MediaBrowser {
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
     this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
-    guardMediaWindow(window, url, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
+    guardMediaWindow(window, originalUrl, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
     try {

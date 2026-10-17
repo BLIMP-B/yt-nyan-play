@@ -9,6 +9,7 @@ const SERVICES = [
   [['facebook.com', 'fb.watch'], 'ふぇいすぶっく', 'Facebook'],
   [['threads.net', 'threads.com'], 'すれっず', 'Threads'], [['bsky.app'], 'ぶるーすかい', 'Bluesky'],
   [['cdn.discordapp.com', 'media.discordapp.net'], 'でぃすこーどのメディア', 'Discord'],
+  [['soundcloud.com'], 'さうんどくらうど', 'SoundCloud'],
 ];
 export function mediaServiceName(url) {
   const host = new URL(url).hostname.toLowerCase();

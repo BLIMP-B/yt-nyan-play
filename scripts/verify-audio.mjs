@@ -92,6 +92,7 @@ HourlyHistory.prototype.sync = function(...args) {
 };
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
+  if (globalThis.nyanSoundCloudFixture && url === 'https://soundcloud.com/nyan-verification/audio') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'soundcloud', headers: {}, duration: 4 });
   if (['/title-slow-preparation', '/title-long-overlap', '/title-direct-overlap'].includes(new URL(url).pathname)) {
     const timing = { url, extractionStartedAt: Date.now() }; (globalThis.nyanTitleTimings ||= []).push(timing);
     return new Promise((resolve, reject) => {
@@ -265,6 +266,9 @@ try {
     const mediaSession = session.fromPartition('persist:nyan-playback');
     await mediaSession.protocol.handle('https', request => {
       const url = new URL(request.url);
+      if (url.hostname === 'on.soundcloud.com' && url.pathname === '/NyanVerification') return new Response(null, { status: 302, headers: { location: 'https://soundcloud.com/nyan-verification/audio' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><audio controls autoplay src="/nyan-verification/audio.ogg"></audio>', { headers: { 'Content-Type': 'text/html' } });
       if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
     });
@@ -515,6 +519,32 @@ try {
   const ordinary = await emitConversion('忘却後✅', 'conversion-after-forget');
   assert.equal(ordinary.length, 1); assert.equal(ordinary[0].kind, 'speech'); await waitForJob(page, ordinary[0].id);
   report.mediaConversions = { passed: true, chatRegistration: true, unicodeEmoji: true, uiSave: true, reload: true, directMode: true, bodyReplaced: true, noAnnouncement: true, titleCallsFollowSettings: true, deduplicated: true, forgotten: true, pcPlayback: true, receiverVerified: false, ...conversionMetrics };
+  // Exercise short-link expansion and official-domain navigation with the old
+  // short-only allowlist, then capture real PC PCM via both playback paths.
+  const soundcloudConfig = (await call(page, 'state')).config;
+  soundcloudConfig.media.allowedHosts = [...soundcloudConfig.media.allowedHosts.filter(h => h !== 'soundcloud.com'), 'on.soundcloud.com'];
+  Object.assign(soundcloudConfig.media, { titleCallEnabled: false, output: 'local' });
+  await application.evaluate(() => { globalThis.nyanSoundCloudFixture = true; });
+  const soundcloudCases = [];
+  try {
+    for (const bandwidthSaving of [false, true]) {
+      soundcloudConfig.media.bandwidthSaving = bandwidthSaving; await call(page, 'config:save', soundcloudConfig);
+      await application.evaluate(async (_electron, label) => {
+        const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = label; probe.capture = true;
+        await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+      }, 'soundcloud-audio-' + (bandwidthSaving ? 'stream' : 'browser'));
+      const spokenBefore = synthesisTexts.length;
+      try {
+        const job = await call(page, 'media:add', { url: 'https://on.soundcloud.com/NyanVerification', mode: bandwidthSaving ? 'direct' : 'full', guildId: '71111' });
+        await waitForJob(page, job.id);
+        const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
+        assert.ok(metrics?.mediaToneSamples > 4800, 'SoundCloud short link did not produce PC media audio: ' + JSON.stringify(metrics));
+        if (!bandwidthSaving) assert.ok(synthesisTexts.slice(spokenBefore).includes('さうんどくらうどを再生します'));
+        soundcloudCases.push({ bandwidthSaving, mode: job.payload.mode, pcPlayback: true, ...metrics });
+      } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
+    }
+  } finally { await application.evaluate(() => { globalThis.nyanSoundCloudFixture = false; }); }
+  report.soundcloud = { passed: true, shortLinkExpanded: true, shortOnlyAllowlist: true, browserPC: true, audioStreamPC: true, serviceAnnouncement: true, actualServiceAudio: false, receiverVerified: false, cases: soundcloudCases };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.

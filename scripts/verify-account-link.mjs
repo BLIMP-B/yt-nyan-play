@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { _electron, chromium } from 'playwright-core';
+import { MEDIA_ACCOUNTS } from '../apps/desktop/core/media-accounts.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const temp = mkdtempSync(join(tmpdir(), 'nyan-account-link-')), data = join(temp, 'app'), profile = join(temp, 'chrome'), extension = join(temp, 'extension');
 const output = join(root, 'dist/account-link-verification'); mkdirSync(output, { recursive: true }); mkdirSync(data);
@@ -20,7 +21,7 @@ let application, context;
 async function launchApp() {
   const env = { ...process.env, NYAN_DATA_DIR: data }; delete env.ELECTRON_RUN_AS_NODE;
   application = await _electron.launch({ executablePath: require('electron'), args: [root, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env });
-  const page = await application.firstWindow(); await page.waitForFunction(() => document.querySelector('#media-account-service')?.options.length === 8);
+  const page = await application.firstWindow(); await page.waitForFunction(count => document.querySelector('#media-account-service')?.options.length === count, MEDIA_ACCOUNTS.length);
   await application.evaluate(({ shell, session }) => {
     globalThis.nyanExternalFixture = [];
     shell.openExternal = async url => { globalThis.nyanExternalFixture.push(url); };

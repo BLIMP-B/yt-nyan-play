@@ -37,7 +37,7 @@ export const DEFAULT_CONFIG = {
     equalizer: DEFAULT_EQUALIZER, compressor: DEFAULT_COMPRESSOR,
     allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'nico.ms', 'x.com',
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
-      'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
+      'threads.net', 'threads.com', 'bsky.app', 'soundcloud.com', 'cdn.discordapp.com', 'media.discordapp.net'],
   },
   dictionary: [], education: [], mediaConversions: [],
 };

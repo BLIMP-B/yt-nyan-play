@@ -7,6 +7,7 @@ export const MEDIA_ACCOUNTS = [
   { id: 'facebook', name: 'Facebook', url: 'https://www.facebook.com/login/', hosts: ['facebook.com', 'fb.watch'], authHosts: ['accountscenter.meta.com'] },
   { id: 'threads', name: 'Threads', url: 'https://www.threads.com/login', hosts: ['threads.com', 'threads.net'], authHosts: ['www.instagram.com', 'www.facebook.com', 'accountscenter.meta.com'] },
   { id: 'bluesky', name: 'Bluesky', url: 'https://bsky.app/', hosts: ['bsky.app'], authHosts: ['bsky.social'] },
+  { id: 'soundcloud', name: 'SoundCloud', url: 'https://soundcloud.com/signin', hosts: ['soundcloud.com'], authHosts: ['accounts.google.com', 'appleid.apple.com', 'www.facebook.com'] },
 ];
 export function mediaAccount(id) {
   const service = MEDIA_ACCOUNTS.find(s => s.id === id);

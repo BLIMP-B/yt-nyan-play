@@ -1,4 +1,5 @@
 import { validateMediaUrl } from '../core/config.mjs';
+import { validateMediaNavigation } from '../core/media-navigation.mjs';
 import { metadataFromHtml, titleText } from '../core/media-title.mjs';
 
 // Bounded, credential-scoped page reads. Do not execute HTML or follow an
@@ -9,7 +10,13 @@ export async function fetchTitleMetadata(url, allowedHosts, fetcher, signal) {
     let next = validateMediaUrl(raw, allowedHosts);
     for (let n = 0; n < 4; n++) {
       const response = await fetcher(next, { signal: timeout, redirect: 'manual' });
-      if (response.status >= 300 && response.status < 400) { const location = response.headers.get('location'); await response.body?.cancel(); if (!location) return ''; next = validateMediaUrl(new URL(location, next).href, allowedHosts); continue; }
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location'); await response.body?.cancel(); if (!location) return '';
+        const target = new URL(location, next);
+        next = original.hostname === 'on.soundcloud.com' && (target.hostname === 'soundcloud.com' || target.hostname.endsWith('.soundcloud.com'))
+          ? validateMediaNavigation(target.href, allowedHosts, url) : validateMediaUrl(target.href, allowedHosts);
+        continue;
+      }
       if (!response.ok || !/text\/html|json/iu.test(response.headers.get('content-type') || '')) { await response.body?.cancel(); return ''; }
       const reader = response.body?.getReader(); if (!reader) return '';
       const chunks = []; let count = 0;

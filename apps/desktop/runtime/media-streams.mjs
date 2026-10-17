@@ -59,7 +59,7 @@ export class MediaStreamResolver {
       return selected;
     } catch (error) {
       if (signal.aborted) throw signal.reason;
-      this.log('warn', `${service[0]}: 音声形式を取得できないためブラウザ再生へ切り替えます（['AbortError', 'TimeoutError'].includes(error.name) ? '取得時間超過' : '取得・導入失敗'}）`); return null;
+      this.log('warn', `${service[0]}: 音声形式を取得できないためブラウザ再生へ切り替えます（${['AbortError', 'TimeoutError'].includes(error.name) ? '取得時間超過' : '取得・導入失敗'}）`); return null;
     } finally { clearTimeout(timer); if (cookieFile && existsSync(cookieFile)) unlinkSync(cookieFile); }
   }
   extract(executable, args, signal) {
