@@ -105,6 +105,21 @@ test('invalid URLs and failed saves preserve mappings; disabled education cannot
   await f.bot.message(f.message('変換（✅=https://youtu.be/a直接 ）')); assert.equal(f.media.length, 0);
   assert.deepEqual(normalizeConfig({}).mediaConversions, []);
 });
+test('settings snapshots preserve custom allowed hosts when validating converted URLs', async t => {
+  const f = fixture(t);
+  f.store.updateConfig({ ...f.store.config, media: { ...f.store.config.media, allowedHosts: [...f.store.config.media.allowedHosts, 'media.example.test'] } });
+  await f.register('✅', 'https://media.example.test/audio.mp3');
+  const c = f.store.exportConfig();
+  c.__readingBase = structuredClone({ education: c.education, mediaConversions: c.mediaConversions, media: { allowedHosts: c.media.allowedHosts }, speech: { emojiReadings: c.speech.emojiReadings } });
+  c.mediaConversions.push({ source: '猫', url: 'https://media.example.test/cat.mp3' });
+  await f.education.saveConfig(c, next => f.store.updateConfig(next));
+  assert.equal(f.store.config.mediaConversions.length, 2);
+  c.mediaConversions = [];
+  c.media.allowedHosts = c.media.allowedHosts.filter(h => h !== 'media.example.test');
+  c.__readingBase.mediaConversions = f.store.config.mediaConversions;
+  await f.education.saveConfig(c, next => f.store.updateConfig(next));
+  assert.equal(f.store.config.mediaConversions.length, 0);
+});
 test('failed media enqueue remains retryable and does not speak the conversion body', async t => {
   const f = fixture(t); await f.register(); f.speech.length = 0;
   const handler = f.bot.handlers.media; f.bot.handlers.media = () => { throw Error('queue full'); };
