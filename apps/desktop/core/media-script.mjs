@@ -1,8 +1,8 @@
 import { mediaBufferState } from './media-buffer.mjs';
 
-export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true, bufferSeconds = 0, expectedSeconds = null, streamFinished = false }) {
+export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true, bufferSeconds = 0, expectedSeconds = null, streamFinished = false, bestEffortBuffer = false }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek, bufferSeconds, expectedSeconds, streamFinished })};
+    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek, bufferSeconds, expectedSeconds, streamFinished, bestEffortBuffer })};
     let lowestQuality = false;
     if (options.bandwidthSaving) {
       // Use exposed player APIs. Hiding video does not save network bandwidth.
@@ -66,7 +66,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
     if (!advertisement && !window.__nyanStarted && chosen.readyState >= 1) {
       try { if (options.seek) chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
-    const buffer = (${mediaBufferState.toString()})(chosen, options.bufferSeconds, options.expectedSeconds, options.streamFinished);
+    const buffer = (${mediaBufferState.toString()})(chosen, advertisement ? 0 : options.bufferSeconds, options.expectedSeconds, options.streamFinished, { bestEffort: options.bestEffortBuffer, observed: playback.observed });
     if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
     let youtubeEnded = false;
     try { youtubeEnded = document.querySelector('#movie_player')?.getPlayerState?.() === 0; } catch {}

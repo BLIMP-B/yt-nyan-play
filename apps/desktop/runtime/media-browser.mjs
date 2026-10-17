@@ -43,7 +43,7 @@ export class MediaBrowser {
     catch (error) { stream?.close(); throw error; }
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
-    const buffering = () => ({ bufferSeconds: stream ? buffer.startupSeconds : 0, expectedSeconds: stream?.expectedSeconds ?? null, streamFinished: stream?.finished === true });
+    const buffering = () => ({ bufferSeconds: buffer.startupSeconds, expectedSeconds: stream?.expectedSeconds ?? null, streamFinished: stream?.finished === true, bestEffortBuffer: !stream });
     this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream, ...buffering() };
     guardMediaWindow(window, originalUrl, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
@@ -66,7 +66,7 @@ export class MediaBrowser {
         captureStarted = true; await this.bridge.startCapture(job.id, payload.guildId, signal);
       }
       window.webContents.setAudioMuted(false);
-      const startedAt = Date.now(); let seen = false, playbackStartedAt = null, reportedBlock = '', qualityReported = false;
+      const startedAt = Date.now(); let seen = false, playbackStartedAt = null, reportedBlock = '', qualityReported = false, reportedBufferUnderruns = 0;
       while (!signal.aborted && !window.isDestroyed()) {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
@@ -77,6 +77,7 @@ export class MediaBrowser {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
         }
         if (state.found && !state.advertisement && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); this.bridge.played?.(job); }
+        if (state.bufferUnderruns > reportedBufferUnderruns) { reportedBufferUnderruns = state.bufferUnderruns; this.log('warn', `${mediaServiceName(url)}: 音声の先読みが不足しました（再バッファ${reportedBufferUnderruns}回）`); }
         if (seen && !qualityReported && c.media.bandwidthSaving && !stream) { qualityReported = true; this.log(state.lowestQuality ? 'info' : 'warn', state.lowestQuality ? 'ブラウザの最低画質を指定しました' : 'このページは画質制御APIを公開していません。再生画面の画質設定をご確認ください'); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
         this.status = { ...state, title, service: mediaServiceName(url), mode, limitSeconds, shareExpanded: url !== originalUrl, startedAt: playbackStartedAt, paused: this.paused, delivery: stream ? selected.audioOnly ? 'audio-only' : 'lowest-video' : 'browser' }; this.bridge.changed();
@@ -91,10 +92,10 @@ export class MediaBrowser {
           if (!stream.finished && state.ended) await Promise.race([stream.completion, delay(1000, undefined, { signal })]);
           signal.throwIfAborted();
           continuation = streamContinuation(payload, state, stream);
-          if (continuation) { this.log('warn', `${mediaServiceName(url)}の音声配信が途中で終了しました（${{ preview: '再生', full: '無限', direct: '直接' }[mode]} / ${Math.round(Number(state.currentTime) || 0)}秒${stream.expectedSeconds != null ? '・予定' + Math.round(stream.expectedSeconds) + '秒' : ''}）。元のページで${Math.round(continuation.startSeconds)}秒から継続します`); break; }
+          if (continuation) { this.log('warn', `${mediaServiceName(url)}の音声配信が途中で終了しました（${{ preview: '再生', full: '無限', direct: '直接' }[mode]} / ${Math.round(Number(state.currentTime) || 0)}秒${stream.expectedSeconds != null ? '・予定' + Math.round(stream.expectedSeconds) + '秒' : ''}）。元のページで${Math.round(continuation.startSeconds)}秒から継続します`); window.webContents.setAudioMuted(true); await this.bridge.completeCapture?.(job, signal); break; }
         }
         if (state.error) throw new Error(`メディアを再生できません: ${state.error}`);
-        if (state.previewFinished || state.ended) { this.log('info', `メディア再生を完了しました: ${mediaServiceName(url)} / ${{ preview: '再生', full: '無限', direct: '直接' }[mode]} / ${state.endedReason || 'preview'}`); return; }
+        if (state.previewFinished || state.ended) { await this.bridge.completeCapture?.(job, signal); this.log('info', `メディア再生を完了しました: ${mediaServiceName(url)} / ${{ preview: '再生', full: '無限', direct: '直接' }[mode]} / ${state.endedReason || 'preview'}`); return; }
         const authenticating = state.loginRequired || mediaAuthHosts(url).includes(new URL(window.webContents.getURL()).hostname);
         if (!seen && Date.now() - startedAt > (authenticating || state.advertisement ? 300000 : 90000)) throw new Error(state.blockedReason || '再生できる動画・音声を見つけられません。ログインやサイトの再生条件を確認してください');
         await new Promise(resolve => { const t = setTimeout(resolve, 500); const stop = () => { clearTimeout(t); resolve(); }; signal.addEventListener('abort', stop, { once: true }); setTimeout(() => signal.removeEventListener('abort', stop), 550).unref(); });

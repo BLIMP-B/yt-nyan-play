@@ -58,3 +58,9 @@ test('jitter buffering never consumes a partial media frame and speech can conti
   const spoken = mixer.addSpeech(tone(1, 2000), 1); assert.ok(mixer.takeFrame().some(b => b !== 0)); await spoken; assert.equal(mixer.media.length, 512);
   mixer.addMedia(audio.subarray(512)); assert.deepEqual(mixer.takeFrame(), audio.subarray(0, 3840));
 });
+test('media interruption cancels EOF drain instead of waiting for the buffered tail', async t => {
+  const mixer = new PcmMixer('poor', { mediaBufferMs: 600 }); t.after(() => mixer.destroy());
+  mixer.addMedia(tone(30, 1000)); const controller = new AbortController(), draining = mixer.drain('media', controller.signal);
+  controller.abort(); await assert.rejects(draining, { name: 'AbortError' });
+  mixer.clearMedia(); assert.equal(mixer.media.length, 0); assert.equal(mixer.mediaBuffer.finished, false);
+});

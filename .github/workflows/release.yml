@@ -80,6 +80,7 @@ jobs:
           import assert from 'node:assert/strict';
           const { artifacts } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-artifacts.json')));
           const names = { fidelity: 'opus-fidelity-verification-windows', clock: 'voice-clock-verification-windows', android: 'android-verification-windows', model: 'hourly-model-verification-windows', duration: 'playback-duration-verification-windows', audio: 'audio-verification-windows', windows: 'nyan-talk-damare-windows-x64' };
+          if (Number(JSON.parse(readFileSync('releases/current.json')).tag.match(/^v0\.5\.(\d+)$/)?.[1]) >= 23) names.impairment = 'voice-impairment-verification-windows';
           for (const [key, name] of Object.entries(names)) {
             const latest = artifacts.filter(a => a.name === name && !a.expired).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
             assert.ok(latest && Number.isSafeInteger(latest.id) && latest.size_in_bytes > 0, `${name} is required`);
@@ -96,12 +97,14 @@ jobs:
           RELEASE_ARTIFACT_DURATION: ${{ steps.artifacts.outputs.duration }}
           RELEASE_ARTIFACT_AUDIO: ${{ steps.artifacts.outputs.audio }}
           RELEASE_ARTIFACT_FIDELITY: ${{ steps.artifacts.outputs.fidelity }}
+          RELEASE_ARTIFACT_IMPAIRMENT: ${{ steps.artifacts.outputs.impairment }}
         run: |
           # download-artifact v4 lists only the first page for cross-run IDs.
           # A rerun can add a valid artifact beyond that page; request its ID directly.
-          for KEY in fidelity clock android model duration audio; do
+          for KEY in fidelity clock android model duration audio impairment; do
             VARIABLE="RELEASE_ARTIFACT_${KEY^^}"
             ID="${!VARIABLE}"
+            if test -z "$ID"; then continue; fi
             ARCHIVE="$RUNNER_TEMP/nyan-artifact-$KEY.zip"
             gh api "repos/$RELEASE_REPOSITORY/actions/artifacts/$ID/zip" > "$ARCHIVE"
             mkdir -p "verification/$KEY"
@@ -316,6 +319,25 @@ jobs:
               assert.equal(audio.nativeRedirect.status, 302);
               assert.equal(audio.nativeRedirect.destinationRequests, 0);
               for (const key of ['detected', 'pauseResume', 'naturalEnd']) assert.equal(audio.soundcloud.detachedAudio[key], true);
+            }
+            if (atLeast(23)) {
+              const buffering = audio.mediaBuffering;
+              for (const key of ['passed', 'pcPlayback']) assert.equal(buffering[key], true);
+              assert.equal(buffering.receiverVerified, false);
+              assert.equal(buffering.startupSeconds, 4); assert.equal(buffering.readAheadSeconds, 6);
+              assert.ok(buffering.cases.find(c => c.variant === 'baseline').longestInternalSilenceMs >= 400);
+              const fixed = buffering.cases.find(c => c.variant === 'fixed');
+              assert.ok(fixed.audibleFrames > 700 && fixed.longestInternalSilenceMs <= 100 && fixed.gapsOver100ms === 0);
+              const impairment = JSON.parse(readFileSync('verification/impairment/impairment-report.json'));
+              assert.equal(impairment.passed, true); assert.equal(impairment.platform, 'win32');
+              assert.equal(impairment.discordReceiverVerified, false);
+              assert.equal(impairment.sourceStallMs, 500); assert.equal(impairment.workerStallMs, 70);
+              for (const group of ['sourceBaseline', 'sourceFixed', 'pacingBaseline', 'pacingFixed']) assert.equal(impairment[group].summaries.length, 3);
+              assert.ok(impairment.sourceBaseline.summaries.every(s => s.longestSilenceMs >= 160));
+              assert.ok(impairment.pacingBaseline.summaries.every(s => s.shapedDrops >= 3));
+              assert.ok(impairment.sourceFixed.summaries.every(s => s.silentFrames === 0 && s.burstsUnder5ms === 0 && s.sequenceErrors === 0));
+              assert.ok(impairment.pacingFixed.summaries.every(s => s.shapedDrops === 0 && s.burstsUnder5ms === 0 && s.sequenceErrors === 0));
+              assert.equal(impairment.sourceFixed.tailPreserved, true);
             }
             if (atLeast(14)) {
               assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);

@@ -276,7 +276,16 @@ else {
             finally { captureRequest = null; }
           }); return captureChain;
         },
-        stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); if (!captures.delete(id)) return; if (bed) voice.endBackground(guildId); else if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key); else voice.endMedia(guildId); },
+        completeCapture: async (job, signal) => {
+          const capture = captures.get(job.id); if (!capture) return;
+          await audioCommand('capture:stop', { id: job.id }, signal, 5000);
+          if (capture.output !== 'local') {
+            const targets = capture.master ? [...voice.connections.keys()] : [job.payload.guildId];
+            await Promise.all(targets.map(key => voice.drainMedia(key, signal, bed)));
+          }
+          capture.drained = true;
+        },
+        stopCapture: async (id, guildId) => { window.webContents.send('nyan:audio', { type: 'capture:stop', id }); const capture = captures.get(id); if (!captures.delete(id)) return; if (bed) voice.endBackground(guildId); else if (scope === 'master') for (const key of [...voice.connections.keys()]) voice.endMedia(key, !capture.drained); else voice.endMedia(guildId, !capture.drained); },
       }, (l, t) => store.log(l, t), accounts, streamResolver); return browser;
     };
     titleCalls = new MediaTitleCalls(getConfig, {

@@ -55,7 +55,7 @@ import { scheduleGain } from '../core/gain-curve.mjs';
       return;
     }
     if (message.type === 'cancel') { const audio = playing.get(message.id); if (audio?.cancel) audio.cancel(); else { audio?.pause(); audio?.dispatchEvent(new Event('ended')); } return; }
-    if (message.type === 'capture:stop') { await stopCapture(message.id); return; }
+    if (message.type === 'capture:stop') { await stopCapture(message.id); window.nyan.audioResult({ id: message.id }); return; }
     try {
       if (message.type === 'play:timed') {
         const context = new AudioContext({ sampleRate: 48000 }); const source = context.createBufferSource(), gain = context.createGain();

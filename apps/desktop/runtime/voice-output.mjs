@@ -15,11 +15,11 @@ import {
 } from '@discordjs/voice';
 
 export class PcmMixer extends Readable {
-  constructor(profile = 'poor') {
+  constructor(profile = 'poor', { mediaBufferMs = 0 } = {}) {
     super({ highWaterMark: 3840 }); this.mediaBuffer = new PcmClockBuffer(); this.backgroundBuffer = new PcmClockBuffer(); this.speech = [];
     this.ducking = 0.35; this.titleCallDucking = 0.8; this.mediaVolume = 0.7; this.duckGain = new GainEnvelope(); this.duckFadeInMs = 0; this.duckFadeOutMs = 0;
     this.mediaGain = new GainEnvelope(); this.backgroundVolume = 0.18; this.backgroundGain = new GainEnvelope();
-    this.network = audioNetwork(profile); this.mediaEffects = new MediaEffects(); this.backgroundEffects = new MediaEffects();
+    this.minimumMediaBufferMs = mediaBufferMs; this.network = audioNetwork(profile); this.mediaEffects = new MediaEffects(); this.backgroundEffects = new MediaEffects();
     this.watchdog = setInterval(() => {
       if (this.speech.some(track => Date.now() >= (track.startAt || 0) && Date.now() - Math.max(track.progressAt, track.startAt || 0) > 10000)) this.destroy(new Error('Discord音声ストリームが停止しました。次の読み上げで再接続します'));
     }, 1000);
@@ -44,8 +44,9 @@ export class PcmMixer extends Readable {
   }
   takeFrame(now = Date.now()) {
     if (this.destroyed) throw new Error('音声ストリームが終了しました');
-    const mediaFrame = this.mediaBuffer.frame(this.network.mediaMs, () => this.onUnderrun?.('media'));
-    const backgroundFrame = this.backgroundBuffer.frame(this.network.mediaMs, () => this.onUnderrun?.('background'));
+    const bufferMs = Math.max(this.network.mediaMs, this.minimumMediaBufferMs);
+    const mediaFrame = this.mediaBuffer.frame(bufferMs, () => this.onUnderrun?.('media'));
+    const backgroundFrame = this.backgroundBuffer.frame(bufferMs, () => this.onUnderrun?.('background'));
     const tracks = this.speech.filter(t => !t.startAt || now >= t.startAt);
     for (const track of tracks) if (track.startAt) track.position = Math.max(track.position, Math.floor((now - track.startAt) / 20) * 3840);
     const out = Buffer.alloc(3840); const duck = Math.min(tracks.some(t => t.duckMedia && !t.titleCall) ? this.ducking : 1, tracks.some(t => t.duckMedia && t.titleCall) ? this.titleCallDucking : 1);
@@ -68,6 +69,17 @@ export class PcmMixer extends Readable {
     return out;
   }
   frame() { if (!this.destroyed && this.readableLength < this.readableHighWaterMark) this.push(this.takeFrame()); }
+  async drain(lane, signal) {
+    signal?.throwIfAborted();
+    const buffer = lane === 'background' ? this.backgroundBuffer : this.mediaBuffer;
+    buffer.finish(); const until = Date.now() + 2500;
+    while (buffer.bytes.length && !this.destroyed) {
+      signal?.throwIfAborted();
+      if (Date.now() > until) throw new Error('Discordの音声バッファを排出できません');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    signal?.throwIfAborted();
+  }
   _destroy(error, callback) {
     clearInterval(this.watchdog);
     for (const track of this.speech) { track.signal?.removeEventListener('abort', track.abort); track.reject(error || new Error('音声接続が終了しました')); }
@@ -215,7 +227,8 @@ export class VoiceOutput {
     else if (this.monitor.entry) this.monitor.stop();
   }
   media(guildId, chunk) { const entry = this.connections.get(guildId); if (!entry) return; this.mediaSettings(entry.mixer, this.getConfig()); entry.mixer.addMedia(chunk); }
-  endMedia(guildId) { this.connections.get(guildId)?.mixer.clearMedia(); }
+  endMedia(guildId, flush = true) { this.connections.get(guildId)?.mixer.clearMedia(flush); }
+  async drainMedia(guildId, signal, background = false) { const entry = this.connections.get(guildId); if (entry && !entry.mixer.destroyed) await entry.mixer.drain(background ? 'background' : 'media', signal); }
   fadeMedia(guildId, gain, ms) { this.connections.get(guildId)?.mixer.mediaGain.fade(gain, ms); }
   async beginBackground(guildId) { const entry = await this.connect(guildId); const c = this.getConfig(); entry.mixer.configureEffects(c.media); entry.mixer.backgroundVolume = c.hourly.bgmVolume; entry.mixer.backgroundGain.fade(0); entry.mixer.clearBackground(); }
   background(guildId, bytes) { const mixer = this.connections.get(guildId)?.mixer; if (!mixer) return; const c = this.getConfig(); mixer.configureEffects(c.media); mixer.backgroundVolume = c.hourly.bgmVolume; mixer.addBackground(bytes); }

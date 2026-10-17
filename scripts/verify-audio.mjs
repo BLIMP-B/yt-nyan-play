@@ -15,6 +15,7 @@ import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 import { verifyAudioNetwork } from './audio-network-probe.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { mediaScope } from '../apps/desktop/core/media-pool.mjs';
+import { createMediaNetworkFixture, pcmContinuity } from './media-buffer-probe.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const directory = mkdtempSync(join(tmpdir(), 'damare-audio-'));
 const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/audio-verification')); mkdirSync(reports, { recursive: true });
@@ -25,10 +26,13 @@ execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
 for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=30`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', '-ac', '2', join(directory, 'scope-speech.wav')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-ar', '48000', '-ac', '2', join(directory, 'long-title.wav')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=18', '-c:a', 'libopus', '-b:a', '96k', '-page_duration', '20000', join(directory, 'network.ogg')]);
+const networkSource = createMediaNetworkFixture(readFileSync(join(directory, 'network.ogg')));
 const wav = readFileSync(join(directory, 'speech.wav'));
 const synthesisTexts = [];
 const synthesisSettings = [];
 const engine = createServer((req, res) => {
+  if (networkSource.handle(req, res)) return;
   if (req.url.startsWith('/audio_query')) { const text = new URL(req.url, 'http://localhost').searchParams.get('text'); synthesisTexts.push(text); res.end(JSON.stringify({ verificationText: text })); }
   else if (req.url.startsWith('/synthesis')) { let body = ''; req.on('data', bytes => { body += bytes; }); req.on('end', () => { synthesisSettings.push(JSON.parse(body)); res.setHeader('Content-Type', 'audio/wav'); res.end(body.includes('再生開始に重なる長い題名') ? readFileSync(join(directory, 'long-title.wav')) : body.includes('別サーバー読み上げ') ? readFileSync(join(directory, 'scope-speech.wav')) : wav); }); }
   else { res.statusCode = 404; res.end(); }
@@ -107,8 +111,15 @@ HourlyHistory.prototype.sync = function(...args) {
   const timer=setInterval(()=>{const now=performance.now();metrics.ticks++;metrics.maxGapMs=Math.max(metrics.maxGapMs,now-previous);previous=now;},20);
   return sync.apply(this,args).finally(()=>clearInterval(timer));
 };
+import { MediaBrowser } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-browser.mjs')).href)};
+const bufferPolicy = MediaBrowser.prototype.streamBufferOptions;
+MediaBrowser.prototype.streamBufferOptions = function(profile) {
+  if (this.job?.payload.url === 'http://media-fixture.test/network-buffer-baseline') return { startupSeconds: 0, burstSeconds: 0 };
+  return bufferPolicy.call(this, profile);
+};
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
+  if (['http://media-fixture.test/network-buffer-baseline', 'http://media-fixture.test/network-buffer-fixed'].includes(url)) return Promise.resolve({ url: 'http://127.0.0.1:${engine.address().port}/network.ogg', audioOnly: true, service: 'fixture', headers: {}, duration: 18 });
   if (globalThis.nyanSoundCloudFixture && url === 'https://soundcloud.com/nyan-verification/audio') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'soundcloud.ogg'))}, audioOnly: true, service: 'soundcloud', headers: {}, duration: 8 });
   if (['/title-slow-preparation', '/title-long-overlap', '/title-direct-overlap'].includes(new URL(url).pathname)) {
     const timing = { url, extractionStartedAt: Date.now() }; (globalThis.nyanTitleTimings ||= []).push(timing);
@@ -592,6 +603,31 @@ try {
   report.soundcloud = { passed: true, shortLinkExpanded: true, shortOnlyAllowlist: true, browserPC: true, audioStreamPC: true, serviceAnnouncement: true, actualServiceAudio: false, receiverVerified: false, cases: soundcloudCases };
   report.soundcloud.detachedAudio = { detected: true, pauseResume: true, naturalEnd: true };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
+  await call(page, 'config:save', attributionBase);
+  const bufferingConfig = structuredClone(attributionBase);
+  Object.assign(bufferingConfig.media, { output: 'local', bandwidthSaving: true, titleCallEnabled: false });
+  bufferingConfig.desktop.networkProfile = 'poor'; await call(page, 'config:save', bufferingConfig);
+  const bufferingCases = [];
+  for (const variant of ['baseline', 'fixed']) {
+    const label = 'network-audio-' + variant;
+    await application.evaluate(async (_electron, label) => {
+      const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = label; probe.capture = true;
+      await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+    }, label);
+    try {
+      const job = await call(page, 'media:add', { url: 'http://media-fixture.test/network-buffer-' + variant, mode: 'direct', guildId: '72222' });
+      const playback = await waitForPlayback(page, job);
+      const final = await waitForJob(page, job.id, 65000);
+      const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks[globalThis.nyanAudioProbe.active] || [])]));
+      const continuity = pcmContinuity(pcm), saved = final.jobs.find(j => j.id === job.id);
+      bufferingCases.push({ variant, ...continuity, bufferedSeconds: playback.bufferedSeconds, startDelayMs: Date.parse(saved.mediaStartedAt) - Date.parse(saved.mediaPreparingAt), mode: job.payload.mode, status: saved.status });
+    } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
+  }
+  const [unbuffered, buffered] = bufferingCases;
+  assert.ok(unbuffered.longestInternalSilenceMs >= 400 && unbuffered.gapsOver100ms >= 2, 'The original streaming policy did not reproduce repeated audible gaps: ' + JSON.stringify(bufferingCases));
+  assert.ok(buffered.audibleFrames > 700 && buffered.longestInternalSilenceMs <= 100 && buffered.gapsOver100ms === 0, 'Buffered PC media still dropped audio: ' + JSON.stringify(bufferingCases));
+  assert.ok(buffered.bufferedSeconds >= 3.9);
+  report.mediaBuffering = { passed: true, pcPlayback: true, sourceOutagesMs: [2500, 2500, 2500], startupSeconds: 4, readAheadSeconds: 6, actualServiceAudio: false, receiverVerified: false, cases: bufferingCases };
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.
   // Only Discord transport is substituted; this does not measure a receiver.

@@ -34,3 +34,14 @@ test('third-party players keep their adaptive buffering, and normal quiet PCM is
   mediaBufferState(p, 4, 60); p.paused = false; p.readyState = 4; p.ahead = .2;
   const state = mediaBufferState(p, 4, 60); assert.equal(state.buffering, false); assert.equal(state.bufferUnderruns, 0);
 });
+test('finite browser playback primes once, excludes live and already-started media, and cannot deadlock a provider that stops loading when paused', () => {
+  const p = player(); p.duration = 60; p.ahead = .5;
+  assert.equal(mediaBufferState(p, 4, null, false, { bestEffort: true, now: 0 }).buffering, true);
+  assert.equal(mediaBufferState(p, 4, null, false, { bestEffort: true, now: 8000 }).buffering, false);
+  p.readyState = 1; p.paused = false; p.ahead = 0;
+  assert.equal(mediaBufferState(p, 4, null, false, { bestEffort: true, now: 9000 }).buffering, false);
+  const live = player(); live.ahead = .5;
+  assert.equal(mediaBufferState(live, 4, null, false, { bestEffort: true }).buffering, false);
+  const started = player(); started.duration = 60; started.ahead = .5;
+  assert.equal(mediaBufferState(started, 4, null, false, { bestEffort: true, observed: true }).buffering, false);
+});

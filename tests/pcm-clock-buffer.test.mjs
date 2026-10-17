@@ -11,7 +11,7 @@ function signal(samples, start = 0) {
   return bytes;
 }
 test('independent capture clocks up to 0.25% fast/slow do not periodically refill or discard frames over three simulated minutes', () => {
-  for (const bufferMs of [80, 240]) for (const rate of [.9975, 1.0025]) {
+  for (const bufferMs of [80, 240, 600]) for (const rate of [.9975, 1.0025]) {
     const buffer = new PcmClockBuffer(); let cursor = bufferMs * 48, produced = cursor, last = 0;
     buffer.push(signal(cursor));
     for (let tick = 0; tick < 9000; tick++) {
@@ -29,8 +29,16 @@ test('independent capture clocks up to 0.25% fast/slow do not periodically refil
       }
     }
     const stats = buffer.snapshot(); assert.equal(stats.underruns, 0); assert.equal(stats.discardedSamples, 0); assert.ok(stats.correctedFrames > 1000);
-    assert.ok(stats.bufferedMs > 20 && stats.bufferedMs < 400, JSON.stringify(stats));
+    assert.ok(stats.bufferedMs > 20 && stats.bufferedMs < Math.max(400, bufferMs + 200), JSON.stringify(stats));
   }
+});
+test('EOF drains a short clip and its partial final frame without re-priming, replay or starvation', () => {
+  const buffer = new PcmClockBuffer(), pcm = signal(960 + 128); buffer.push(pcm); buffer.finish();
+  const first = buffer.frame(600), last = buffer.frame(600);
+  assert.deepEqual(first, pcm.subarray(0, 3840));
+  assert.deepEqual(last.subarray(0, 128 * 4), pcm.subarray(3840));
+  assert.ok(last.subarray(128 * 4).every(b => b === 0)); assert.equal(buffer.frame(600), null);
+  assert.equal(buffer.snapshot().underruns, 0); buffer.clear(); assert.equal(buffer.finished, false);
 });
 test('partial PCM waits for priming, real outages are diagnosed, and clearing cannot replay old media', () => {
   const buffer = new PcmClockBuffer(); const pcm = signal(3840); buffer.push(pcm.subarray(0, 513));
