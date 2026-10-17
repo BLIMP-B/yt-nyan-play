@@ -880,9 +880,18 @@ try {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         throw new Error('Playback window did not open');
-      }, { id: job.id, label: url });
+      }, { id: job.id, label: 'live-' + job.id });
       const began = Date.now(), until = began + 55000; let adSamples = 0;
       while (Date.now() < until) {
+        // A truncated audio stream can continue in a fresh browser window.
+        // Follow that job's window rather than recording the retired source.
+        await application.evaluate(async (_electron, id) => {
+          const probe = globalThis.nyanAudioProbe, target = globalThis.nyanProbeBrowsers.get(id)?.window;
+          if (!target || target.isDestroyed() || target === probe.target) return;
+          await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:stop',id:'audio-probe'})`, true);
+          probe.target = target; probe.capture = true;
+          await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+        }, job.id);
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
         const adPlaying = await application.evaluate(async () => {
           const target = globalThis.nyanAudioProbe.target; if (target.isDestroyed()) return false;

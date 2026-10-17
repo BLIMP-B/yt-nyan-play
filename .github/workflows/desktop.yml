@@ -26,7 +26,7 @@ jobs:
             if test "$RUN_ID" -lt "$PREPARE_RUN_ID"; then gh api --method POST "repos/$PREPARE_REPOSITORY/actions/runs/$RUN_ID/cancel"; fi
           done
   tag-verified-source:
-    needs: [tests, windows, android-install, hourly-model, live-media, soundcloud-links]
+    needs: [tests, windows, android-install, hourly-model, live-media, soundcloud-links, soundcloud-browser]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/codex/windows-desktop-bot' || startsWith(github.ref, 'refs/heads/codex/release-v'))
     runs-on: ubuntu-latest
     permissions:
@@ -244,7 +244,7 @@ jobs:
           name: soundcloud-links-windows
           path: dist/soundcloud-link-verification
   live-media:
-    needs: prepare
+    needs: soundcloud-browser
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -268,3 +268,21 @@ jobs:
         with:
           name: audio-verification-live-sites
           path: dist/audio-verification
+
+  soundcloud-browser:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check the production SoundCloud browser before the broad suite
+        run: npm run verify:soundcloud-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soundcloud-browser-verification-windows
+          path: dist/soundcloud-browser-verification

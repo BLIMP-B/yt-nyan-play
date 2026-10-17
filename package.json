@@ -28,7 +28,8 @@
     "verify:hourly-model": "node scripts/verify-hourly-model.mjs",
     "verify:extension": "node scripts/verify-extension.mjs",
     "verify:extension:live": "node scripts/verify-extension-live.mjs",
-    "verify:voice-impairments": "node scripts/verify-voice-impairments.mjs"
+    "verify:voice-impairments": "node scripts/verify-voice-impairments.mjs",
+    "verify:soundcloud-browser": "electron scripts/verify-soundcloud-browser.mjs"
   },
   "type": "module",
   "main": "apps/desktop/main.mjs",
