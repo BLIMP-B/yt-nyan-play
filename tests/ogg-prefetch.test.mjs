@@ -53,3 +53,20 @@ test('stop during prefetch cancels the HTTP origin and never leaves a late strea
     assert.equal(clientClosed, true);
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 });
+
+test('managed quiet audio keeps fixed-size Opus packets so browser byte buffering stays bounded', async t => {
+  const file = join(directory, 'quiet.ogg');
+  execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=3', '-af', 'volume=0.000001', '-c:a', 'libopus', file]);
+  const stream = await openAudioStream({ url: file, duration: 3 }, 0, 'direct', new AbortController().signal, 45, 9, 7); t.after(() => stream.close());
+  const bytes = Buffer.from(await (await fetch(stream.url)).arrayBuffer());
+  let offset = 0; const packets = [];
+  while (offset < bytes.length) {
+    assert.equal(bytes.toString('ascii', offset, offset + 4), 'OggS');
+    const count = bytes[offset + 26], header = 27 + count; let size = 0;
+    for (let i = 0; i < count; i++) size += bytes[offset + 27 + i];
+    if (bytes.readBigInt64LE(offset + 6) > 0) packets.push(size);
+    offset += header + size;
+  }
+  assert.ok(packets.length >= 150); assert.ok(packets.every(size => size === 240));
+  assert.equal(stream.error, null);
+});

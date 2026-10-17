@@ -7,7 +7,7 @@ const player = () => {
   return media;
 };
 test('network profiles allocate a bounded source cache and browser startup primes only once', () => {
-  assert.deepEqual(mediaStreamBuffer(), { startupSeconds: 4, burstSeconds: 6 });
+  assert.deepEqual(mediaStreamBuffer(), { startupSeconds: 4, decoderReserveSeconds: 3, burstSeconds: 9 });
   assert.equal(mediaStreamBuffer('balanced').startupSeconds, 2); assert.equal(mediaStreamBuffer('fast').startupSeconds, 1);
   const p = player(); p.ahead = .5; assert.equal(mediaBufferState(p, 4).buffering, true);
   p.ahead = 4; assert.equal(mediaBufferState(p, 4).buffering, false);

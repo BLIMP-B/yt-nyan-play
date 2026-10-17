@@ -1,6 +1,9 @@
 export function mediaStreamBuffer(profile = 'poor') {
   const startupSeconds = ({ poor: 4, balanced: 2, fast: 1 })[profile] || 4;
-  return { startupSeconds, burstSeconds: startupSeconds + 2 };
+  // Chromium keeps encoded Ogg bytes beyond its decoded TimeRanges. Reserve
+  // three seconds at the fixed local 96-kbps rate, including quiet content.
+  const decoderReserveSeconds = 3;
+  return { startupSeconds, decoderReserveSeconds, burstSeconds: startupSeconds + decoderReserveSeconds + 2 };
 }
 
 // Best-effort startup only for finite third-party browser players. Our own

@@ -32,7 +32,7 @@ export class MediaBrowser {
     if (!browserOnly && c.media.bandwidthSaving && this.resolver) {
       selected = await this.resolver.resolve(url, signal);
       if (selected) this.bridge.metadata?.(job, { title: selected.title, body: selected.description, author: selected.author });
-      if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45, buffer.burstSeconds, buffer.startupSeconds); }
+      if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45, buffer.burstSeconds, buffer.startupSeconds + (buffer.decoderReserveSeconds || 0)); }
       catch (error) { signal.throwIfAborted(); this.log('warn', '音声配信を開始できないためブラウザの最低画質設定へ切り替えます'); }
     }
     if (signal.aborted) { stream?.close(); signal.throwIfAborted(); }

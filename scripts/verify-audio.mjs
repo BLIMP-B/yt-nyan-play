@@ -161,10 +161,11 @@ const call = async (page, action, data) => {
   const result = await page.evaluate(async ({ action, data }) => window.nyan.invoke(action, data), { action, data });
   assert.equal(result.ok, true, result.error); return result.value;
 };
-const waitForJob = async (page, id, timeout = 15000) => {
+const waitForJob = async (page, id, timeout = 15000, observe) => {
   const until = Date.now() + timeout;
   while (Date.now() < until) {
     const state = await call(page, 'state'), job = state.jobs.find(j => j.id === id);
+    observe?.(state);
     if (job && !['waiting', 'running'].includes(job.status)) { assert.equal(job.status, 'completed', job.error); return state; }
     await new Promise(resolve => setTimeout(resolve, 80));
   }
@@ -617,17 +618,21 @@ try {
     try {
       const job = await call(page, 'media:add', { url: 'http://media-fixture.test/network-buffer-' + variant, mode: 'direct', guildId: '72222' });
       const playback = await waitForPlayback(page, job);
-      const final = await waitForJob(page, job.id, 65000);
+      const trace = [];
+      const final = await waitForJob(page, job.id, 65000, state => {
+        const m = state.media.find(m => m.scope === '72222');
+        if (m && (trace.at(-1)?.time !== m.currentTime || trace.at(-1)?.ready !== m.ready)) trace.push({ at: Date.now(), time: m.currentTime, ready: m.ready, decodedAheadSeconds: m.bufferedSeconds, sourceLeadSeconds: m.sourceLeadSeconds, buffering: m.buffering });
+      });
       const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks[globalThis.nyanAudioProbe.active] || [])]));
       const continuity = pcmContinuity(pcm), saved = final.jobs.find(j => j.id === job.id);
-      bufferingCases.push({ variant, ...continuity, bufferedSeconds: playback.bufferedSeconds, prefetchedSeconds: playback.prefetchedSeconds, startDelayMs: Date.parse(saved.mediaStartedAt) - Date.parse(saved.mediaPreparingAt), mode: job.payload.mode, status: saved.status });
+      bufferingCases.push({ variant, ...continuity, trace, bufferedSeconds: playback.bufferedSeconds, prefetchedSeconds: playback.prefetchedSeconds, startDelayMs: Date.parse(saved.mediaStartedAt) - Date.parse(saved.mediaPreparingAt), mode: job.payload.mode, status: saved.status });
     } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
   }
   const [unbuffered, buffered] = bufferingCases;
   assert.ok(unbuffered.longestInternalSilenceMs >= 400 && unbuffered.gapsOver100ms >= 2, 'The original streaming policy did not reproduce repeated audible gaps: ' + JSON.stringify(bufferingCases));
   assert.ok(buffered.audibleFrames > 700 && buffered.longestInternalSilenceMs <= 100 && buffered.gapsOver100ms === 0, 'Buffered PC media still dropped audio: ' + JSON.stringify(bufferingCases));
-  assert.ok(buffered.prefetchedSeconds >= 3.9);
-  report.mediaBuffering = { passed: true, pcPlayback: true, sourceOutagesMs: networkSource.interruptions.map(([from, to]) => to - from), startupSeconds: 4, readAheadSeconds: 6, actualServiceAudio: false, receiverVerified: false, cases: bufferingCases };
+  assert.ok(buffered.prefetchedSeconds >= 6.9);
+  report.mediaBuffering = { passed: true, pcPlayback: true, sourceOutagesMs: networkSource.interruptions.map(([from, to]) => to - from), startupSeconds: 4, decoderReserveSeconds: 3, readAheadSeconds: 9, actualServiceAudio: false, receiverVerified: false, cases: bufferingCases };
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.
   // Only Discord transport is substituted; this does not measure a receiver.
