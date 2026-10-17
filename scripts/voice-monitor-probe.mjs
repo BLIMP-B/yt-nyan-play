@@ -17,7 +17,7 @@ export function verifyVoiceMonitorContinuity({ durationMs = 18000 } = {}) {
     const errors = [];
     const monitor = new (legacy ? LegacyMonitor : VoiceMonitor)(message => {
       if (message.type === 'start') processor = monitorProcessor(message.rendererMs, legacy);
-      else if (message.type === 'pcm' || message.type === 'end' && !legacy) processor.port.onmessage({ data: legacy ? new Uint8Array(message.bytes) : message });
+      else if (message.type === 'pcm' || message.type === 'idle' || message.type === 'end' && !legacy) processor.port.onmessage({ data: legacy ? new Uint8Array(message.bytes) : message });
     }, () => {}, (_level, text) => errors.push(text));
     monitor.attach(entry, '11111', '99999'); clearInterval(monitor.timer); speaking.emit('start', '44444');
     const output = Buffer.alloc(Math.ceil((durationMs + 1200) * 48) * 4);

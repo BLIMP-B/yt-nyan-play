@@ -348,6 +348,7 @@ jobs:
               assert.equal(monitor.durationMs, 12000); assert.equal(monitor.packetJitterMs, 180); assert.equal(monitor.ipcBatchingMs, 160);
               assert.ok(monitor.audibleFrames >= 540); assert.equal(monitor.gapsOver100ms, 0);
               assert.equal(monitor.playout.underruns, 0); assert.equal(monitor.playout.discardedSamples, 0);
+              assert.ok([...monitor.playout.users, ...monitor.playout.retired].some(s => s.starts[0]?.reason === 'buffer' && s.starts[0].bufferedMs >= 360));
               assert.equal(model.passed, true); assert.equal(model.actualDiscordReceiver, false);
               assert.equal(model.durationMs, 18000); assert.equal(model.legacyTimerMs, 46.875);
               assert.ok(model.baseline.gapsOver100ms >= 2);

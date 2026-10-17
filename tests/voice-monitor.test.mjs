@@ -12,7 +12,7 @@ import { verifyVoiceMonitorContinuity } from '../scripts/voice-monitor-probe.mjs
 function setup(t) {
   const messages = [], streams = new Map(), speaking = new EventEmitter(); speaking.users = new Map(); let processor;
   const entry = { channelId: '33333', connection: { receiver: { speaking, subscribe: id => { const stream = new PassThrough({ objectMode: true }); streams.set(id, stream); return stream; } } } };
-  const monitor = new VoiceMonitor(m => { messages.push(m); if (m.type === 'start') processor = monitorProcessor(m.rendererMs); else if (m.type === 'pcm' || m.type === 'end') processor.port.onmessage({ data: m }); }, () => {}, () => {}); t.after(() => monitor.stop());
+  const monitor = new VoiceMonitor(m => { messages.push(m); if (m.type === 'start') processor = monitorProcessor(m.rendererMs); else if (m.type === 'pcm' || m.type === 'end' || m.type === 'idle') processor.port.onmessage({ data: m }); }, () => {}, () => {}); t.after(() => monitor.stop());
   const encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO); t.after(() => encoder.delete());
   const pcm = Buffer.alloc(3840); for (let i = 0; i < 960; i++) { const sample = Math.round(5000 * Math.sin(2 * Math.PI * 1000 * i / 48000)); pcm.writeInt16LE(sample, i * 4); pcm.writeInt16LE(sample, i * 4 + 2); }
   return { monitor, entry, speaking, streams, messages, pcm, processor: () => processor, frame: () => monitorFrame(processor), packet: () => Buffer.from(encoder.encode(pcm, 960)) };
@@ -20,7 +20,7 @@ function setup(t) {
 test('one VC monitor decodes and mixes real Opus while excluding the Bot, without a Discord output lane', t => {
   const s = setup(t); s.monitor.attach(s.entry, '11111', '99999');
   s.speaking.emit('start', '99999'); assert.equal(s.streams.size, 0);
-  for (const userId of ['44444', '55555']) { s.speaking.emit('start', userId); for (let i = 0; i < 16; i++) s.streams.get(userId).write(s.packet()); }
+  for (const userId of ['44444', '55555']) { s.speaking.emit('start', userId); for (let i = 0; i < 20; i++) s.streams.get(userId).write(s.packet()); }
   const output = Buffer.concat(Array.from({ length: 24 }, () => s.frame()));
   let peak = 0; for (let i = 0; i < output.length; i += 2) peak = Math.max(peak, Math.abs(output.readInt16LE(i)));
   assert.ok(peak > 5000); assert.equal(s.monitor.snapshot().guildId, '11111'); assert.equal(s.monitor.users.size, 2);
@@ -53,7 +53,8 @@ test('local worklet keeps speakers separate, rejects stale end events and clips 
 test('a 20-ms utterance starts within the jitter budget, and an ended utterance drains its tail', () => {
   const p = monitorProcessor(360), bytes = new Uint8Array(3840); new DataView(bytes.buffer).setInt16(4, 10000, true);
   p.port.onmessage({ data: { type: 'pcm', userId: '1', streamId: 'a', bytes } });
-  let heard = false; for (let i = 0; i < 21; i++) heard ||= monitorFrame(p).some(b => b); assert.ok(heard);
+  for (let i = 0; i < 18; i++) assert.equal(monitorFrame(p).some(b => b), false);
+  p.port.onmessage({ data: { type: 'idle', userId: '1', streamId: 'a' } }); assert.ok(monitorFrame(p).some(b => b));
   const q = monitorProcessor(360); q.port.onmessage({ data: { type: 'pcm', userId: '1', streamId: 'a', bytes } }); q.port.onmessage({ data: { type: 'end', userId: '1', streamId: 'a' } });
   assert.ok(monitorFrame(q).some(b => b)); monitorFrame(q); assert.equal(q.users.size, 0);
 });
@@ -98,4 +99,22 @@ test('PCM arriving during asynchronous PC device/worklet setup is preserved in o
   callbacks.monitor({ type: 'stop', id: 'old' }); callbacks.monitor({ type: 'pcm', id: 'old', bytes: new Uint8Array(3840) });
   assert.equal(nodes[0].messages.length, 3); assert.deepEqual(failures, []);
   callbacks.monitor({ type: 'stop', id: 'a' });
+});
+
+
+test('device render-ahead cannot start a partial buffer while the receiver is still active', () => {
+  const b = new VoiceMonitorBuffer(360), bytes = new Uint8Array(3840); new DataView(bytes.buffer).setInt16(0, 10000, true);
+  b.push(bytes, 0);
+  for (let at = 0; at < 48000; at += 128) b.mix([new Float32Array(128), new Float32Array(128)], at);
+  assert.equal(b.available, 960); assert.equal(b.underruns, 0); assert.equal(b.primed, false);
+  for (let i = 0; i < 17; i++) b.push(bytes, 48000);
+  b.mix([new Float32Array(128), new Float32Array(128)], 48000);
+  assert.equal(b.starts[0].reason, 'buffer'); assert.equal(b.starts[0].bufferedMs, 360);
+});
+test('receiver idle notification uses wall time and is cancelled when a stream is retired', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const s = setup(t); s.monitor.attach(s.entry, '11111', '99999'); s.speaking.emit('start', '44444'); s.streams.get('44444').write(s.packet());
+  t.mock.timers.tick(359); assert.equal(s.messages.some(m => m.type === 'idle'), false);
+  t.mock.timers.tick(1); assert.equal(s.messages.filter(m => m.type === 'idle').length, 1);
+  s.streams.get('44444').write(s.packet()); s.monitor.remove('44444'); t.mock.timers.tick(1000); assert.equal(s.messages.filter(m => m.type === 'idle').length, 1);
 });

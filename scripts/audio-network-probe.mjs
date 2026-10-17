@@ -14,7 +14,7 @@ export async function verifyAudioNetwork() {
   let processor, decoded = 0;
   const monitor = new VoiceMonitor(message => {
     if (message.type === 'start') processor = monitorProcessor(message.rendererMs);
-    else if (message.type === 'pcm' || message.type === 'end') { processor.port.onmessage({ data: message }); if (message.type === 'pcm' && message.bytes.some(byte => byte)) decoded++; }
+    else if (message.type === 'pcm' || message.type === 'idle' || message.type === 'end') { processor.port.onmessage({ data: message }); if (message.type === 'pcm' && message.bytes.some(byte => byte)) decoded++; }
   }, () => {}, (_, message) => logs.push(message));
   const pcm = Buffer.alloc(3840);
   for (let i = 0; i < 960; i++) { const value = Math.round(8000 * Math.sin(i * Math.PI * 2 * 440 / 48000)); pcm.writeInt16LE(value, i * 4); pcm.writeInt16LE(value, i * 4 + 2); }

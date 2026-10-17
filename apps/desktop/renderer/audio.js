@@ -48,7 +48,7 @@ import { scheduleGain } from '../core/gain-curve.mjs';
   window.nyan.onVoiceMonitor(message => {
     if (message.type === 'start') void startMonitor(message.id, message.rendererMs);
     else if (message.type === 'stop' && monitor?.id === message.id) stopMonitor();
-    else if (message.type === 'pcm' || message.type === 'end') forwardMonitor(message.type === 'pcm' ? { ...message, bytes: new Uint8Array(message.bytes) } : message);
+    else if (message.type === 'pcm' || message.type === 'end' || message.type === 'idle') forwardMonitor(message.type === 'pcm' ? { ...message, bytes: new Uint8Array(message.bytes) } : message);
   });
   window.nyanLocalAudio = { snapshot: () => ({ monitorSink: monitor?.context.sinkId, monitorStats: monitor?.stats, captures: [...captures.values()].filter(c => c.local).map(c => c.context?.sinkId), captureVolumes: [...captures].map(([id, c]) => ({ id, volume: c.volume, gain: c.gain?.gain.value, time: c.context?.currentTime, ramp: c.ramp })) }), update: state => {
     const previous = config; config = state.config.desktop;

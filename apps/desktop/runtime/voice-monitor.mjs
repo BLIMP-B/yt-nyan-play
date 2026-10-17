@@ -29,7 +29,15 @@ export class VoiceMonitor {
     const user = { decoder, stream, streamId: crypto.randomUUID() }; this.users.set(userId, user);
     stream.on('data', packet => {
       if (this.users.get(userId) !== user) return;
-      try { this.send({ type: 'pcm', id: this.id, userId, streamId: user.streamId, bytes: Buffer.from(decoder.decode(packet)) }); }
+      try {
+        clearTimeout(user.idleTimer);
+        this.send({ type: 'pcm', id: this.id, userId, streamId: user.streamId, bytes: Buffer.from(decoder.decode(packet)) });
+        // A short utterance may be smaller than the jitter target. Decide that
+        // it is idle on the receiver's wall clock, not a device's render-ahead
+        // clock, which can advance in a burst when a Windows sink wakes up.
+        user.idleTimer = setTimeout(() => { if (this.users.get(userId) === user) this.send({ type: 'idle', id: this.id, userId, streamId: user.streamId }); }, this.network.receiveMs + this.network.rendererMs);
+        user.idleTimer.unref?.();
+      }
       catch (error) { this.log('warn', `通話音声のデコード: ${error.message}`); this.remove(userId); }
     });
     stream.on('error', error => { if (this.users.get(userId) !== user) return; this.log('warn', `通話音声の受信: ${error.message}`); this.remove(userId); });
@@ -39,6 +47,7 @@ export class VoiceMonitor {
   remove(userId) {
     const user = this.users.get(userId); if (!user) return;
     this.users.delete(userId);
+    clearTimeout(user.idleTimer);
     this.send({ type: 'end', id: this.id, userId, streamId: user.streamId });
     // Retire first: late close/error events cannot remove a successor.
     try { user.stream.destroy(); } catch (error) { this.log('warn', `通話音声の終了: ${error.message}`); }
