@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { AUDIO_NETWORK_PROFILES } from './audio-network.mjs';
 import { DEFAULT_EQUALIZER, DEFAULT_COMPRESSOR, EQ_PRESETS, COMPRESSOR_PRESETS, effectPreset } from './media-effects-settings.mjs';
 import { SENTENCE_PRESETS } from './hourly-sentence.mjs';
-import { unifyReadings } from './shared-readings.mjs';
+import { unifyReadings, readingSource, readingKey } from './shared-readings.mjs';
 
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
@@ -39,7 +39,7 @@ export const DEFAULT_CONFIG = {
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
       'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
   },
-  dictionary: [], education: [],
+  dictionary: [], education: [], mediaConversions: [],
 };
 
 function mergeKnown(base, patch) {
@@ -65,6 +65,7 @@ export function normalizeConfig(patch, readingBaseline) {
   const c = mergeKnown(DEFAULT_CONFIG, patch);
   if (readingBaseline) {
     if (!Object.hasOwn(patch || {}, 'education')) c.education = structuredClone(readingBaseline.education);
+    if (!Object.hasOwn(patch || {}, 'mediaConversions')) c.mediaConversions = structuredClone(readingBaseline.mediaConversions || []);
     if (!Object.hasOwn(patch?.speech || {}, 'emojiReadings')) c.speech.emojiReadings = structuredClone(readingBaseline.speech.emojiReadings);
   }
   if (!Object.hasOwn(patch?.desktop || {}, 'outputDevice')) c.desktop.outputDevice = patch?.speech?.outputDevice || '';
@@ -165,6 +166,13 @@ export function normalizeConfig(patch, readingBaseline) {
   if (!Array.isArray(c.speech.forwarding) || c.speech.forwarding.length > 100) fail('読み上げ転送');
   c.speech.forwarding = c.speech.forwarding.map(f => { if (!/^\d{5,22}$/.test(f.fromGuildId) || !/^\d{5,22}$/.test(f.toGuildId) || f.fromGuildId === f.toGuildId || !['one-way', 'two-way', 'none'].includes(f.mode)) fail('読み上げ転送先・方向'); return { fromGuildId: f.fromGuildId, toGuildId: f.toGuildId, mode: f.mode }; });
   if (!Array.isArray(c.dictionary) || c.dictionary.length > 10000) fail('辞書');
+  if (!Array.isArray(c.mediaConversions) || c.mediaConversions.length > 10000) fail('メディア変換');
+  c.mediaConversions = [...new Map(c.mediaConversions.map(e => {
+    if (!e || typeof e.source !== 'string' || typeof e.url !== 'string' || e.url.length > 2000 || /[\t\r\n]/u.test(e.source + e.url)) fail('メディア変換の文字列・URL');
+    const source = readingSource(e.source);
+    if (![...source].length || [...source].length > 30) fail('変換する文字列は1～30文字');
+    return [readingKey(source), { source, url: validateMediaUrl(e.url.trim(), c.media.allowedHosts) }];
+  })).values()];
   if (!Array.isArray(c.education) || c.education.length > 10000) fail('教育辞書');
   c.education = c.education.map(e => {
     if (!e || typeof e.source !== 'string' || !e.source.trim() || e.source.length > 2000 || typeof e.reading !== 'string' || e.reading.length > 500 || /[\t\r\n]/u.test(e.source + e.reading)) fail('教育辞書の単語・読み方');

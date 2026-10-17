@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Partials, Events, PermissionFlagsBits, Activ
 import { parseBotCommand, parseMediaCommand } from '../core/protocol.mjs';
 import { shouldRead, shouldReceive, prepareSpeech, prepareSpeakerSuffix, speakerName, formatTemplate } from '../core/text.mjs';
 import { parseEducationCommand } from '../core/education.mjs';
+import { convertedMedia } from '../core/media-conversions.mjs';
 import { hasHumanListeners } from '../core/voice-audience.mjs';
 
 export class DiscordBot {
@@ -109,6 +110,20 @@ export class DiscordBot {
       await this.handlers.stopRequested({ guildId: normalized.guildId, master: normalized.channelId === c.bot.masterTextChannelId });
       this.store.remember(`message:${message.id}`); return;
     }
+    // Education arguments may contain URLs and playback words. Never execute
+    // those arguments as a media request, including when education is disabled.
+    if (/^(教育|忘却|無音|変換)\s*[（(]/u.test(normalized.content.trim())) {
+      if (!isReadChannel || !c.speech.enabled || !shouldRead(normalized, c) || !c.speech.chatEducationEnabled) return;
+      try {
+        const education = parseEducationCommand(normalized.content);
+        if (!education) return;
+        const result = await this.handlers.education(education);
+        this.store.remember(`message:${message.id}`);
+        if (result.text) await this.handlers.speech({ text: result.text, guildId: normalized.guildId, userId: normalized.userId, source: normalized.displayName, literal: true });
+        await this.reply(message, result.text || '教育辞書を更新しました');
+      } catch (e) { this.store.log('error', e.message); this.store.remember(`message:${message.id}`); await this.reply(message, e.message); }
+      return;
+    }
     let media;
     try { media = parseMediaCommand(normalized.content, c); }
     catch (error) { this.store.log('error', `メディア要求: ${error.message}`); if (!normalized.isBot && !normalized.webhookId) await this.reply(message, error.message); return; }
@@ -122,27 +137,23 @@ export class DiscordBot {
     }
     if (!isReadChannel) return;
     if (!c.speech.enabled || !shouldRead(normalized, c)) return;
-    if (c.speech.chatEducationEnabled) {
-      try {
-        const education = parseEducationCommand(normalized.content);
-        if (education) {
-          const result = await this.handlers.education(education);
-          this.store.remember(`message:${message.id}`);
-          if (result.text) await this.handlers.speech({ text: result.text, guildId: normalized.guildId, userId: normalized.userId, source: normalized.displayName, literal: true });
-          await this.reply(message, result.text || '教育辞書を更新しました'); return;
-        }
-      } catch (e) { this.store.log('error', e.message); this.store.remember(`message:${message.id}`); await this.reply(message, e.message); return; }
-    }
+    const text = prepareSpeech(normalized, c);
+    if (await this.convertSpeech(normalized, c, text)) { this.store.remember(`message:${message.id}`); return; }
     const clip = c.speech.soundClips.find(s => s.trigger === normalized.content.trim());
     if (clip) { await this.handlers.speech({ clipPath: clip.path, text: clip.trigger, guildId: normalized.guildId, userId: normalized.userId }); this.store.remember(`message:${message.id}`); return; }
-    const text = prepareSpeech(normalized, c);
     if (text) { await this.handlers.speech({ text, speakerSuffix: prepareSpeakerSuffix(normalized, c), channelId: normalized.channelId, guildId: normalized.guildId, userId: normalized.userId, source: normalized.displayName }); this.store.remember(`message:${message.id}`); }
     } finally { this.receiving.delete(message.id); }
+  }
+  async convertSpeech(message, config, prepared) {
+    const media = convertedMedia(message, config, prepared);
+    if (!media) return false;
+    await this.handlers.media({ ...media, master: Boolean(message.channelId && message.channelId === config.bot.masterTextChannelId), guildId: message.guildId, source: message.displayName || '', conversion: true });
+    return true;
   }
   async reply(message, text) { await message.reply({ content: String(text).slice(0, 1900), allowedMentions: { parse: [], repliedUser: false } }); }
   async command(cmd, message, info, admin) {
     const c = this.store.exportConfig(); const arg = cmd.args;
-    if (cmd.name === 'help') return this.reply(message, `${c.bot.prefix} help / status / speakers / voice <ID> / speed <0.5〜2> / join / leave / pause / resume / skip / stop / play <URL> / loop <URL> / direct <URL> / read-channel <ID> on/off / dict <単語> <読み> / dict-list / dict-remove <単語>\nURL再生＝告知後45秒、URL無限＝告知後1回全編、URL直接＝告知なし1回全編。ていし＝優先停止。\n管理操作はサーバー管理権限または設定した操作ユーザーが利用できます。`);
+    if (cmd.name === 'help') return this.reply(message, `${c.bot.prefix} help / status / speakers / voice <ID> / speed <0.5〜2> / join / leave / pause / resume / skip / stop / play <URL> / loop <URL> / direct <URL> / read-channel <ID> on/off / dict <単語> <読み> / dict-list / dict-remove <単語>\nURL再生＝告知後45秒、URL無限＝告知後1回全編、URL直接＝告知なし1回全編。ていし＝優先停止。変換(文字列=メディアURL)＝一致した読み上げを直接再生に置換。忘却(文字列)＝教育・変換を解除。\n管理操作はサーバー管理権限または設定した操作ユーザーが利用できます。`);
     if (cmd.name === 'status') return this.reply(message, `Bot: ${this.status} / 待機: ${this.store.jobs.filter(j => j.status === 'waiting').length}`);
     if (cmd.name === 'speakers') { const speakers = await this.handlers.speakers(); return this.reply(message, speakers.flatMap(s => s.styles.map(v => `${v.id}: ${s.name}・${v.name}`)).join('\n')); }
     if (['voice', 'speed'].includes(cmd.name)) {
@@ -188,7 +199,8 @@ export class DiscordBot {
         channel: next.channel?.name || previous.channel?.name || '', 'channel-prev': previous.channel?.name || '', 'channel-next': next.channel?.name || '' });
       // Use the ordinary/native reading pipeline, without adding a chat suffix.
       const text = prepareSpeech({ content: announcement, guildId: binding.guildId, userId: next.id }, { ...c, speech: { ...c.speech, readNames: false } });
-      if (text) await this.handlers.speech({ text, guildId: binding.guildId, userId: next.id });
+      const context = { content: announcement, guildId: binding.guildId, userId: next.id };
+      if (!await this.convertSpeech(context, c, text) && text) await this.handlers.speech({ text, guildId: binding.guildId, userId: next.id });
     }
   }
   catalog() {

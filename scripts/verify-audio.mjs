@@ -465,6 +465,51 @@ try {
   assert.equal(await emitAttribution('名前なし', { nickname: '', username: 'neko' }), '名前なし、ねこの発言');
   assert.equal(await emitAttribution('取得不可', { nickname: '', username: '' }), '取得不可、76666の発言');
   report.speakerAttribution = { passed: true, bracketSuppressionPreservesName: true, channelSwitchSaved: true, channelIsolation: true, nicknamePriority: true, usernameFallback: true, idFallback: true, education: true, mute: true, forget: true, voiceEvents: events, synthesisVerified: true, receiverVerified: false };
+  // A real conversion tag received by the Bot must start the production media
+  // browser/capture path. The PC monitor distinguishes its 660 Hz media from
+  // the synthetic 440 Hz speech, so a registration acknowledgement cannot pass.
+  const conversionConfig = (await call(page, 'state')).config;
+  Object.assign(conversionConfig.media, { output: 'local', duckFadeInMs: 0, duckFadeOutMs: 0 });
+  await call(page, 'config:save', conversionConfig);
+  const emitConversion = (content, id) => application.evaluate(async (_electron, args) => {
+    const bot = globalThis.nyanAttributionBot, guild = globalThis.nyanAttributionGuild;
+    const before = new Set(bot.store.jobs.map(j => j.id));
+    await bot.message({ id: args.id, content: args.content, author: { id: '76666', username: 'user', bot: false }, member: { nickname: 'ねこ', roles: { cache: new Map() } }, guildId: guild.id, guild, channelId: '72222', channel: guild.channels.cache.get('72222'), attachments: new Map(), stickers: new Map(), reply: async () => {} });
+    return bot.store.jobs.filter(j => !before.has(j.id));
+  }, { content, id });
+  const registered = await emitConversion('変換（✅＝http://media-fixture.test/audio）', 'conversion-register');
+  assert.equal(registered.length, 1); assert.equal(registered[0].kind, 'speech'); await waitForJob(page, registered[0].id);
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  await page.locator('[data-view="dictionary"]').click();
+  assert.ok((await page.locator('#conversion-list').textContent()).includes('✅'));
+  await page.locator('#conversion-source').fill('✅'); await page.locator('#conversion-url').fill('http://media-fixture.test/audio?from=conversion');
+  await page.locator('#conversion-form button[type="submit"]').click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.mediaConversions.some(e => e.source === '✅' && e.url.endsWith('?from=conversion')));
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  const reloadedConversion = (await call(page, 'state')).config.mediaConversions.find(e => e.source === '✅');
+  assert.equal(reloadedConversion.url, 'http://media-fixture.test/audio?from=conversion');
+  const synthesisBeforeConversion = synthesisTexts.length;
+  await page.waitForFunction(() => Boolean(window.nyanCapture && window.nyanLocalAudio));
+  await application.evaluate(async () => {
+    const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'conversion-audio'; probe.capture = true;
+    await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+  });
+  let conversionMetrics;
+  try {
+    const converted = await emitConversion('前の文✅✅後の文', 'conversion-play');
+    assert.equal(converted.length, 1); assert.equal(converted[0].kind, 'media');
+    assert.equal(converted[0].payload.mode, 'direct'); assert.equal(converted[0].payload.guildId, '71111'); assert.equal(converted[0].payload.master, false);
+    assert.equal((await emitConversion('前の文✅✅後の文', 'conversion-play')).length, 0);
+    await waitForJob(page, converted[0].id);
+    conversionMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics['conversion-audio']);
+    assert.ok(conversionMetrics?.mediaToneSamples > 4800, 'Converted media did not reach PC output: ' + JSON.stringify(conversionMetrics));
+    assert.equal(synthesisTexts.length, synthesisBeforeConversion, 'Direct conversion must not speak the body, service announcement or title call');
+  } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
+  const forgotten = await emitConversion('忘却（✅）', 'conversion-forget'); await waitForJob(page, forgotten[0].id);
+  assert.ok(!(await call(page, 'state')).config.mediaConversions.some(e => e.source === '✅'));
+  const ordinary = await emitConversion('忘却後✅', 'conversion-after-forget');
+  assert.equal(ordinary.length, 1); assert.equal(ordinary[0].kind, 'speech'); await waitForJob(page, ordinary[0].id);
+  report.mediaConversions = { passed: true, chatRegistration: true, unicodeEmoji: true, uiSave: true, reload: true, directMode: true, bodyReplaced: true, noAnnouncement: true, deduplicated: true, forgotten: true, pcPlayback: true, receiverVerified: false, ...conversionMetrics };
   await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.

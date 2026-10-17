@@ -36,6 +36,7 @@ import { androidEnvironmentChanged } from './core/android-notifications.mjs';
 import { TwitterSource } from './runtime/twitter.mjs';
 import { MediaPool } from './core/media-pool.mjs';
 import { speechTargets, prepareSpeech, prepareNativeText } from './core/text.mjs';
+import { convertedMedia } from './core/media-conversions.mjs';
 import { resolveDestination, outputTargets, discordOutput } from './core/destination.mjs';
 import { AudioBridge } from './runtime/audio-bridge.mjs';
 import { browserUserAgent } from './core/browser-user-agent.mjs';
@@ -378,7 +379,14 @@ else {
     }); hourly.on('change', emitState);
     twitterAppVault = new Vault(store.directory, 'twitter-app-token.bin');
     twitter = new TwitterSource(store.directory, getConfig, new Vault(store.directory, 'twitter-login.bin'), twitterAppVault, {
-      speech: payload => { if (!store.seen.includes(`twitter:${payload.twitterId}`)) { const c = getConfig(); const text = prepareSpeech({ ...payload, content: payload.text }, { ...c, speech: { ...c.speech, readNames: false } }); if (text) store.enqueue('speech', { ...payload, text }); store.remember(`twitter:${payload.twitterId}`); void speechRunner.drain(); } },
+      speech: payload => { if (!store.seen.includes(`twitter:${payload.twitterId}`)) {
+        const c = getConfig(), message = { ...payload, content: payload.text };
+        const text = prepareSpeech(message, { ...c, speech: { ...c.speech, readNames: false } });
+        const conversion = c.speech.enabled && convertedMedia(message, c, text);
+        if (conversion) media.enqueue({ ...conversion, guildId: payload.guildId, master: false, source: payload.source || '', conversion: true }, { interrupt: true });
+        else if (text) store.enqueue('speech', { ...payload, text });
+        store.remember(`twitter:${payload.twitterId}`); void speechRunner.drain();
+      } },
       log: (level, text) => store.log(level, text), logout: () => { for (const job of speechRunner.activeJobs) if (job.payload.privateOwnerId) speechRunner.forJob(job).skip(); for (const job of store.jobs) if (job.payload.privateOwnerId) { job.payload.text = '[非公開投稿]'; if (job.status === 'waiting') job.status = 'cancelled'; } store.saveState(); },
     }, (url, options) => net.fetch(url, options)); twitter.on('change', emitState);
     window = new BrowserWindow({ width: 1260, height: 850, minWidth: 900, minHeight: 680, title: 'にゃんとーく〜Damare〜',
