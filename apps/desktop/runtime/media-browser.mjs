@@ -78,7 +78,9 @@ export class MediaBrowser {
         }
         if (stream) {
           stream.setPosition(state.currentTime || 0);
-          const depleted = seen && !this.paused && !state.ended && state.ready < 3 && stream.sourceSeconds - (state.currentTime || 0) < .25;
+          // Undecoded Ogg bytes may remain even when Chromium has no playable
+          // frames. Use the player's ready state, not the encoded source lead.
+          const depleted = seen && !this.paused && !state.ended && state.found && state.ready < 3;
           if (!depleted) waitingSince = 0;
           else if (!waitingSince) waitingSince = Date.now();
           else if (Date.now() - waitingSince >= 500 && stream.refill()) this.log('warn', `${mediaServiceName(url)}: 音声の先読みが不足したため再び蓄えています`);
