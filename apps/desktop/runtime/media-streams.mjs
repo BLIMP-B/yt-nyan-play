@@ -86,7 +86,7 @@ export class MediaStreamResolver {
 }
 
 // Source objects come only from selectStream; nothing here is exposed to a web page or IPC.
-export async function openAudioStream(source, startSeconds, mode, signal, previewSeconds = 45) {
+export async function openAudioStream(source, startSeconds, mode, signal, previewSeconds = 45, burstSeconds = 6) {
   const policy = mediaPolicy({ mode, previewSeconds });
   signal.throwIfAborted(); const token = randomBytes(24).toString('hex'); let child, server, response;
   const remaining = Number.isFinite(source.duration) && source.duration > 0 ? Math.max(0, source.duration - startSeconds) : null;
@@ -103,7 +103,7 @@ export async function openAudioStream(source, startSeconds, mode, signal, previe
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }); server.unref(); signal.throwIfAborted();
     const headers = Object.entries(source.headers || {}).map(([k,v]) => `${k}: ${v}\r\n`).join('');
-    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:2', '-readrate', '1', '-readrate_initial_burst', '6', ...(source.url.startsWith('https:') ? ['-protocol_whitelist', 'http,https,tcp,tls,crypto', '-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '408,429,500,502,503,504', '-reconnect_delay_max', '5'] : []), ...(startSeconds ? ['-ss', String(startSeconds)] : []), ...(headers ? ['-headers', headers] : []), '-i', source.url, ...(policy.limitSeconds != null ? ['-t', String(policy.limitSeconds)] : []), '-vn', '-sn', '-dn', '-c:a', 'libopus', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-f', 'ogg', '-page_duration', '20000', '-flush_packets', '1', 'pipe:1'];
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:2', '-readrate', '1', '-readrate_initial_burst', String(Math.max(0, Math.min(10, burstSeconds))), ...(source.url.startsWith('https:') ? ['-protocol_whitelist', 'http,https,tcp,tls,crypto', '-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '408,429,500,502,503,504', '-reconnect_delay_max', '5'] : []), ...(startSeconds ? ['-ss', String(startSeconds)] : []), ...(headers ? ['-headers', headers] : []), '-i', source.url, ...(policy.limitSeconds != null ? ['-t', String(policy.limitSeconds)] : []), '-vn', '-sn', '-dn', '-c:a', 'libopus', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-f', 'ogg', '-page_duration', '20000', '-flush_packets', '1', 'pipe:1'];
     child = spawn(ffmpeg.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let tail = '';
     child.stderr.on('data', bytes => {

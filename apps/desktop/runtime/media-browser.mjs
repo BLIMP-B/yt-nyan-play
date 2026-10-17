@@ -12,12 +12,14 @@ import { mediaPolicy, streamContinuation } from '../core/media-policy.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { browserMetadataScript } from '../core/media-title.mjs';
 import { resolveSoundCloudShare } from './soundcloud.mjs';
+import { mediaStreamBuffer } from '../core/media-buffer.mjs';
 
 export class MediaBrowser {
   constructor(getConfig, bridge, log, accounts, resolver) { this.getConfig = getConfig; this.bridge = bridge; this.log = log; this.accounts = accounts; this.resolver = resolver; this.window = null; this.paused = false; this.ducked = false; this.titleDucked = false; this.status = null; this.overlayGain = 1; this.volumeRampMs = 0; }
   async play(job, signal, { browserOnly = false } = {}) {
     signal.throwIfAborted(); this.job = job; this.localGainSent = null; const c = this.getConfig(); const payload = job.payload;
     const { mode, limitSeconds } = mediaPolicy(payload);
+    const buffer = this.streamBufferOptions(c.desktop.networkProfile);
     const originalUrl = validateMediaUrl(payload.url, c.media.allowedHosts);
     if (!browserOnly) this.bridge.preparing?.(job);
     let url = originalUrl;
@@ -30,7 +32,7 @@ export class MediaBrowser {
     if (!browserOnly && c.media.bandwidthSaving && this.resolver) {
       selected = await this.resolver.resolve(url, signal);
       if (selected) this.bridge.metadata?.(job, { title: selected.title, body: selected.description, author: selected.author });
-      if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45); }
+      if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45, buffer.burstSeconds); }
       catch (error) { signal.throwIfAborted(); this.log('warn', '音声配信を開始できないためブラウザの最低画質設定へ切り替えます'); }
     }
     if (signal.aborted) { stream?.close(); signal.throwIfAborted(); }
@@ -41,7 +43,8 @@ export class MediaBrowser {
     catch (error) { stream?.close(); throw error; }
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
-    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
+    const buffering = () => ({ bufferSeconds: stream ? buffer.startupSeconds : 0, expectedSeconds: stream?.expectedSeconds ?? null, streamFinished: stream?.finished === true });
+    this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream, ...buffering() };
     guardMediaWindow(window, originalUrl, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
     signal.addEventListener('abort', abort, { once: true });
@@ -50,7 +53,7 @@ export class MediaBrowser {
       const destination = new URL(url);
       // Official embedded YouTube players require an HTTPS application identity as HTTP Referer.
       const loadOptions = /(^|\.)youtube\.com$/.test(destination.hostname) && destination.pathname.startsWith('/embed/') ? { httpReferrer: 'https://github.com/BLIMP-B/yt-nyan-play' } : {};
-      const target = stream ? 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src http://127.0.0.1:*; style-src 'unsafe-inline'"><title>にゃんとーく 音声配信</title><body style="font:16px sans-serif;padding:24px;background:#202020;color:#eee"><p>${selected.audioOnly ? '音声のみの配信' : '最低画質から音声を配信'}を再生しています。</p><audio controls autoplay src="${stream.url}"></audio></body></html>`) : url;
+      const target = stream ? 'data:text/html;charset=utf-8,' + encodeURIComponent(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src http://127.0.0.1:*; style-src 'unsafe-inline'"><title>にゃんとーく 音声配信</title><body style="font:16px sans-serif;padding:24px;background:#202020;color:#eee"><p>${selected.audioOnly ? '音声のみの配信' : '最低画質から音声を配信'}を再生しています。</p><audio controls preload="auto" src="${stream.url}"></audio></body></html>`) : url;
       try { await Promise.race([window.loadURL(target, stream ? {} : loadOptions), new Promise((_, reject) => { loadingTimer = setTimeout(() => reject(new Error('再生ページの読み込みがタイムアウトしました')), 45000); })]); }
       finally { clearTimeout(loadingTimer); }
       const initial = await window.webContents.executeJavaScript(mediaScript(this.playOptions), true);
@@ -68,7 +71,7 @@ export class MediaBrowser {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
         this.syncLocalGain();
-        const options = this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream };
+        const options = this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream, ...buffering() };
         let state = await window.webContents.executeJavaScript(mediaScript(options), true);
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
@@ -106,6 +109,7 @@ export class MediaBrowser {
     return this.play({ ...job, payload: continuation }, signal, { browserOnly: true });
   }
   setPaused(value) { this.paused = value; if (this.playOptions && this.window && !this.window.isDestroyed()) void this.window.webContents.executeJavaScript(mediaScript({ ...this.playOptions, paused: value }), true).catch(() => {}); }
+  streamBufferOptions(profile) { return mediaStreamBuffer(profile); }
   duckRatio() { const c = this.getConfig().media; return Math.min(this.ducked ? c.ducking : 1, this.titleDucked ? c.titleCallDucking : 1); }
   localVolume() { return this.getConfig().media.volume * this.duckRatio() * this.overlayGain; }
   syncLocalGain() { const volume = this.localVolume(); if (this.job && this.localGainSent !== volume) { this.localGainSent = volume; this.bridge.localGain?.(this.job, volume, this.volumeRampMs, this.volumeRampCurve || 'linear'); } }

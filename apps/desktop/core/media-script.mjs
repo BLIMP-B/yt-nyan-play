@@ -1,6 +1,8 @@
-export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true }) {
+import { mediaBufferState } from './media-buffer.mjs';
+
+export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true, bufferSeconds = 0, expectedSeconds = null, streamFinished = false }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek })};
+    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek, bufferSeconds, expectedSeconds, streamFinished })};
     let lowestQuality = false;
     if (options.bandwidthSaving) {
       // Use exposed player APIs. Hiding video does not save network bandwidth.
@@ -64,6 +66,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
     if (!advertisement && !window.__nyanStarted && chosen.readyState >= 1) {
       try { if (options.seek) chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
+    const buffer = (${mediaBufferState.toString()})(chosen, options.bufferSeconds, options.expectedSeconds, options.streamFinished);
     if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
     let youtubeEnded = false;
     try { youtubeEnded = document.querySelector('#movie_player')?.getPlayerState?.() === 0; } catch {}
@@ -90,7 +93,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
       check();
     }
     if (advertisement && chosen.__nyanBudget) { clearTimeout(chosen.__nyanBudget.timer); chosen.__nyanBudget.timer = null; }
-    if (options.paused || !advertisement && chosen.__nyanBudget?.finished) chosen.pause();
+    if (options.paused || buffer.buffering || !advertisement && chosen.__nyanBudget?.finished) chosen.pause();
     else if (chosen.paused && !chosen.ended && !chosen.__nyanPlayPending) {
       chosen.__nyanPlayPending = true;
       chosen.play().then(() => { chosen.__nyanPlayError = null; }).catch(error => {
@@ -98,7 +101,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
       }).finally(() => { chosen.__nyanPlayPending = false; });
     }
     if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
-    return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: playback.finished, advertisement,
+    return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: playback.finished, advertisement, ...buffer,
       currentTime: chosen.currentTime, duration: Number.isFinite(chosen.duration) ? chosen.duration : null,
       previewFinished: !advertisement && chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', lowestQuality, pageTitle: document.title || '', blockedReason, loginRequired, error: chosen.__nyanPlayError || chosen.error?.code || null };
   })()`;
