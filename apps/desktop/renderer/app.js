@@ -22,13 +22,14 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   function setPath(object, path, value) { const keys = path.split('.'); const last = keys.pop(); keys.reduce((o, k) => o[k], object)[last] = value; }
   function draft() { const c = structuredClone(state.config); document.querySelectorAll('[data-config]').forEach(input => setPath(c, input.dataset.config, input.type === 'checkbox' ? input.checked : input.hasAttribute('data-seconds') ? Math.round(Number(input.value) * 1000) : input.hasAttribute('data-number') ? Number(input.value) : input.hasAttribute('data-list') ? input.value.split(/[,\n、]/).map(s => s.trim()).filter(Boolean) : input.value)); return c; }
   function fillConfig() { document.querySelectorAll('[data-config]').forEach(input => { const value = getPath(state.config, input.dataset.config); if (input.type === 'checkbox') input.checked = value; else input.value = input.hasAttribute('data-seconds') ? value / 1000 : Array.isArray(value) ? value.join(', ') : value; }); }
-  async function save(c = draft()) { c.__readingBase = { education: state.config.education, speech: { emojiReadings: state.config.speech.emojiReadings } }; state = await invoke('config:save', c); renderStyles(); fillConfig(); render(state); document.querySelectorAll('.guild-picker[data-config]').forEach(input => { input.value = getPath(state.config, input.dataset.config); }); toast('設定を保存しました'); }
+  async function save(c = draft()) { c.__readingBase = { education: state.config.education, mediaConversions: state.config.mediaConversions, media: { allowedHosts: state.config.media.allowedHosts }, speech: { emojiReadings: state.config.speech.emojiReadings } }; state = await invoke('config:save', c); renderStyles(); fillConfig(); render(state); document.querySelectorAll('.guild-picker[data-config]').forEach(input => { input.value = getPath(state.config, input.dataset.config); }); toast('設定を保存しました'); }
   function navigate(view) { document.querySelectorAll('[data-panel]').forEach(e => { e.hidden = e.dataset.panel !== view; }); document.querySelectorAll('nav [data-view]').forEach(e => { const active = e.dataset.view === view; e.classList.toggle('active', active); if (active) e.setAttribute('aria-current', 'page'); else e.removeAttribute('aria-current'); }); $('page-title').textContent = document.querySelector(`nav [data-view="${view}"]`).dataset.label; }
   function renderStyles() { const source = speakers.length ? speakers : fallbackStyles; document.querySelectorAll('#style-id,.style-picker').forEach(select => { const previous = select.value || String(state?.config.speech.styleId ?? 3); select.replaceChildren(); for (const speaker of source) { const group = node('optgroup'); group.label = speaker.name; for (const style of speaker.styles.filter(s => !s.type || s.type === 'talk')) { const option = node('option', `${speaker.name}・${style.name}`); option.value = style.id; group.append(option); } select.append(group); } if (![...select.options].some(o => o.value === previous)) { const option = node('option', `声種ID ${previous}`); option.value = previous; select.append(option); } select.value = previous; }); }
   function renderJobs() { if (!state) return; const target = $('job-list'), filter = $('queue-filter').value; target.replaceChildren(); const jobs = state.jobs.filter(j => filter === 'all' || (filter === 'failed' ? ['failed', 'interrupted'].includes(j.status) : j.status === filter)); for (const job of jobs.slice(0, 300)) { const controls = []; if (['waiting', 'running'].includes(job.status)) controls.push(button('リクエストを取り消す', 'x', async () => render(await invoke('job:action', { id: job.id, action: 'cancel' })))); else controls.push(button('リクエストを再実行', 'refresh-cw', async () => render(await invoke('job:action', { id: job.id, action: 'retry' })))); target.append(row(`${job.kind === 'media' ? '▶' : '◉'} ${job.payload.title || job.payload.text || job.payload.url}`, `${labels[job.status]} · ${new Date(job.createdAt).toLocaleString('ja-JP')}${job.error ? ` · ${job.error}` : ''}`, controls)); } if (!jobs.length) empty(target, '該当するリクエストはありません。'); }
   function renderCollections() {
     const c = state.config;
     const collections = [
+      ['conversion-list', c.mediaConversions, p => [p.source + ' → 直接再生', p.url], (config, p) => { config.mediaConversions = config.mediaConversions.filter(x => x.source !== p.source); }],
       ['dictionary-list', c.dictionary, d => [d.source + ' → ' + d.replacement, `${d.scope}${d.scopeId ? ': ' + d.scopeId : ''}${d.regex ? ' · 正規表現' : ''}`], (config, d) => { config.dictionary = config.dictionary.filter(x => x.id !== d.id); }],
       ['profile-list', c.speech.profiles, p => [p.name || p.userId, `利用者 ${p.userId} · 声種 ${p.styleId} · 話速 ${p.speed}`], (config, p) => { config.speech.profiles = config.speech.profiles.filter(x => x.userId !== p.userId); }],
       ['clip-list', c.speech.soundClips, p => [p.trigger, p.path], (config, p) => { config.speech.soundClips = config.speech.soundClips.filter(x => x.trigger !== p.trigger); }],
@@ -65,6 +66,15 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   }
   const serverSettings = new ServerSettings($('binding-list'), {
     update: updateBinding,
+    setSpeakerSuffix: (channelId, enabled) => {
+      const pending = bindingUpdates.catch(() => {}).then(async () => {
+        const config = draft();
+        config.speech.speakerSuffixDisabledChannelIds = config.speech.speakerSuffixDisabledChannelIds.filter(id => id !== channelId);
+        if (!enabled) config.speech.speakerSuffixDisabledChannelIds.push(channelId);
+        await save(config);
+      });
+      bindingUpdates = pending; return pending;
+    },
     join: async guildId => render(await invoke('voice:join', guildId)),
     leave: async guildId => render(await invoke('voice:leave', guildId)),
     remove: guildId => {
@@ -163,6 +173,7 @@ import { setupMediaEffectsSettings } from './media-effects-settings.js';
   }));
   $('dictionary-form').addEventListener('submit', task(async () => { const c = draft(); c.dictionary.push({ source: $('dict-source').value, replacement: $('dict-replacement').value, scope: $('dict-scope').value, scopeId: $('dict-scope-id').value.trim(), regex: $('dict-regex').checked, caseSensitive: false }); await save(c); $('dictionary-form').reset(); }));
   $('emoji-reading-form').addEventListener('submit', task(async () => { state = await invoke('reading:save', { source: $('emoji-source').value.trim(), reading: $('emoji-replacement').value }); render(state); toast('読み方を保存しました'); $('emoji-reading-form').reset(); }));
+  $('conversion-form').addEventListener('submit', task(async () => { const c = draft(); c.mediaConversions.push({ source: $('conversion-source').value.trim(), url: $('conversion-url').value.trim() }); await save(c); $('conversion-form').reset(); }));
   $('profile-form').addEventListener('submit', task(async () => { const c = draft(), p = { userId: $('profile-id').value.trim(), name: $('profile-name').value, styleId: Number($('profile-style').value), speed: Number($('profile-speed').value) }; c.speech.profiles = c.speech.profiles.filter(x => x.userId !== p.userId); c.speech.profiles.push(p); await save(c); $('profile-form').reset(); }));
   $('choose-clip').addEventListener('click', task(async () => { const path = await invoke('clip:choose'); if (path) $('clip-path').value = path; }));
   $('clip-form').addEventListener('submit', task(async () => { const c = draft(), clip = { trigger: $('clip-trigger').value, path: $('clip-path').value }; c.speech.soundClips = c.speech.soundClips.filter(x => x.trigger !== clip.trigger); c.speech.soundClips.push(clip); await save(c); $('clip-form').reset(); }));

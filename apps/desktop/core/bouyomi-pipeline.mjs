@@ -41,12 +41,15 @@ export function nativeTagSettings(tag, settings, original) {
   return next;
 }
 
-export async function runNativeSpeech({ text, settings, original, pendingCharacters, processor, output, sound, log }, signal) {
+export async function runNativeSpeech({ text, speakerSuffix = '', settings, original, pendingCharacters, processor, output, sound, log }, signal) {
   const source = { ...original, BroadcasterMode: settings.bouyomiTagMode === 'original' ? original.BroadcasterMode : String(settings.bouyomiTagMode === 'on') };
   let current = nativeSpeechDefaults(settings, source, pendingCharacters);
   current = { ...current, nativeBaseSpeed: current.speed, nativeBaseVolume: current.volume, nativeBaseTone: settings.bouyomiUseDefaults ? Number(source.Tone) : 2 ** current.pitch * 100 };
-  let input = text;
+  // The imported length limit applies to the message body, never its attribution.
+  const suffix = speakerSuffix && text.endsWith(speakerSuffix) ? speakerSuffix : '';
+  let input = suffix ? text.slice(0, -suffix.length) : text;
   if (source.TextLengthEnable === 'true' && input.length > Number(source.TextLengthNum)) input = input.slice(0, Number(source.TextLengthNum)) + (source.TextLengthAdd || '');
+  input += suffix;
   const result = await processor.process(input, settings.bouyomiTagMode, signal, settings.chatEducationEnabled), parallel = [];
   try {
     for (const segment of nativeSegments(result)) {

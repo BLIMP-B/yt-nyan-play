@@ -17,6 +17,8 @@ test('each service chooses audio-only first, then the smallest playable video wi
     ['https://tiktok.com/@example/video/1', 'media.tiktokcdn.com'], ['https://facebook.com/watch/?v=1', 'video.fbcdn.net'],
     ['https://threads.net/@example/post/abc', 'video.cdninstagram.com'], ['https://bsky.app/profile/example/post/abc', 'video.bsky.app'],
     ['https://example.social/@user/123', 'example.social'],
+    ['https://on.soundcloud.com/example', 'cf-hls-media.sndcdn.com'], ['https://soundcloud.com/artist/track', 'cf-media.sndcdn.com'],
+    ['https://soundcloud.com/artist/track', 'playback.media-streaming.soundcloud.cloud'],
   ];
   for (const [source, host] of sources) {
     const formats = [{ url: `https://${host}/large`, acodec: 'aac', vcodec: 'h264', height: 720 }, { url: `https://${host}/small`, acodec: 'aac', vcodec: 'h264', height: 144 }, { url: `https://${host}/audio`, acodec: 'opus', vcodec: 'none', abr: 48 }];
@@ -57,7 +59,7 @@ test('speech ducking fades down and back without changing the independent BGM ga
   mixer.takeFrame(13000); assert.ok(Math.abs(mixer.duckGain.value(13000)-0.05) < 1e-10);
   assert.equal(mixer.backgroundGain.value(13000), 1);
   controller.abort(); await assert.rejects(speech, { name: 'AbortError' }); mixer.takeFrame(13000);
-  mixer.takeFrame(14500); assert.equal(mixer.duckGain.value(14500), 0.525);
+  mixer.takeFrame(14500); assert.ok(Math.abs(mixer.duckGain.value(14500) - 0.2875) < 1e-10);
   mixer.takeFrame(16000); assert.equal(mixer.duckGain.value(16000), 1);
   assert.equal(normalizeConfig({ media: { duckFadeOutMs: 0 }, hourly: { bgmFadeOutMs: 800 } }).hourly.bgmFadeOutMs, 800);
 });
@@ -70,11 +72,11 @@ test('FFmpeg EOF is validated against the original duration instead of accepting
   assert.match(stream.error, /終端より前/);
 });
 
-test('the format deadline includes installation and cookie access; stop still cancels instead of falling back', async t => {
+test('installation and extraction have separate bounded deadlines; stop cancels instead of falling back', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'nyan-deadline-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
   for (const stage of ['install', 'cookies', 'extract']) {
     const logs = [], pending = () => new Promise(() => {});
-    const resolver = new MediaStreamResolver(directory, (_level, text) => logs.push(text), null, stage === 'cookies' ? pending : async () => [], { budgetMs: 25 });
+    const resolver = new MediaStreamResolver(directory, (_level, text) => logs.push(text), null, stage === 'cookies' ? pending : async () => [], { budgetMs: 25, installBudgetMs: 25 });
     resolver.install = stage === 'install' ? pending : async () => 'executable'; resolver.extract = pending;
     const start = performance.now();
     assert.equal(await resolver.resolve('https://www.nicovideo.jp/watch/sm9', new AbortController().signal), null);
@@ -84,4 +86,19 @@ test('the format deadline includes installation and cookie access; stop still ca
   resolver.install = () => new Promise(() => {}); const controller = new AbortController();
   const resolving = resolver.resolve('https://youtu.be/jNQXAC9IVRw', controller.signal); controller.abort();
   await assert.rejects(resolving, { name: 'AbortError' });
+});
+
+test('a cold installation does not consume the format budget and cancelled preparation never starts extraction', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'nyan-cold-install-')); t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const resolver = new MediaStreamResolver(directory, () => {}, null, async () => [], { budgetMs: 25, installBudgetMs: 1000 });
+  let installed;
+  resolver.install = () => new Promise(resolve => { installed = resolve; });
+  let extractions = 0;
+  resolver.extract = async () => { extractions++; return { formats: [{ url: 'https://cf-media.sndcdn.com/audio', acodec: 'opus', vcodec: 'none' }] }; };
+  const first = resolver.resolve('https://soundcloud.com/artist/track', new AbortController().signal);
+  await new Promise(resolve => setTimeout(resolve, 75)); installed('executable');
+  assert.equal((await first).audioOnly, true); assert.equal(extractions, 1);
+  const controller = new AbortController(), cancelled = resolver.resolve('https://soundcloud.com/artist/track', controller.signal);
+  controller.abort(); await assert.rejects(cancelled, { name: 'AbortError' }); installed('executable');
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(extractions, 1);
 });

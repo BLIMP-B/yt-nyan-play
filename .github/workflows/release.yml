@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - releases/current.json
-      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:
@@ -17,7 +16,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/codex/windows-desktop-bot' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/codex/release-v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -41,7 +40,7 @@ jobs:
           assert.ok(typeof selection.title === 'string' && selection.title.length < 200 && !/[\r\n]/.test(selection.title));
           assert.match(selection.notes, /^releases\/notes-v\d+\.\d+\.\d+\.md$/);
           const notes = join(process.env.RUNNER_TEMP, 'nyan-release-notes.md');
-          writeFileSync(notes, readFileSync(selection.notes));
+          writeFileSync(notes, readFileSync(selection.notes) + `\n検証対象ソース: ${selection.sourceSha}\n\n[Windows/Linuxビルドと検証](https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${selection.windowsRunId})\n`);
           for (const [name, value] of Object.entries({ tag: selection.tag, sha: selection.sourceSha, run: selection.windowsRunId, title: selection.title, notes })) {
             appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
           }
@@ -81,6 +80,7 @@ jobs:
           import assert from 'node:assert/strict';
           const { artifacts } = JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'nyan-release-artifacts.json')));
           const names = { fidelity: 'opus-fidelity-verification-windows', clock: 'voice-clock-verification-windows', android: 'android-verification-windows', model: 'hourly-model-verification-windows', duration: 'playback-duration-verification-windows', audio: 'audio-verification-windows', windows: 'nyan-talk-damare-windows-x64' };
+          if (Number(JSON.parse(readFileSync('releases/current.json')).tag.match(/^v0\.5\.(\d+)$/)?.[1]) >= 23) names.impairment = 'voice-impairment-verification-windows';
           for (const [key, name] of Object.entries(names)) {
             const latest = artifacts.filter(a => a.name === name && !a.expired).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
             assert.ok(latest && Number.isSafeInteger(latest.id) && latest.size_in_bytes > 0, `${name} is required`);
@@ -97,18 +97,22 @@ jobs:
           RELEASE_ARTIFACT_DURATION: ${{ steps.artifacts.outputs.duration }}
           RELEASE_ARTIFACT_AUDIO: ${{ steps.artifacts.outputs.audio }}
           RELEASE_ARTIFACT_FIDELITY: ${{ steps.artifacts.outputs.fidelity }}
+          RELEASE_ARTIFACT_IMPAIRMENT: ${{ steps.artifacts.outputs.impairment }}
         run: |
           # download-artifact v4 lists only the first page for cross-run IDs.
           # A rerun can add a valid artifact beyond that page; request its ID directly.
-          for KEY in fidelity clock android model duration audio; do
+          for KEY in fidelity clock android model duration audio impairment; do
             VARIABLE="RELEASE_ARTIFACT_${KEY^^}"
             ID="${!VARIABLE}"
+            if test -z "$ID"; then continue; fi
             ARCHIVE="$RUNNER_TEMP/nyan-artifact-$KEY.zip"
             gh api "repos/$RELEASE_REPOSITORY/actions/artifacts/$ID/zip" > "$ARCHIVE"
             mkdir -p "verification/$KEY"
             unzip -q "$ARCHIVE" -d "verification/$KEY"
           done
       - name: Check voice timing, real Android, local SLM and playback reports
+        env:
+          RELEASE_TAG: ${{ steps.selection.outputs.tag }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
@@ -180,6 +184,7 @@ jobs:
           assert.equal(duration.passed, true);
           const audio = JSON.parse(readFileSync('verification/audio/audio-report.json'));
           assert.equal(audio.platform, 'win32');
+          assert.equal(audio.version, process.env.RELEASE_TAG.slice(1));
           assert.equal(audio.passed, true);
           for (const kind of ['video', 'audio', 'video-replace-full', 'video-replace-direct', 'stream-full', 'stream-direct']) {
             const media = audio.media.find(item => item.kind === kind);
@@ -239,7 +244,121 @@ jobs:
           assert.equal(audio.latinReading.urlExcluded, true);
           assert.equal(audio.latinReading.synthesisText, 'エー ビー エヌ エヌ か にゃん CAT URL');
           const effects = audio.mediaEffects;
-          assert.equal(effects.bypassByDefault, true);
+          const version = process.env.RELEASE_TAG.slice(1).split('.').map(Number);
+          const atLeast = patch => version[0] > 0 || version[1] > 5 || version[1] === 5 && version[2] >= patch;
+          const modernRelease = atLeast(13);
+          if (modernRelease) {
+            assert.equal(effects.discordPresetByDefault, 'discord1');
+            assert.equal(effects.discordPresetsSelectable, true);
+            assert.equal(audio.titleCalls.enabledByDefault, true);
+            assert.equal(audio.titleCalls.defaultMediaRatio, 0.8);
+            assert.equal(audio.titleCalls.speedRatio, 0.85);
+            assert.equal(audio.titleCalls.speedSettingSaved, true);
+            assert.equal(audio.titleCalls.synthesisSpeedVerified, true);
+            assert.equal(audio.titleCalls.pageTitleRead, true);
+            assert.ok(audio.titleCalls.completed > 0);
+            assert.equal(audio.titleCalls.receiverVerified, false);
+            for (const key of ['simultaneousGuildMedia', 'discordDuckingIsolated', 'pcDuckingGlobal', 'rawCaptureUnaffected', 'sameGuildReplacementIsolated']) assert.equal(audio.guildIsolation[key], true);
+            assert.equal(audio.guildIsolation.receiverVerified, false);
+            if (atLeast(15)) {
+              assert.equal(audio.titleCalls.resourceAuthorRead, true);
+              assert.equal(audio.titleCalls.discordSenderIgnored, true);
+              assert.ok(audio.titleCalls.unknownMetadataRepeats >= 2);
+              assert.equal(audio.titleCalls.titleIdentityJobs, 2);
+            }
+            if (atLeast(16)) {
+              assert.equal(audio.titleCalls.extractionConcurrent, true);
+              assert.equal(audio.titleCalls.playbackDoesNotWaitForTitle, true);
+              assert.equal(audio.titleCalls.preparationTimings.length, 3);
+              for (const mode of ['preview', 'full', 'direct']) assert.ok(audio.titleCalls.preparationTimings.some(t => t.mode === mode));
+              for (const t of audio.titleCalls.preparationTimings) {
+                assert.ok(t.extractionStartMs <= t.titleStartMs);
+                if (t.kind === 'title-slow-preparation') assert.ok(t.titleEndMs < t.extractionEndMs);
+                else assert.ok(t.titleStartMs <= t.mediaStartMs && t.mediaStartMs < t.titleEndMs);
+              }
+            }
+            if (atLeast(17)) {
+              assert.equal(audio.education.maxCharacters, 30);
+              for (const key of ['unicodeEmojiEducated', 'boundaryAccepted', 'overLimitRejected', 'preservedAfterRejection', 'forgotten']) assert.equal(audio.education[key], true);
+            }
+            if (atLeast(18)) {
+              const attribution = audio.speakerAttribution;
+              for (const key of ['passed', 'channelSwitchSaved', 'channelIsolation', 'nicknamePriority', 'usernameFallback', 'idFallback', 'education', 'mute', 'forget', 'synthesisVerified']) assert.equal(attribution[key], true);
+              assert.equal(attribution.receiverVerified, false);
+              assert.deepEqual(attribution.voiceEvents, { join: 'ねこさんが作業部屋に参加しました', move: 'ねこさんが作業部屋から別室へ移動しました', leave: 'ねこさんが作業部屋から退出しました' });
+              if (atLeast(19)) assert.equal(attribution.bracketSuppressionPreservesName, true);
+            }
+            if (atLeast(20)) {
+              const conversion = audio.mediaConversions;
+              for (const key of ['passed', 'chatRegistration', 'unicodeEmoji', 'uiSave', 'reload', 'directMode', 'bodyReplaced', 'noAnnouncement', 'titleCallsFollowSettings', 'deduplicated', 'forgotten', 'pcPlayback']) assert.equal(conversion[key], true);
+              assert.equal(conversion.receiverVerified, false);
+              assert.ok(conversion.mediaToneSamples > 4800);
+              const soundcloud = audio.soundcloud;
+              for (const key of ['passed', 'shortLinkExpanded', 'shortOnlyAllowlist', 'browserPC', 'audioStreamPC', 'serviceAnnouncement']) assert.equal(soundcloud[key], true);
+              assert.equal(soundcloud.actualServiceAudio, false);
+              assert.equal(soundcloud.receiverVerified, false);
+              assert.equal(soundcloud.cases.length, 2);
+              assert.ok(soundcloud.cases.every(c => c.pcPlayback && c.mediaToneSamples > 4800));
+            }
+            if (atLeast(21)) {
+              const recovery = audio.duckRecovery;
+              assert.equal(recovery.passed, true);
+              assert.equal(recovery.curve, 'quadratic');
+              assert.equal(recovery.power, 2);
+              assert.equal(recovery.receiverVerified, false);
+              assert.equal(recovery.discord.curve, 'accelerate');
+              assert.equal(recovery.discord.duration, 1200);
+              assert.ok(recovery.pcSamples.length >= 4);
+              for (const sample of recovery.pcSamples) {
+                assert.equal(sample.ramp.curve, 'accelerate');
+                assert.ok(sample.progress > 0.1 && sample.progress < 0.85);
+                assert.ok(Math.abs(sample.gain - sample.expected) < 0.025);
+              }
+            }
+            if (atLeast(22)) {
+              assert.equal(audio.nativeRedirect.status, 302);
+              assert.equal(audio.nativeRedirect.destinationRequests, 0);
+              for (const key of ['detected', 'pauseResume', 'naturalEnd']) assert.equal(audio.soundcloud.detachedAudio[key], true);
+            }
+            if (atLeast(23)) {
+              const buffering = audio.mediaBuffering;
+              for (const key of ['passed', 'pcPlayback']) assert.equal(buffering[key], true);
+              assert.equal(buffering.receiverVerified, false);
+              assert.equal(buffering.startupSeconds, 4); assert.equal(buffering.decoderReserveSeconds, 3); assert.equal(buffering.readAheadSeconds, 9);
+              assert.deepEqual(buffering.sourceOutagesMs, [1400, 2800, 3600]);
+              const baseline = buffering.cases.find(c => c.variant === 'baseline');
+              assert.ok(baseline.longestInternalSilenceMs >= 400 && baseline.gapsOver100ms >= 2);
+              const fixed = buffering.cases.find(c => c.variant === 'fixed');
+              assert.ok(fixed.audibleFrames > 700 && fixed.longestInternalSilenceMs <= 100 && fixed.gapsOver100ms === 0);
+              assert.ok(fixed.prefetchedSeconds >= 6.9);
+              const impairment = JSON.parse(readFileSync('verification/impairment/impairment-report.json'));
+              assert.equal(impairment.passed, true); assert.equal(impairment.platform, 'win32');
+              assert.equal(impairment.discordReceiverVerified, false);
+              assert.equal(impairment.sourceStallMs, 500); assert.equal(impairment.workerStallMs, 70);
+              for (const group of ['sourceBaseline', 'sourceFixed', 'pacingBaseline', 'pacingFixed']) assert.equal(impairment[group].summaries.length, 3);
+              assert.ok(impairment.sourceBaseline.summaries.every(s => s.longestSilenceMs >= 160));
+              assert.ok(impairment.pacingBaseline.summaries.every(s => s.shapedDrops >= 3));
+              assert.ok(impairment.sourceFixed.summaries.every(s => s.silentFrames === 0 && s.burstsUnder5ms === 0 && s.sequenceErrors === 0));
+              assert.ok(impairment.pacingFixed.summaries.every(s => s.shapedDrops === 0 && s.burstsUnder5ms === 0 && s.sequenceErrors === 0));
+              assert.equal(impairment.sourceFixed.tailPreserved, true);
+            }
+            if (atLeast(24)) {
+              const monitor = audio.voiceMonitor.continuity, model = audio.voiceMonitor.continuityModel;
+              assert.equal(monitor.actualDiscordReceiver, false);
+              assert.equal(monitor.durationMs, 12000); assert.equal(monitor.packetJitterMs, 180); assert.equal(monitor.ipcBatchingMs, 160);
+              assert.ok(monitor.audibleFrames >= 540); assert.equal(monitor.gapsOver100ms, 0);
+              assert.equal(monitor.playout.underruns, 0); assert.equal(monitor.playout.discardedSamples, 0);
+              assert.ok([...monitor.playout.users, ...monitor.playout.retired].some(s => s.starts[0]?.reason === 'buffer' && s.starts[0].bufferedMs >= 360));
+              assert.equal(model.passed, true); assert.equal(model.actualDiscordReceiver, false);
+              assert.equal(model.durationMs, 18000); assert.equal(model.legacyTimerMs, 46.875);
+              assert.ok(model.baseline.gapsOver100ms >= 2);
+              assert.equal(model.fixed.longestInternalSilenceMs, 0); assert.equal(model.fixed.underruns, 0);
+            }
+            if (atLeast(14)) {
+              assert.equal(audio.guildIsolation.hourlyDuckingGlobal, true);
+              assert.equal(audio.guildIsolation.hourlyNoDoubleDucking, true);
+            }
+          } else assert.equal(effects.bypassByDefault, true);
           assert.equal(effects.eqPresetApplied, true);
           assert.equal(effects.compressorPresetApplied, true);
           assert.equal(effects.customSaved, true);
@@ -301,6 +420,25 @@ jobs:
           assert.deepEqual(readdirSync('release-assets').sort(), expected);
           for (const name of expected) assert.ok(statSync('release-assets/' + name).size > 0);
           JS
+          python3 - <<'PYTHON'
+          import os, json, struct, zipfile
+          from pathlib import Path, PurePosixPath
+          version = os.environ['RELEASE_TAG'][1:]
+          with zipfile.ZipFile(Path('release-assets') / f'NyanTalk-Damare-{version}-x64.zip') as archive:
+            paths = [name for name in archive.namelist() if name.replace('\\', '/').endswith('resources/app.asar')]
+            assert len(paths) == 1, 'Exactly one packaged app archive is required'
+            with archive.open(paths[0]) as stream:
+              prefix, header_size, payload_size, json_size = struct.unpack('<4I', stream.read(16))
+              assert prefix == 4 and 0 < json_size <= 64 * 1024 * 1024
+              assert header_size >= json_size + 8
+              header = json.loads(stream.read(json_size))
+              entry = header['files']['package.json']
+              assert not entry.get('unpacked') and 0 < entry['size'] <= 1024 * 1024
+              stream.seek(8 + header_size + int(entry['offset']))
+              package = json.loads(stream.read(entry['size']))
+              assert package['version'] == version, 'Packaged app version must match the release tag'
+              print('Verified packaged app version:', package['version'])
+          PYTHON
           cd release-assets
           sha256sum *.exe *.zip > SHA256SUMS.txt
       - name: Register the tag for the verified source

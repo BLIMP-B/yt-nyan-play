@@ -26,8 +26,8 @@ jobs:
             if test "$RUN_ID" -lt "$PREPARE_RUN_ID"; then gh api --method POST "repos/$PREPARE_REPOSITORY/actions/runs/$RUN_ID/cancel"; fi
           done
   tag-verified-source:
-    needs: [tests, windows, android-install, hourly-model, live-media]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/windows-desktop-bot'
+    needs: [tests, windows, android-install, hourly-model, live-media, soundcloud-links, soundcloud-browser]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/codex/windows-desktop-bot' || startsWith(github.ref, 'refs/heads/codex/release-v'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -99,6 +99,12 @@ jobs:
         with:
           name: voice-clock-verification-linux
           path: dist/voice-clock-verification
+      - run: npm run verify:voice-impairments
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-impairment-verification-linux
+          path: dist/voice-impairment-verification
       - run: xvfb-run --auto-servernum npm run verify:playback-duration
       - uses: actions/upload-artifact@v4
         if: always()
@@ -106,7 +112,8 @@ jobs:
           name: playback-duration-verification-linux
           path: dist/playback-duration-verification
   windows:
-    needs: tests
+    # The scheduler is OS-dependent; Windows validation can run beside Linux.
+    needs: prepare
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -157,6 +164,12 @@ jobs:
         with:
           name: voice-clock-verification-windows
           path: dist/voice-clock-verification
+      - run: npm run verify:voice-impairments
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: voice-impairment-verification-windows
+          path: dist/voice-impairment-verification
       - run: npm run dist:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -215,8 +228,23 @@ jobs:
         with:
           name: hourly-model-verification-windows
           path: dist/hourly-model-verification
+  soundcloud-links:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Record official SoundCloud share-link redirects
+        run: node scripts/verify-soundcloud-links.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soundcloud-links-windows
+          path: dist/soundcloud-link-verification
   live-media:
-    needs: tests
+    needs: soundcloud-browser
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -225,14 +253,54 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - name: Verify public YouTube and Niconico audio
+      - name: Verify public SoundCloud, YouTube and Niconico audio
         continue-on-error: true
         run: npm run verify:audio
         env:
-          NYAN_LIVE_MEDIA_URLS: '["https://youtu.be/h9c0gegwcM0?si=AWLiET3TiyqluSzc","https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1","https://www.nicovideo.jp/watch/sm9"]'
-          NYAN_REQUIRE_LIVE_SERVICES: 'youtube,niconico'
+          NYAN_LIVE_MEDIA_URLS: '["https://on.soundcloud.com/mnTxXSOAB7VR8gVSVm","https://on.soundcloud.com/mSGisM2jW5ftxL72bf","https://soundcloud.com/uxu-169830723/2831ca85-5370-4159-a751-319145ce6c0f","https://soundcloud.com/the80m/the-following","https://youtu.be/h9c0gegwcM0?si=AWLiET3TiyqluSzc","https://www.youtube.com/watch?v=jNQXAC9IVRw","https://www.youtube.com/watch?v=M7lc1UVf-VE","https://www.youtube.com/watch?v=aqz-KE-bpKQ","https://www.youtube.com/embed/M7lc1UVf-VE?autoplay=1&playsinline=1","https://www.nicovideo.jp/watch/sm9"]'
+          NYAN_REQUIRE_LIVE_SERVICES: 'soundcloud,youtube,niconico'
+          NYAN_VERIFY_SOUNDCLOUD_BROWSER: '1'
+      - name: Require real SoundCloud streaming audio and verify the browser outcome
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const r = JSON.parse(readFileSync('dist/audio-verification/audio-report.json'));
+          const direct = r.liveMedia.find(p => p.service === 'soundcloud' && !p.browserOnly && p.verifiedAudio);
+          assert.ok(direct?.playback.some(s => s.shareExpanded === true));
+          assert.ok(direct.discordEncoder.nonSilentSamples > 4800);
+          const browser = r.liveMedia.find(p => p.service === 'soundcloud' && p.browserOnly);
+          assert.ok(browser?.playback?.some(s => s.shareExpanded === true), browser?.error || 'No SoundCloud browser state');
+          if (browser.verifiedAudio) assert.ok(browser.discordEncoder.nonSilentSamples > 4800);
+          else {
+            // Anonymous CI may be required to sign in. This verifies the real
+            // prompt; it does not count as verified browser audio.
+            assert.equal(browser.loginRequired, true);
+            assert.ok(browser.playback.some(s => s.loginRequired && s.authProvider === 'soundcloud' && s.windowVisible));
+          }
+          JS
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: audio-verification-live-sites
           path: dist/audio-verification
+
+  soundcloud-browser:
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check SoundCloud browser playback or the required sign-in prompt
+        run: npm run verify:soundcloud-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: soundcloud-browser-verification-windows
+          path: dist/soundcloud-browser-verification

@@ -153,3 +153,17 @@ test('old daily sentences and timing measurements cannot survive a generator ver
   assert.equal(runtime.saved.lastHour, 10000); assert.deepEqual(runtime.saved.plans, {}); assert.deepEqual(runtime.saved.batchDays, {}); assert.deepEqual(runtime.saved.measurements, {});
   assert.equal(runtime.mode({ guildId: '11111' }), 'live'); runtime.close();
 });
+
+test('hourly attenuation remains global while custom server overlays overlap and new media starts', t => {
+  const store = new Store(temp(t)), states = new Map();
+  const pool = new MediaPool(store, scope => { const state = { overlay: 1, ordinary: false, title: false }; states.set(scope, state); return { setDucked(value,title) { state[title ? 'title' : 'ordinary'] = value; }, setOverlayGain(value) { state.overlay = value; }, setPaused() {}, close() {} }; });
+  pool.lane('11111'); pool.lane('22222'); pool.fadeOverlay(.15, 100, '11111');
+  assert.equal(states.get('11111').overlay,.15); assert.equal(states.get('22222').overlay,.15);
+  pool.fadeOverlay(.25,100,'22222'); pool.fadeOverlay(1,100,'11111'); pool.lane('33333');
+  assert.ok([...states.values()].every(s=>s.overlay===.25)); pool.fadeOverlay(1,100,'22222');
+  assert.ok([...states.values()].every(s=>s.overlay===1));
+  pool.setDucked(true); pool.setDucked(true); pool.setDucked(true,undefined,true); pool.lane('44444');
+  assert.ok([...states.values()].every(s=>s.ordinary&&s.title)); pool.setDucked(false); pool.setDucked(false,undefined,true);
+  assert.ok([...states.values()].every(s=>s.ordinary&&!s.title)); pool.setDucked(false);
+  assert.ok([...states.values()].every(s=>!s.ordinary&&!s.title));pool.close();
+});

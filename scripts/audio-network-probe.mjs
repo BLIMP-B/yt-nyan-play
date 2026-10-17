@@ -4,13 +4,18 @@ import { PassThrough } from 'node:stream';
 import Opus from '../apps/desktop/runtime/opus-codec.mjs';
 import { PcmMixer, createDiscordAudioResource } from '../apps/desktop/runtime/voice-output.mjs';
 import { VoiceMonitor } from '../apps/desktop/runtime/voice-monitor.mjs';
+import { monitorProcessor, monitorFrame } from './voice-monitor-harness.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 
 export async function verifyAudioNetwork() {
   const encoder = new Opus(), decoder = new Opus(), logs = [];
   const speaking = new EventEmitter(); speaking.users = new Map();
   const streams = new Map(), entry = { channelId: '33333', connection: { receiver: { speaking, subscribe(id) { const stream = new PassThrough({ objectMode: true }); streams.set(id, stream); return stream; } } } };
-  const monitor = new VoiceMonitor(() => {}, () => {}, (_, message) => logs.push(message));
+  let processor, decoded = 0;
+  const monitor = new VoiceMonitor(message => {
+    if (message.type === 'start') processor = monitorProcessor(message.rendererMs);
+    else if (message.type === 'pcm' || message.type === 'idle' || message.type === 'end') { processor.port.onmessage({ data: message }); if (message.type === 'pcm' && message.bytes.some(byte => byte)) decoded++; }
+  }, () => {}, (_, message) => logs.push(message));
   const pcm = Buffer.alloc(3840);
   for (let i = 0; i < 960; i++) { const value = Math.round(8000 * Math.sin(i * Math.PI * 2 * 440 / 48000)); pcm.writeInt16LE(value, i * 4); pcm.writeInt16LE(value, i * 4 + 2); }
   const mixer = new PcmMixer(), resource = createDiscordAudioResource(mixer);
@@ -31,7 +36,7 @@ export async function verifyAudioNetwork() {
     const packet = encoder.encode(pcm, 960);
     const longPacket = Buffer.concat([Buffer.from([(packet[0] & 252) | 3, 6]), ...Array(6).fill(packet.subarray(1))]);
     assert.equal(decoder.decode(longPacket).length, 23040);
-    monitor.attach(entry, '11111', '99999'); clearInterval(monitor.timer);
+    monitor.attach(entry, '11111', '99999');
     // Exercise the exact failure route: many live decoders, 120-ms packets,
     // speaking resubscriptions and delayed errors from retired streams.
     let recycledDecoders = 0;
@@ -40,7 +45,7 @@ export async function verifyAudioNetwork() {
         const key = String(44000 + id); speaking.emit('start', key);
         const stream = streams.get(key); stream.write(longPacket); stream.write(longPacket);
       }
-      assert.ok(monitor.frame().some(byte => byte));
+      assert.ok(decoded >= (round + 1) * 64);
       for (const [id, user] of [...monitor.users]) {
         const retired = user.stream; user.ended = true; speaking.emit('start', id);
         retired.emit('error', new Error('late retired stream error'));
@@ -50,7 +55,7 @@ export async function verifyAudioNetwork() {
       assert.equal(monitor.users.size, 0); assert.ok(encoder.encode(pcm, 960).length);
     }
     const simulate = (profile, loss = true) => {
-      monitor.stop(); monitor.attach(entry, '11111', '99999', profile); clearInterval(monitor.timer); speaking.emit('start', '44444');
+      monitor.stop(); monitor.attach(entry, '11111', '99999', profile); speaking.emit('start', '44444');
       const arrivals = []; let previous = 0, dropped = 0;
       // Preserve RTP order, delay bursts by up to 180 ms and lose 1/11 packets.
       for (let i = 0; i < 300; i++) {
@@ -61,8 +66,8 @@ export async function verifyAudioNetwork() {
       let silentFrames = 0, audibleFrames = 0, longestGap = 0, gap = 0, bufferedBytes = 0;
       for (let tick = 0; tick < 330; tick++) {
         while (arrivals[0]?.tick <= tick) streams.get('44444').write(arrivals.shift().packet);
-        bufferedBytes = Math.max(bufferedBytes, monitor.users.get('44444')?.bytes.length || 0);
-        const output = monitor.frame();
+        bufferedBytes = Math.max(bufferedBytes, (processor.users.get('44444')?.available || 0) * 4);
+        const output = monitorFrame(processor);
         if (tick < 30 || tick >= 290) continue;
         const audible = output.some(byte => byte);
         if (audible) { audibleFrames++; gap = 0; } else { silentFrames++; longestGap = Math.max(longestGap, ++gap); }

@@ -1,4 +1,5 @@
-import { session } from 'electron';
+import { session, net } from 'electron';
+import { nativeRedirectResponse } from './soundcloud.mjs';
 import { browserUserAgent } from '../core/browser-user-agent.mjs';
 import { validateMediaNavigation } from '../core/media-navigation.mjs';
 import { APP_ICON } from './app-icon.mjs';
@@ -10,6 +11,8 @@ export function playbackSession() {
   ses.setPermissionCheckHandler(() => false);
   return ses;
 }
+export const fetchPlaybackRedirect = (url, options) => nativeRedirectResponse(
+  request => net.request({ ...request, session: playbackSession(), useSessionCookies: true }), url, options);
 export function guardMediaWindow(window, source, getConfig, track = () => {}, externalLogin) {
   const googleLogin = destination => externalLogin && /(^|\.)youtube\.com$|^youtu\.be$/.test(new URL(source).hostname) && new URL(destination).hostname === 'accounts.google.com';
   const check = (event, destination) => {

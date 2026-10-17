@@ -36,31 +36,58 @@ export function applyDictionary(text, entries, context) {
   }
   return result;
 }
-export function prepareSpeech(message, config) {
+// Channel IDs distinguish Discord chat from titles, system messages and previews.
+export function speakerName(message) {
+  return [message.serverNickname, message.userName, message.userId].find(value => typeof value === 'string' && value.trim()) || '';
+}
+export function speakerSuffix(message, config) {
+  if (!message.channelId || config.speech.speakerSuffixDisabledChannelIds?.includes(message.channelId)) return '';
+  const name = speakerName(message);
+  // Parentheses are only a UI placeholder. Imported preprocessing/dictionary
+  // rules may erase their complete contents, including the selected name.
+  return name ? `、${name}の発言` : '';
+}
+function fallbackText(content, message, config) {
   const s = config.speech;
-  if (s.bouyomiPreprocess || s.provider === 'bouyomi' && s.bouyomiNativeRules) {
-    const content = messageMediaText(message, config);
-    const text = (s.chatEducationEnabled ? applyEducation(content, fallbackEducation(config)) : content).text;
-    const values = { username: message.userName || '', nickname: message.displayName || message.userName || '', server: message.guildName || '', channel: message.channelName || '', text, userid: message.userId || '', time: new Date().toLocaleTimeString('ja-JP') };
-    return s.readNames ? formatTemplate(s.messageTemplate, values) : text;
-  }
-  let text = messageMediaText(message, config);
+  let text = content;
   if (s.chatEducationEnabled) text = applyEducation(text, fallbackEducation(config));
   if (!s.readSpoilers) text = text.replace(/\|\|[\s\S]*?\|\|/g, s.spoilerText);
   if (!s.readCode) text = text.replace(/```[\s\S]*?```/g, 'コード').replace(/`([^`]+)`/g, '$1');
   text = text.replace(/<@!?(\d+)>/g, (_, id) => message.mentions?.[id] || 'メンション')
     .replace(/<@&(\d+)>/g, (_, id) => message.roles?.[id] || 'ロール')
     .replace(/<#(\d+)>/g, (_, id) => message.channels?.[id] || 'チャンネル');
-  // Strip Markdown destinations before replacing URLs, retaining the link label.
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').urls(s.readUrls);
   text = text.replace(/[*_~]/g, (match, offset) => text.protected[offset] ? match : '');
-  text = applyDictionary(text, config.dictionary, message).replace(/^\s+|\s+$/gu, '');
+  return applyDictionary(text, config.dictionary, message).replace(/^\s+|\s+$/gu, '');
+}
+export function prepareSpeakerSuffix(message, config) {
+  const suffix = speakerSuffix(message, config);
+  if (!suffix) return '';
+  const content = messageMediaText({ ...message, content: suffix, attachments: [], stickers: [] }, config);
+  const s = config.speech;
+  if (s.bouyomiPreprocess || s.provider === 'bouyomi' && s.bouyomiNativeRules) {
+    return (s.chatEducationEnabled ? applyEducation(content, fallbackEducation(config)) : content).text;
+  }
+  return spokenText(fallbackText(content, message, config).latinReading());
+}
+export function prepareSpeech(message, config) {
+  const s = config.speech;
+  if (s.bouyomiPreprocess || s.provider === 'bouyomi' && s.bouyomiNativeRules) {
+    const content = messageMediaText(message, config);
+    const text = (s.chatEducationEnabled ? applyEducation(content, fallbackEducation(config)) : content).text;
+    if (message.channelId) return text.trim() ? text + prepareSpeakerSuffix(message, config) : '';
+    const values = { username: message.userName || '', nickname: message.displayName || message.userName || '', server: message.guildName || '', channel: message.channelName || '', text, userid: message.userId || '', time: new Date().toLocaleTimeString('ja-JP') };
+    return s.readNames ? formatTemplate(s.messageTemplate, values) : text;
+  }
+  const text = fallbackText(messageMediaText(message, config), message, config);
   if (!text.text) return '';
   const values = { username: message.userName, nickname: message.displayName || message.userName,
     server: message.guildName || '', channel: message.channelName || '', text,
     time: new Date().toLocaleTimeString('ja-JP'), userid: message.userId };
-  const formatted = s.readNames ? new ReadingText(s.messageTemplate).replace(/\$([\w-]+)\$/g, (_, key) => values[key] ?? '') : text;
-  return spokenText(formatted.latinReading(s.maxChars));
+  // Limit the body before appending attribution, so a long post keeps its speaker.
+  const formatted = !message.channelId && s.readNames ? new ReadingText(s.messageTemplate).replace(/\$([\w-]+)\$/g, (_, key) => values[key] ?? '') : text;
+  const body = spokenText(formatted.latinReading(s.maxChars));
+  return body ? body + prepareSpeakerSuffix(message, config) : '';
 }
 
 // Native processing has already interpreted tags. Only its spoken text enters

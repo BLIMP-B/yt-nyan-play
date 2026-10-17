@@ -1,0 +1,297 @@
+{
+  "snapshots": [
+    {
+      "packet": 0,
+      "wallSeconds": 9.999999403953553e-05,
+      "audioSeconds": 0
+    },
+    {
+      "packet": 3000,
+      "wallSeconds": 59.979599999994036,
+      "audioSeconds": 59.976,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 271,
+            "targetMs": 360,
+            "ratio": 0.999987,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 10910,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 6000,
+      "wallSeconds": 119.98040000000596,
+      "audioSeconds": 119.89066666666666,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 395,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 23106,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 9000,
+      "wallSeconds": 179.9803000000119,
+      "audioSeconds": 179.88533333333334,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 391,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 27191,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 12000,
+      "wallSeconds": 239.9805,
+      "audioSeconds": 239.77866666666665,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 403,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 38685,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 15000,
+      "wallSeconds": 299.97990000000596,
+      "audioSeconds": 299.7786666666667,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 381,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 42232,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 18000,
+      "wallSeconds": 359.97980000001195,
+      "audioSeconds": 359.70933333333335,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 394,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 50624,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 21000,
+      "wallSeconds": 419.9808000000119,
+      "audioSeconds": 419.704,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 391,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 54535,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 24000,
+      "wallSeconds": 479.97959999999404,
+      "audioSeconds": 479.5466666666667,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 392,
+            "targetMs": 360,
+            "ratio": 1,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 70131,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    },
+    {
+      "packet": 27000,
+      "wallSeconds": 539.9807000000179,
+      "audioSeconds": 539.4933333333333,
+      "stats": {
+        "users": [
+          {
+            "bufferedMs": 442,
+            "targetMs": 360,
+            "ratio": 1.000827,
+            "underruns": 0,
+            "discardedSamples": 0,
+            "correctedBlocks": 77402,
+            "starts": [
+              {
+                "atMs": 341,
+                "bufferedMs": 360,
+                "reason": "buffer"
+              }
+            ]
+          }
+        ],
+        "retired": [],
+        "underruns": 0,
+        "discardedSamples": 0
+      }
+    }
+  ],
+  "wallSeconds": 600.982300000012,
+  "audioSeconds": 600.2186666666666,
+  "actualDiscordReceiver": false,
+  "sampleRate": 48000,
+  "audibleFrames": 29966,
+  "internalSilentFrames": 0,
+  "longestSilenceMs": 0,
+  "stats": {
+    "users": [],
+    "retired": [
+      {
+        "bufferedMs": 0,
+        "targetMs": 360,
+        "ratio": 1.004427,
+        "underruns": 0,
+        "discardedSamples": 0,
+        "correctedBlocks": 100146,
+        "starts": [
+          {
+            "atMs": 341,
+            "bufferedMs": 360,
+            "reason": "buffer"
+          }
+        ]
+      }
+    ],
+    "underruns": 0,
+    "discardedSamples": 0
+  },
+  "method": {
+    "engine": "Chromium AudioWorklet with local synthetic PCM and audible output passthrough",
+    "durationSeconds": 600,
+    "sourcePacketMs": 20,
+    "packetHoldMs": 180,
+    "ipcBatchHoldMs": 160,
+    "targetBufferMs": 360,
+    "speakerHardwareVerified": false,
+    "actualDiscordReceiver": false
+  },
+  "applicationSourceSha": "4db2fb379aea2312c827cc9f9b72dcd71acdffa4",
+  "equivalentPlayoutSourceSha": "098e37adc5fb337831de59337deee65f47579132",
+  "matchingSourceFiles": [
+    "apps/desktop/core/voice-monitor-buffer.mjs",
+    "apps/desktop/renderer/voice-monitor-worklet.js"
+  ]
+}

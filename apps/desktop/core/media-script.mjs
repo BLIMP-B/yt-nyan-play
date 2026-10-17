@@ -1,6 +1,8 @@
-export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true }) {
+import { mediaBufferState } from './media-buffer.mjs';
+
+export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds = 45, volume = 0.7, paused = false, volumeRampMs = 0, bandwidthSaving = false, seek = true, bufferSeconds = 0 }) {
   return `(() => {
-    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek })};
+    const options = ${JSON.stringify({ startSeconds, mode, previewSeconds, volume, paused, volumeRampMs, bandwidthSaving, seek, bufferSeconds })};
     let lowestQuality = false;
     if (options.bandwidthSaving) {
       // Use exposed player APIs. Hiding video does not save network bandwidth.
@@ -25,12 +27,35 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
     const advertisement = isAdvertisement();
     const playback = window.__nyanPlayback ||= { finished: false, observed: false, afterAd: false, reason: '' };
     if (advertisement) playback.afterAd = true;
-    const blockedReason = playability && !['OK', 'LIVE_STREAM_OFFLINE'].includes(playability.status) ? String(playability.reason || playability.status).slice(0, 300) : '';
-    const loginRequired = playability?.status === 'LOGIN_REQUIRED';
-    const videos = [...document.querySelectorAll('video,audio')];
+    const soundcloudAuth = [...document.querySelectorAll('iframe')].some(frame => {
+      try {
+        const url = new URL(frame.src);
+        if (url.origin !== 'https://secure.soundcloud.com' || url.pathname !== '/web-auth') return false;
+        const visible = new URLSearchParams(url.hash.slice(1)).get('is_visible');
+        if (visible !== null) return visible === 'true';
+        const rect = frame.getBoundingClientRect(); return rect.width > 100 && rect.height > 100;
+      } catch { return false; }
+    });
+    const blockedReason = soundcloudAuth ? 'SoundCloudへのログインが必要です' : playability && !['OK', 'LIVE_STREAM_OFFLINE'].includes(playability.status) ? String(playability.reason || playability.status).slice(0, 300) : '';
+    const loginRequired = soundcloudAuth || playability?.status === 'LOGIN_REQUIRED';
+    const authProvider = soundcloudAuth ? 'soundcloud' : undefined;
+    const videos = [...new Set([...document.querySelectorAll('video,audio'), ...(window.__nyanMediaElements?.() || [])])];
     if (playback.finished) { for (const video of videos) video.pause(); return { found: true, ended: true, advertisement: false, endedReason: playback.reason, currentTime: playback.endedTime, duration: playback.endedDuration }; }
     const chosen = document.querySelector('#movie_player video') || videos.find(v => !v.paused && !v.ended) || videos.sort((a,b) => b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight)[0];
-    if (!chosen) return { found: false, blockedReason, loginRequired };
+    if (!chosen) {
+      if (!options.paused && !loginRequired && /(^|\\.)soundcloud\\.com$/.test(window.location?.hostname || '')) {
+        const root = document.querySelector('.soundTitle__playButton');
+        const button = root?.matches('button,a') ? root : root?.querySelector('button,a,.playButton') || document.querySelector('button.playControl');
+        const active = document.querySelector('button.playControl.playing,.soundTitle__playButton.playing,.soundTitle__playButton .playing') || /pause/i.test(button?.getAttribute('aria-label') || '');
+        const attempt = window.__nyanSitePlay ||= { count: 0, at: -Infinity };
+        // The visible button can precede the site's click handler. Retry only
+        // while no media exists and the site's own controls say it is paused.
+        if (button && !button.disabled && !active && attempt.count < 8 && Date.now() - attempt.at >= 2000) {
+          attempt.count++; attempt.at = Date.now(); button.click();
+        }
+      }
+      return { found: false, blockedReason, loginRequired, authProvider };
+    }
     const previous = window.__nyanMedia;
     if (previous !== chosen) { window.__nyanMedia = chosen; window.__nyanStarted = false; }
     const finish = reason => {
@@ -58,6 +83,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
     if (!advertisement && !window.__nyanStarted && chosen.readyState >= 1) {
       try { if (options.seek) chosen.currentTime = Math.min(options.startSeconds, Number.isFinite(chosen.duration) ? Math.max(0,chosen.duration-0.05) : options.startSeconds); window.__nyanStarted = true; } catch {}
     }
+    const buffer = (${mediaBufferState.toString()})(chosen, advertisement ? 0 : options.bufferSeconds, { observed: playback.observed });
     if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
     let youtubeEnded = false;
     try { youtubeEnded = document.querySelector('#movie_player')?.getPlayerState?.() === 0; } catch {}
@@ -84,7 +110,7 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
       check();
     }
     if (advertisement && chosen.__nyanBudget) { clearTimeout(chosen.__nyanBudget.timer); chosen.__nyanBudget.timer = null; }
-    if (options.paused || !advertisement && chosen.__nyanBudget?.finished) chosen.pause();
+    if (options.paused || buffer.buffering || !advertisement && chosen.__nyanBudget?.finished) chosen.pause();
     else if (chosen.paused && !chosen.ended && !chosen.__nyanPlayPending) {
       chosen.__nyanPlayPending = true;
       chosen.play().then(() => { chosen.__nyanPlayError = null; }).catch(error => {
@@ -92,8 +118,8 @@ export function mediaScript({ startSeconds = 0, mode = 'preview', previewSeconds
       }).finally(() => { chosen.__nyanPlayPending = false; });
     }
     if (!advertisement && !chosen.paused && !chosen.ended && chosen.readyState >= 2) { playback.observed = true; playback.afterAd = false; }
-    return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: playback.finished, advertisement,
+    return { found: true, ready: chosen.readyState, paused: chosen.paused, ended: playback.finished, advertisement, ...buffer,
       currentTime: chosen.currentTime, duration: Number.isFinite(chosen.duration) ? chosen.duration : null,
-      previewFinished: !advertisement && chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', lowestQuality, pageTitle: document.title || '', blockedReason, loginRequired, error: chosen.__nyanPlayError || chosen.error?.code || null };
+      previewFinished: !advertisement && chosen.__nyanBudget?.finished === true, audioOnly: chosen.tagName === 'AUDIO', lowestQuality, pageTitle: document.title || '', blockedReason, loginRequired, authProvider, error: chosen.__nyanPlayError || chosen.error?.code || null };
   })()`;
 }

@@ -1,7 +1,20 @@
 import { ReadingText } from './latin-reading.mjs';
 const normalize = value => value.normalize('NFKC');
+export const EDUCATION_MAX_CHARACTERS = 30;
+export function validateEducationLength(source, reading) {
+  const size = [...source].length;
+  if (!size || size > EDUCATION_MAX_CHARACTERS || [...reading].length > EDUCATION_MAX_CHARACTERS) throw new Error('教育する語句は1～30文字、読み方は30文字以内で指定してください');
+}
 export function parseEducationCommand(text) {
   const input = String(text).trim();
+  if (/^変換\s*[（(]/u.test(input)) {
+    const conversion = input.match(/^変換\s*[（(]([\s\S]*)[)）]$/u);
+    const separator = conversion?.[1].search(/[=＝]/u) ?? -1;
+    if (separator < 0) throw new Error('変換(文字列=メディアURL)で指定してください');
+    const source = conversion[1].slice(0, separator).trim(), url = conversion[1].slice(separator + 1).trim();
+    if (!source || !url || /[\t\r\n]/u.test(source + url)) throw new Error('変換する文字列とメディアURLを確認してください');
+    return { type: 'Convert', source, url };
+  }
   const match = input.match(/^(教育|忘却|無音)\s*[（(]([^()（）]*)[)）]$/u);
   if (!match) {
     if (/^(教育|忘却|無音)\s*[（(]/u.test(input)) throw new Error('教育(単語=読み方)、忘却(単語)、無音(単語)で指定してください');

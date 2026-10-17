@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { _electron } from 'playwright-core';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
+import { MEDIA_ACCOUNTS } from '../apps/desktop/core/media-accounts.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const directory = mkdtempSync(join(tmpdir(), 'damare-accounts-'));
 writeFileSync(join(directory, 'config.json'), JSON.stringify(normalizeConfig({ desktop: { closeToTray: false, notifications: false }, media: { output: 'local', bandwidthSaving: false } })));
@@ -12,7 +13,7 @@ let application;
 async function launch() {
   const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
   application = await _electron.launch({ executablePath: require('electron'), args: [root, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env });
-  const ui = await application.firstWindow(); await ui.waitForFunction(() => document.querySelector('#media-account-service')?.options.length === 8);
+  const ui = await application.firstWindow(); await ui.waitForFunction(count => document.querySelector('#media-account-service')?.options.length === count, MEDIA_ACCOUNTS.length);
   await application.evaluate(({ session }) => {
     // Exercise production sign-in windows with local responses, without credentials or real accounts.
     session.fromPartition('persist:nyan-playback').protocol.handle('https', request => {

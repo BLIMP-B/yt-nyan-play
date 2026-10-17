@@ -5,3 +5,5 @@ export const AUDIO_NETWORK_PROFILES = {
   fast: { bitrate: 128000, lossPercent: 5, receiveMs: 80, mediaMs: 80, rendererMs: 80 },
 };
 export const audioNetwork = profile => AUDIO_NETWORK_PROFILES[profile] || AUDIO_NETWORK_PROFILES.poor;
+// IPC to the isolated sender can pause longer than ordinary receive jitter.
+export const discordMediaBufferMs = profile => ({ poor: 600, balanced: 300, fast: 160 })[profile] || 600;

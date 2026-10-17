@@ -1,8 +1,10 @@
+import { gainProgress } from './gain-curve.mjs';
+
 export const PCM_RATE = 48000, PCM_FRAME = 3840, PCM_BYTES_MS = 192;
 export class GainEnvelope {
-  constructor(value = 1, now = Date.now) { this.now = now; this.from = this.to = value; this.began = 0; this.duration = 0; }
-  value(time = this.now()) { return this.duration ? this.from + (this.to - this.from) * Math.max(0, Math.min(1, (time - this.began) / this.duration)) : this.to; }
-  fade(value, ms = 0, time = this.now()) { this.from = this.value(time); this.to = Math.max(0, Math.min(1, value)); this.began = time; this.duration = Math.max(0, ms); }
+  constructor(value = 1, now = Date.now) { this.now = now; this.from = this.to = value; this.began = 0; this.duration = 0; this.curve = 'linear'; }
+  value(time = this.now()) { return this.duration ? this.from + (this.to - this.from) * gainProgress((time - this.began) / this.duration, this.curve) : this.to; }
+  fade(value, ms = 0, time = this.now(), curve = 'linear') { this.from = this.value(time); this.to = Math.max(0, Math.min(1, value)); this.began = time; this.duration = Math.max(0, ms); this.curve = curve; }
 }
 export function pcmWav(pcm) {
   const header = Buffer.alloc(44); header.write('RIFF'); header.writeUInt32LE(pcm.length + 36, 4); header.write('WAVEfmt ', 8);

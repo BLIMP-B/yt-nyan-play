@@ -15,21 +15,52 @@ import OpusScript from '../apps/desktop/runtime/opus-codec.mjs';
 import { verifyAudioNetwork } from './audio-network-probe.mjs';
 import { normalizeConfig } from '../apps/desktop/core/config.mjs';
 import { mediaScope } from '../apps/desktop/core/media-pool.mjs';
+import { pcmWav } from '../apps/desktop/core/hourly-audio.mjs';
+import { verifyVoiceMonitorContinuity } from './voice-monitor-probe.mjs';
+import { createMediaNetworkFixture, pcmContinuity } from './media-buffer-probe.mjs';
 const require = createRequire(import.meta.url), root = resolve(import.meta.dirname, '..');
 const directory = mkdtempSync(join(tmpdir(), 'damare-audio-'));
 const reports = resolve(process.env.NYAN_AUDIO_REPORT_DIR || join(root, 'dist/audio-verification')); mkdirSync(reports, { recursive: true });
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.7', '-ar', '48000', '-ac', '2', join(directory, 'speech.wav')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=320x180:rate=25:duration=4', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=4', '-c:v', 'libvpx', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-shortest', join(directory, 'video.webm')]);
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=4', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'audio.ogg')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=8', '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, 'soundcloud.ogg')]);
+for (const [name, frequency] of [['scope-video', 880], ['scope-audio', 660]]) execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=30`, '-c:a', 'libopus', '-ar', '48000', '-ac', '2', join(directory, `${name}.ogg`)]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', '-ac', '2', join(directory, 'scope-speech.wav')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=6', '-ar', '48000', '-ac', '2', join(directory, 'long-title.wav')]);
+execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=660:duration=18', '-c:a', 'libopus', '-b:a', '96k', '-page_duration', '20000', join(directory, 'network.ogg')]);
+const networkSource = createMediaNetworkFixture(readFileSync(join(directory, 'network.ogg')));
 const wav = readFileSync(join(directory, 'speech.wav'));
 const synthesisTexts = [];
-const engine = createServer((req, res) => { if (req.url.startsWith('/audio_query')) { synthesisTexts.push(new URL(req.url, 'http://localhost').searchParams.get('text')); res.end('{}'); } else if (req.url.startsWith('/synthesis')) { res.setHeader('Content-Type', 'audio/wav'); res.end(wav); } else { res.statusCode = 404; res.end(); } });
+const synthesisSettings = [];
+const engine = createServer((req, res) => {
+  if (networkSource.handle(req, res)) return;
+  if (req.url.startsWith('/audio_query')) { const text = new URL(req.url, 'http://localhost').searchParams.get('text'); synthesisTexts.push(text); res.end(JSON.stringify({ verificationText: text })); }
+  else if (req.url.startsWith('/synthesis')) { let body = ''; req.on('data', bytes => { body += bytes; }); req.on('end', () => { synthesisSettings.push(JSON.parse(body)); res.setHeader('Content-Type', 'audio/wav'); res.end(body.includes('再生開始に重なる長い題名') ? readFileSync(join(directory, 'long-title.wav')) : body.includes('別サーバー読み上げ') ? readFileSync(join(directory, 'scope-speech.wav')) : wav); }); }
+  else { res.statusCode = 404; res.end(); }
+});
 engine.listen(0, '127.0.0.1'); await once(engine, 'listening');
 const config = normalizeConfig({ desktop: { closeToTray: false, notifications: false }, speech: { output: 'both', engineUrl: `http://127.0.0.1:${engine.address().port}`, bouyomiPreprocess: false }, media: { output: 'both', allowedHosts: [...normalizeConfig().media.allowedHosts, 'media-fixture.test'] } });
 writeFileSync(join(directory, 'config.json'), JSON.stringify(config));
 writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: 'nyan-audio-verification', type: 'module', main: 'audio-bootstrap.mjs', version: JSON.parse(readFileSync(join(root, 'package.json'))).version }));
 writeFileSync(join(directory, 'audio-bootstrap.mjs'), `
 import { app, session } from 'electron';
+import { net } from 'electron';
+import { createServer } from 'node:http';
+import { nativeRedirectResponse } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/soundcloud.mjs')).href)};
+globalThis.nyanNativeRedirectProbe = async () => {
+    let destinationRequests = 0;
+    const server = createServer((request, response) => {
+      if (request.url === '/share') response.writeHead(302, { location: '/track' }).end();
+      else { destinationRequests++; response.end('track'); }
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const response = await nativeRedirectResponse(options => net.request(options), 'http://127.0.0.1:' + server.address().port + '/share', { signal: AbortSignal.timeout(5000) });
+      return { status: response.status, location: response.headers.get('location'), destinationRequests };
+    } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
+
+};
 app.whenReady().then(() => { const originalDisplayHandler = session.defaultSession.setDisplayMediaRequestHandler;
 session.defaultSession.setDisplayMediaRequestHandler = function(handler, ...args) { globalThis.nyanProductionDisplayHandler = handler; this.setDisplayMediaRequestHandler = originalDisplayHandler; return originalDisplayHandler.call(this, handler, ...args); }; });
 import { VoiceOutput, PcmMixer } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/voice-output.mjs')).href)};
@@ -39,6 +70,17 @@ VoiceOutput.prototype.createAudioBackend = () => null;
 import { EventEmitter } from 'node:events'; import { PassThrough } from 'node:stream';
 const originalVoiceConnect = VoiceOutput.prototype.connect, originalDisconnect = VoiceOutput.prototype.disconnect;
 VoiceOutput.prototype.connect = async function(guildId, ...args) {
+  if (['11111', '33333'].includes(guildId)) {
+    globalThis.nyanScopeVoice = this;
+    if (!this.connections.has(guildId)) {
+      const mixer = new PcmMixer(), stats = { frames: 0, peaks: [], clears: 0, rawPeaks: [] }, connection = { state: {status:'ready'}, joinConfig:{selfDeaf:true}, rejoin(){return true;}, destroy(){this.state.status='destroyed';clearInterval(timer);} };
+      const clear = mixer.clearMedia.bind(mixer); mixer.clearMedia = () => { stats.clears++; clear(); };
+      const add = mixer.addMedia.bind(mixer); mixer.addMedia = bytes => { let peak=0;for(let i=0;i+1<bytes.length;i+=2)peak=Math.max(peak,Math.abs(bytes.readInt16LE(i)));stats.rawPeaks.push(peak);if(stats.rawPeaks.length>100)stats.rawPeaks.shift();add(bytes); };
+      const timer = setInterval(() => { if(mixer.destroyed)return;const bytes=mixer.takeFrame();let peak=0;for(let i=0;i+1<bytes.length;i+=2)peak=Math.max(peak,Math.abs(bytes.readInt16LE(i)));stats.frames++;stats.peaks.push(peak);if(stats.peaks.length>20)stats.peaks.shift(); },20);
+      const channelId = this.getConfig().bot.bindings.find(b=>b.guildId===guildId).voiceChannelId; this.connections.set(guildId,{channelId,connection,mixer,stats,player:{stop(){}}});this.mediaSettings(mixer,this.getConfig());
+    }
+    this.changed();return this.connections.get(guildId);
+  }
   if (guildId !== '99998') return originalVoiceConnect.call(this, guildId, ...args);
   if (!this.connections.has(guildId)) {
     const speaking = new EventEmitter(); speaking.users = new Map(); const streams = new Map();
@@ -49,6 +91,17 @@ VoiceOutput.prototype.connect = async function(guildId, ...args) {
   this.syncMonitor(); this.changed(); return this.connections.get(guildId);
 };
 VoiceOutput.prototype.disconnect = function(guildId, ...args) { const result = originalDisconnect.call(this, guildId, ...args); if (guildId === '99998' && this.monitorFixtureClient) { this.getClient = this.monitorFixtureClient; this.monitorFixtureClient = null; } return result; };
+import { DiscordBot } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/bot.mjs')).href)};
+const attributionCatalog = DiscordBot.prototype.catalog;
+DiscordBot.prototype.catalog = function(...args) { globalThis.nyanAttributionBot = this; return attributionCatalog.apply(this, args); };
+import { MediaTitleCalls } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/core/media-title-calls.mjs')).href)};
+const titlePlay = MediaTitleCalls.prototype.play;
+MediaTitleCalls.prototype.play = function(job, ...args) {
+  if (job.payload.url.startsWith('http://media-fixture.test/title-')) job.payload.source = '送信者由来の名前';
+  if (job.payload.url.endsWith('/title-slow-preparation')) job.payload.title = '取得中に読む短い題名';
+  if (job.payload.url.endsWith('/title-long-overlap') || job.payload.url.endsWith('/title-direct-overlap')) job.payload.title = '再生開始に重なる長い題名';
+  return titlePlay.call(this, job, ...args);
+};
 import { MediaStreamResolver } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-streams.mjs')).href)};
 import { HourlyHistory } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/hourly-history.mjs')).href)};
 const historyRows = Array.from({length:5000},(_,i)=>({id:String(10000+i),guildId:'11111',channelId:'22222',createdTimestamp:i+1,content:'猫が時計を眺める。森の太陽は月の料理を運ぶ。'.repeat(70)}));
@@ -60,8 +113,27 @@ HourlyHistory.prototype.sync = function(...args) {
   const timer=setInterval(()=>{const now=performance.now();metrics.ticks++;metrics.maxGapMs=Math.max(metrics.maxGapMs,now-previous);previous=now;},20);
   return sync.apply(this,args).finally(()=>clearInterval(timer));
 };
+import { MediaBrowser } from ${JSON.stringify(pathToFileURL(join(root, 'apps/desktop/runtime/media-browser.mjs')).href)};
+globalThis.nyanProbeBrowsers = new Map();
+const browserPlay = MediaBrowser.prototype.play;
+MediaBrowser.prototype.play = function(job, ...args) { globalThis.nyanProbeBrowsers.set(job.id, this); return browserPlay.call(this, job, ...args); };
+const bufferPolicy = MediaBrowser.prototype.streamBufferOptions;
+MediaBrowser.prototype.streamBufferOptions = function(profile) {
+  if (this.job?.payload.url === 'http://media-fixture.test/network-buffer-baseline') return { startupSeconds: 0, burstSeconds: 0 };
+  return bufferPolicy.call(this, profile);
+};
 const original = MediaStreamResolver.prototype.resolve;
 MediaStreamResolver.prototype.resolve = function(url, signal) {
+  if (['http://media-fixture.test/network-buffer-baseline', 'http://media-fixture.test/network-buffer-fixed'].includes(url)) return Promise.resolve({ url: 'http://127.0.0.1:${engine.address().port}/network.ogg', audioOnly: true, service: 'fixture', headers: {}, duration: 18 });
+  if (globalThis.nyanSoundCloudFixture && url === 'https://soundcloud.com/nyan-verification/audio') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'soundcloud.ogg'))}, audioOnly: true, service: 'soundcloud', headers: {}, duration: 8 });
+  if (['/title-slow-preparation', '/title-long-overlap', '/title-direct-overlap'].includes(new URL(url).pathname)) {
+    const timing = { url, extractionStartedAt: Date.now() }; (globalThis.nyanTitleTimings ||= []).push(timing);
+    return new Promise((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(signal.reason); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); timing.extractionFinishedAt = Date.now(); resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} }); }, url.endsWith('/title-slow-preparation') ? 4000 : 400);
+      signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
+    });
+  }
   if (url === 'https://www.youtube.com/watch?v=NyanBgm0001') return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'youtube', headers: {} });
   if (url.startsWith('http://media-fixture.test/stream')) return Promise.resolve({ url: ${JSON.stringify(join(directory, 'audio.ogg'))}, audioOnly: true, service: 'fixture', headers: {} });
   return original.call(this, url, signal);
@@ -94,14 +166,27 @@ const call = async (page, action, data) => {
   const result = await page.evaluate(async ({ action, data }) => window.nyan.invoke(action, data), { action, data });
   assert.equal(result.ok, true, result.error); return result.value;
 };
-const waitForJob = async (page, id, timeout = 15000) => {
+const waitForJob = async (page, id, timeout = 15000, observe) => {
   const until = Date.now() + timeout;
   while (Date.now() < until) {
     const state = await call(page, 'state'), job = state.jobs.find(j => j.id === id);
+    observe?.(state);
     if (job && !['waiting', 'running'].includes(job.status)) { assert.equal(job.status, 'completed', job.error); return state; }
     await new Promise(resolve => setTimeout(resolve, 80));
   }
   throw new Error(`Job ${id} did not complete within ${timeout}ms`);
+};
+const waitForPlayback = async (page, job, timeout = 20000) => {
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    const state = await call(page, 'state');
+    const saved = state.jobs.find(j => j.id === job.id);
+    assert.notEqual(saved?.status, 'failed', saved?.error);
+    const playback = state.media.find(m => m.scope === mediaScope(job.payload) && m.startedAt && m.currentTime > 0.1);
+    if (playback) return playback;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error('Playback state was not observed for ' + job.id);
 };
 async function encodedAudio(pcm) {
   const mixer = new PcmMixer(); mixer.mediaVolume = 1;
@@ -119,12 +204,16 @@ async function encodedAudio(pcm) {
     return { packets, peak, nonSilentSamples };
   } finally { player.stop(true); mixer.destroy(); decoder.delete(); }
 }
-const liveService = url => /(^|\.)(youtube\.com|youtu\.be)$/.test(new URL(url).hostname) ? 'youtube' : /(^|\.)nicovideo\.jp$/.test(new URL(url).hostname) ? 'niconico' : new URL(url).hostname;
+const liveService = url => /(^|\.)(youtube\.com|youtu\.be)$/.test(new URL(url).hostname) ? 'youtube' : /(^|\.)nicovideo\.jp$/.test(new URL(url).hostname) ? 'niconico' : /(^|\.)soundcloud\.com$/.test(new URL(url).hostname) ? 'soundcloud' : new URL(url).hostname;
 try {
   const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
   application = await _electron.launch({ executablePath: require('electron'), args: [directory, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
   application.on('console', message => console.log('Electron:', message.text()));
   const page = await application.firstWindow(); await page.waitForFunction(() => Boolean(window.nyan && document.querySelector('#version').textContent.includes('0.')));
+  // Use Chromium's real network stack, not a fetch mock or custom protocol.
+  report.nativeRedirect = await application.evaluate(() => globalThis.nyanNativeRedirectProbe());
+  assert.equal(report.nativeRedirect.status, 302); assert.equal(report.nativeRedirect.destinationRequests, 0);
+  assert.ok(report.nativeRedirect.location.endsWith('/track'));
   const fadeFields = ['media.duckFadeOutMs', 'media.duckFadeInMs', 'hourly.bgmFadeInMs', 'hourly.bgmFadeOutMs'];
   for (const key of fadeFields) assert.equal(await page.locator(`[data-config="${key}"]`).inputValue(), '3');
   await page.locator('[data-view="settings"]').click();
@@ -157,8 +246,15 @@ try {
   // Use the production settings controls, then reload the renderer and inspect
   // the persisted config; this catches preset/custom wiring and packaged imports.
   const effectsField = path => page.locator(`[data-config="media.${path}"]`);
-  assert.equal(await effectsField('equalizer.enabled').isChecked(), false);
-  assert.equal(await effectsField('compressor.enabled').isChecked(), false);
+  assert.equal(await effectsField('titleCallEnabled').isChecked(), true);
+  assert.equal(await effectsField('titleCallDucking').inputValue(), '0.8');
+  assert.equal(await effectsField('titleCallSpeedRatio').inputValue(), '0.85');
+  await effectsField('titleCallSpeedRatio').fill('0.9');
+  assert.equal(await effectsField('equalizer.enabled').isChecked(), true);
+  assert.equal(await effectsField('compressor.enabled').isChecked(), true);
+  assert.equal(await effectsField('equalizer.preset').inputValue(), 'discord1');
+  assert.equal(await effectsField('compressor.preset').inputValue(), 'discord1');
+  for (const preset of ['discord2', 'discord3']) { await effectsField('equalizer.preset').selectOption(preset); await effectsField('compressor.preset').selectOption(preset); }
   await effectsField('equalizer.preset').selectOption('clarity');
   assert.equal(await effectsField('equalizer.enabled').isChecked(), true);
   assert.equal(await effectsField('equalizer.gains.3').inputValue(), '3');
@@ -172,6 +268,11 @@ try {
   await page.locator('[data-panel="settings"] .save-config').first().click();
   await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.compressor.ratio === 3.5);
   await page.reload(); await page.waitForFunction(() => document.querySelector('[data-config="media.compressor.ratio"]').value === '3.5');
+  assert.equal(await effectsField('titleCallSpeedRatio').inputValue(), '0.9');
+  await page.locator('[data-view="settings"]').click();
+  await effectsField('titleCallSpeedRatio').fill('0.85');
+  await page.locator('[data-panel="settings"] .save-config').first().click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.media.titleCallSpeedRatio === 0.85);
   await page.locator('[data-view="settings"]').click();
   assert.equal(await effectsField('equalizer.gains.0').inputValue(), '-5');
   const effectSettings = (await call(page, 'state')).config.media;
@@ -179,10 +280,10 @@ try {
   assert.deepEqual(persisted.media.equalizer, effectSettings.equalizer); assert.deepEqual(persisted.media.compressor, effectSettings.compressor);
   await effectsField('equalizer.enabled').scrollIntoViewIfNeeded();
   await page.screenshot({ path: join(reports, 'media-effects-settings.png'), fullPage: true });
-  report.mediaEffects = { bypassByDefault: true, eqPresetApplied: true, compressorPresetApplied: true, customSaved: true, rendererReloadVerified: true, equalizer: effectSettings.equalizer, compressor: effectSettings.compressor };
+  report.mediaEffects = { discordPresetByDefault: 'discord1', discordPresetsSelectable: true, eqPresetApplied: true, compressorPresetApplied: true, customSaved: true, rendererReloadVerified: true, equalizer: effectSettings.equalizer, compressor: effectSettings.compressor };
   await page.locator('[data-view="overview"]').click();
   // Observe actual production renderer PCM, not a mock getDisplayMedia or Audio element.
-  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio }) => {
+  await application.evaluate(async ({ BrowserWindow, ipcMain, session, net }, { wav, video, audio, soundcloudAudio, scopeVideo, scopeAudio }) => {
     const ui = BrowserWindow.getAllWindows()[0];
     const probe = globalThis.nyanAudioProbe = { ui, target: ui, active: 'speech', metrics: {}, chunks: {} };
     ui.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
@@ -209,32 +310,46 @@ try {
         for (let i = 0; i + 3 < buffer.length; i += 4) { const sample = buffer.readInt16LE(i); framePeak = Math.max(framePeak, Math.abs(sample)); if (i && (sample >= 0) !== (previous >= 0)) crossings++; previous = sample; }
         const frequency = crossings * 48000 / (2 * (buffer.length / 4));
         if (framePeak > 100 && Math.abs(frequency - expected) < 75) metrics.mediaToneSamples = (metrics.mediaToneSamples || 0) + buffer.length / 4;
+        if (label === 'video' && globalThis.nyanAudioHistory?.syncing && framePeak > 100) {
+          if (Math.abs(frequency - 880) < 75) metrics.historyMediaSamples = (metrics.historyMediaSamples || 0) + buffer.length / 4;
+          if (Math.abs(frequency - 440) < 75) metrics.historySpeechSamples = (metrics.historySpeechSamples || 0) + buffer.length / 4;
+        }
       }
       if (label !== 'speech' && (probe.chunks[label]?.length || 0) < 4000) (probe.chunks[label] ||= []).push(buffer);
     });
     const mediaSession = session.fromPartition('persist:nyan-playback');
     await mediaSession.protocol.handle('https', request => {
       const url = new URL(request.url);
+      if (url.hostname === 'on.soundcloud.com' && url.pathname === '/NyanVerification') return new Response(null, { status: 302, headers: { location: 'https://soundcloud.com/nyan-verification/audio' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio.ogg') return new Response(new Uint8Array(soundcloudAudio), { headers: { 'Content-Type': 'audio/ogg' } });
+      if (url.hostname === 'soundcloud.com' && url.pathname === '/nyan-verification/audio') return new Response('<!doctype html><title>SoundCloud音声試験</title><button class="soundTitle__playButton playButton" aria-label="Play">Play</button><script>setTimeout(() => document.querySelector("button").onclick = () => { if (window.detached) return; window.detached = new Audio("/nyan-verification/audio.ogg"); detached.play(); }, 1000);</script>', { headers: { 'Content-Type': 'text/html' } });
       if (globalThis.nyanBgmFixture && url.hostname === 'www.youtube.com' && url.pathname === '/results') return new Response('<!doctype html><script>window.ytInitialData={videoRenderer:{videoId:"NyanBgm0001",lengthText:{simpleText:"0:04"},title:{runs:[{text:"PC BGM fixture"}]}}}</script>', { headers: { 'Content-Type': 'text/html' } });
       return net.fetch(request, { bypassCustomProtocolHandlers: true });
     });
-    await mediaSession.protocol.handle('http', request => {
+    await mediaSession.protocol.handle('http', async request => {
       if (new URL(request.url).hostname !== 'media-fixture.test') return net.fetch(request, { bypassCustomProtocolHandlers: true });
       const file = new URL(request.url).pathname;
       if (file === '/video.webm') return new Response(new Uint8Array(video), { headers: { 'Content-Type': 'video/webm' } });
+      if (file === '/scope-video.ogg' || file === '/scope-audio.ogg') return new Response(new Uint8Array(file.includes('video') ? scopeVideo : scopeAudio), { headers: { 'Content-Type': 'audio/ogg' } });
       if (file === '/audio.ogg') return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg' } });
-      const tag = file.includes('audio') ? 'audio' : 'video', source = tag === 'audio' ? '/audio.ogg' : '/video.webm';
+      if (file === '/title-unknown' || file === '/title-author') {
+        // Metadata resolves early; actual page loading stays slow enough to
+        // expose a wrong fallback to Discord sender identity after that result.
+        if (file === '/title-unknown' && (request.headers.get('accept') || '').includes('text/html')) await new Promise(resolve => setTimeout(resolve, 5000));
+        const author = file === '/title-author' ? '<meta name="author" content="リンク先の投稿者">' : '';
+        return new Response(`<!doctype html>${author}<video muted controls src="/video.webm"></video>`, { headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' } });
+      }
+      const tag = file.includes('audio') ? 'audio' : 'video', source = file.includes('scope') ? (tag === 'audio' ? '/scope-audio.ogg' : '/scope-video.ogg') : tag === 'audio' ? '/audio.ogg' : '/video.webm';
       const replace = file.includes('replace') ? `<script>document.querySelector('${tag}').addEventListener('ended', () => { const next = document.createElement('video'); next.controls = true; next.autoplay = true; next.src = '/video.webm'; document.querySelector('${tag}').replaceWith(next); });</script>` : '';
       return new Response(`<!doctype html><title>メディア音声試験</title><${tag} muted controls src="${source}"></${tag}>${replace}`, { headers: { 'Content-Type': 'text/html' } });
     });
     ui.webContents.session.setPermissionRequestHandler((web, permission, callback) => callback(web === ui.webContents && ['media', 'display-capture', 'speaker-selection'].includes(permission)));
-  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))] });
+  }, { wav: [...wav], video: [...readFileSync(join(directory, 'video.webm'))], audio: [...readFileSync(join(directory, 'audio.ogg'))], soundcloudAudio: [...readFileSync(join(directory, 'soundcloud.ogg'))], scopeVideo: [...readFileSync(join(directory, 'scope-video.ogg'))], scopeAudio: [...readFileSync(join(directory, 'scope-audio.ogg'))] });
   await application.evaluate(() => { globalThis.nyanAudioProbe.capture = true; });
   await page.evaluate(() => window.nyanCapture({ type: 'capture:start', id: 'audio-probe' }));
   await page.evaluate(() => { window.__nyanDisplayed = []; new MutationObserver(() => window.__nyanDisplayed.push(document.querySelector('#now-playing').textContent)).observe(document.querySelector('#now-playing'), { childList: true, subtree: true }); });
   const historyConfig=(await call(page,'state')).config; historyConfig.hourly.servers=[{guildId:'11111',channelIds:['22222'],enabled:true,bgm:false}];
-  await call(page,'config:save',historyConfig);
-  const historyTask=call(page,'hourly:sync'); historyTask.catch(()=>{});
+  let historyTask;
   const jobs = [];
   for (let n = 1; n <= 3; n++) jobs.push(await call(page, 'speech:test', { text: `連続読み上げ${n}`, styleId: 3 }));
   for (const job of jobs) { await waitForJob(page, job.id); report.speech.push({ text: job.payload.text, status: 'completed' }); }
@@ -252,6 +367,22 @@ try {
   await waitForJob(page, latinJob.id);
   assert.equal(synthesisTexts.at(-1), latinExpected);
   report.latinReading = { input: latinInput, synthesisText: synthesisTexts.at(-1), singleLetters: true, romaji: true, standaloneN: true, dictionaryPriority: true, urlExcluded: true, passed: true };
+  // Use production education/settings and synthesis IPC. Oversized changes
+  // must reject atomically, and a single Unicode emoji must be teachable.
+  const emojiReading = 'ちぇっく';
+  await call(page, 'reading:save', { source: '✅', reading: emojiReading });
+  const emojiSpeech = await call(page, 'speech:test', { text: '✅' }); await waitForJob(page, emojiSpeech.id);
+  assert.equal(synthesisTexts.at(-1), emojiReading);
+  const boundarySource = '語'.repeat(30), boundaryReading = 'よ'.repeat(30);
+  await call(page, 'reading:save', { source: boundarySource, reading: boundaryReading });
+  for (const data of [{ source: boundarySource + '語', reading: boundaryReading }, { source: boundarySource, reading: boundaryReading + 'よ' }]) {
+    const failed = await page.evaluate(data => window.nyan.invoke('reading:save', data), data);
+    assert.equal(failed.ok, false); assert.match(failed.error, /30文字/);
+  }
+  const boundary = (await call(page, 'state')).readings.find(r => r.source === boundarySource); assert.equal(boundary.reading, boundaryReading);
+  await call(page, 'reading:forget', { source: '✅' }); await call(page, 'reading:forget', { source: boundarySource });
+  assert.ok(!(await call(page, 'state')).readings.some(r => r.source === '✅' || r.source === boundarySource));
+  report.education = { maxCharacters: 30, unicodeEmojiEducated: true, boundaryAccepted: true, overLimitRejected: true, preservedAfterRejection: true, forgotten: true };
   const speechMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics.speech);
   assert.ok(speechMetrics?.nonSilentSamples > 1000, `Speech audio missing: ${JSON.stringify(speechMetrics)}`); report.speechAudio = speechMetrics;
   await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
@@ -268,17 +399,315 @@ try {
       }
       throw new Error('Playback window did not open');
     }, kind);
+    if (kind === 'video') {
+      // The import must overlap audible media, not finish during UI/education
+      // checks before the player starts on a fast or heavily loaded runner.
+      await waitForPlayback(page, job);
+      const concurrentConfig = (await call(page, 'state')).config;
+      concurrentConfig.hourly.servers = historyConfig.hourly.servers;
+      await call(page, 'config:save', concurrentConfig);
+      historyTask = call(page, 'hourly:sync'); historyTask.catch(() => {});
+      const speech = await call(page, 'speech:test', { text: '履歴取得中の読み上げ', styleId: 3 });
+      await waitForJob(page, speech.id);
+    }
     await waitForJob(page, job.id);
     const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
     assert.ok(metrics?.mediaToneSamples > 4800, `${kind} audio did not reach PC output (announcement excluded): ${JSON.stringify(metrics)}`);
     report.media.push({ kind, status: 'completed', pcPlayback: true, ...metrics });
     await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' }));
   }
+  const titleIdentityJobs = [];
+  for (const kind of ['title-author', 'title-unknown']) {
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode: 'direct' });
+    await waitForJob(page, job.id);
+    const savedJob = (await call(page, 'state')).jobs.find(j => j.id === job.id);
+    assert.equal(savedJob.payload.source, '送信者由来の名前', 'The provenance fixture must include a Discord sender');
+    titleIdentityJobs.push(savedJob.id);
+  }
+  const titleJobs = (await call(page, 'state')).jobs.filter(j => j.kind === 'speech' && j.payload.titleCall && j.status === 'completed');
+  assert.ok(titleJobs.some(j => j.payload.text === 'メディア音声試験'), 'The playback page title did not reach the production speech path');
+  const titleSynthesis = synthesisSettings.filter(query => query.verificationText === 'メディア音声試験');
+  assert.ok(titleSynthesis.length > 0 && titleSynthesis.every(query => Math.abs(query.speedScale - 0.85) < 1e-6), 'Title speed did not reach VOICEVOX');
+  const authorRead = titleJobs.some(j => j.payload.text === 'リンク先の投稿者');
+  const unknownRepeats = titleJobs.filter(j => j.payload.text === 'メディアを取得中です').length;
+  assert.equal(authorRead, true, 'Resource author metadata did not reach speech');
+  assert.ok(unknownRepeats >= 2, 'Missing resource metadata must keep the preparation announcement repeating');
+  assert.ok(!synthesisTexts.includes('送信者由来の名前'), 'Discord sender identity leaked into title speech');
+  report.titleCalls = { enabledByDefault: true, defaultMediaRatio: 0.8, speedRatio: 0.85, speedSettingSaved: true, synthesisSpeedVerified: true, resourceAuthorRead: authorRead, discordSenderIgnored: true, unknownMetadataRepeats: unknownRepeats, titleIdentityJobs: titleIdentityJobs.length, completed: titleJobs.length, pageTitleRead: true, speechTexts: titleJobs.map(j => j.payload.text), receiverVerified: false };
+  // Hold extraction and title audio independently through the production
+  // browser/capture path. Playback must not wait for the spoken title to end.
+  report.titleCalls.preparationTimings = [];
+  for (const [kind, mode] of [['title-slow-preparation', 'full'], ['title-long-overlap', 'preview'], ['title-direct-overlap', 'direct']]) {
+    const before = new Set((await call(page, 'state')).jobs.map(j => j.id));
+    const job = await call(page, 'media:add', { url: `http://media-fixture.test/${kind}`, mode });
+    const state = await waitForJob(page, job.id, 20000), saved = state.jobs.find(j => j.id === job.id);
+    const speech = state.jobs.filter(j => !before.has(j.id) && j.kind === 'speech');
+    const title = speech.find(j => j.payload.titleCall), announcement = speech.find(j => !j.payload.titleCall);
+    assert.equal(title?.status, 'completed', 'Title speech did not complete');
+    if (mode === 'direct') assert.equal(announcement, undefined);
+    else { assert.equal(announcement?.status, 'completed'); assert.ok(Date.parse(announcement.finishedAt) <= Date.parse(saved.mediaPreparingAt)); }
+    const timing = await application.evaluate((_electron, url) => globalThis.nyanTitleTimings.find(t => t.url === url), saved.payload.url);
+    assert.ok(timing?.extractionFinishedAt, 'The held extraction did not finish');
+    const preparedAt = Date.parse(saved.mediaPreparingAt), titleStartedAt = Date.parse(title.startedAt), titleFinishedAt = Date.parse(title.finishedAt), mediaStartedAt = Date.parse(saved.mediaStartedAt);
+    assert.ok(preparedAt <= timing.extractionStartedAt && timing.extractionStartedAt <= titleStartedAt, 'Media extraction started after title speech');
+    if (kind === 'title-slow-preparation') assert.ok(titleFinishedAt < timing.extractionFinishedAt, 'Title did not play during slow extraction');
+    else assert.ok(titleStartedAt <= mediaStartedAt && mediaStartedAt < titleFinishedAt, 'Playback waited for long title speech to finish');
+    report.titleCalls.preparationTimings.push({ kind, mode, extractionStartMs: timing.extractionStartedAt - preparedAt, extractionEndMs: timing.extractionFinishedAt - preparedAt, titleStartMs: titleStartedAt - preparedAt, titleEndMs: titleFinishedAt - preparedAt, mediaStartMs: mediaStartedAt - preparedAt });
+  }
+  report.titleCalls.extractionConcurrent = true;
+  report.titleCalls.playbackDoesNotWaitForTitle = true;
   await historyTask;
-  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.speech.samplesDuringHistory||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.samplesDuringHistory||0}));
+  report.historyConcurrent = await application.evaluate(() => ({...globalThis.nyanHistoryMetrics,...globalThis.nyanAudioHistory.snapshot(),speechSamples:globalThis.nyanAudioProbe.metrics.video.historySpeechSamples||0,videoSamples:globalThis.nyanAudioProbe.metrics.video.historyMediaSamples||0}));
   assert.ok(report.historyConcurrent.messages>0 && report.historyConcurrent.messages<=500,'History exceeded its per-sync budget or recorded no messages');
   assert.ok(report.historyConcurrent.ticks>20 && report.historyConcurrent.maxGapMs<250,'History blocked the audio control event loop');
   assert.ok(report.historyConcurrent.speechSamples>1000 && report.historyConcurrent.videoSamples>1000,'Speech or video audio did not flow during the first history import');
+  // Inject Discord events through the production Bot, queue, UI and synthesis.
+  // This verifies content and PC routing; it does not claim a live VC receiver.
+  const attributionBase = (await call(page, 'state')).config;
+  await application.evaluate(() => {
+    const bot = globalThis.nyanAttributionBot;
+    globalThis.nyanAttributionOriginalClient = bot.client;
+    const channels = new Map([
+      ['72222', { id: '72222', name: '雑談', voice: false }],
+      ['73333', { id: '73333', name: '作業部屋', voice: true }],
+      ['74444', { id: '74444', name: '別室', voice: false }],
+      ['75555', { id: '75555', name: 'マスタ', voice: false }],
+    ]);
+    for (const channel of channels.values()) Object.assign(channel, { isTextBased: () => true, isVoiceBased: () => channel.voice, permissionsFor: () => ({ has: () => true }) });
+    const guild = { id: '71111', name: '発言者名試験', channels: { cache: channels } };
+    globalThis.nyanAttributionGuild = guild;
+    bot.client = { user: { id: '99999' }, destroy() {}, isReady: () => true, guilds: { cache: new Map([[guild.id, guild]]) } };
+    globalThis.nyanAttributionCounter = 0;
+  });
+  const attributionConfig = structuredClone(attributionBase);
+  attributionConfig.bot.bindings = [{ guildId: '71111', voiceChannelId: '73333', textChannelIds: ['72222', '74444'], announceJoinLeave: true }];
+  Object.assign(attributionConfig.bot, { autoJoin: false, autoLeave: false, masterTextChannelId: '75555' });
+  attributionConfig.speech.speakerSuffixDisabledChannelIds = [];
+  attributionConfig.dictionary.push({ id: 'speaker-bracket-filter', source: '[（(][^）)]*[）)]', replacement: '', regex: true, scope: 'global' });
+  await call(page, 'config:save', attributionConfig);
+  // Initialize form fields from the fixture before testing automatic checkbox saves.
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  await page.locator('[data-view="connections"]').click();
+  const suffixControl = channel => page.locator('[data-speaker-channel="' + channel + '"]');
+  await suffixControl('72222').waitFor();
+  for (const channel of ['72222', '73333', '74444', '75555']) assert.equal(await suffixControl(channel).isChecked(), true);
+  await suffixControl('72222').uncheck();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.speech.speakerSuffixDisabledChannelIds.includes('72222'));
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  await page.locator('[data-view="connections"]').click();
+  assert.equal(await suffixControl('72222').isChecked(), false);
+  assert.equal(await suffixControl('73333').isChecked(), true);
+  await page.screenshot({ path: join(reports, 'speaker-channel-settings.png'), fullPage: true });
+  const emitAttribution = async (content, { channelId = '72222', nickname = 'neko', username = 'user', event } = {}) => {
+    const job = await application.evaluate(async (_electron, args) => {
+      const bot = globalThis.nyanAttributionBot, guild = globalThis.nyanAttributionGuild;
+      const before = new Set(bot.store.jobs.map(j => j.id));
+      const member = { nickname: args.nickname, displayName: '使わないDiscord表示名', user: { id: '76666', username: args.username, bot: false }, roles: { cache: new Map() }, permissions: { has: () => false } };
+      if (args.event) {
+        const state = (channelId, name) => ({ channelId, channel: channelId ? { name: name || '作業部屋' } : null, guild, member, id: '76666' });
+        const previous = state(args.event === 'join' ? null : '73333');
+        const next = state(args.event === 'leave' ? null : args.event === 'move' ? '74444' : '73333', args.event === 'move' ? '別室' : '作業部屋');
+        await bot.voiceState(previous, next);
+      } else {
+        await bot.message({ id: 'speaker-' + ++globalThis.nyanAttributionCounter, content: args.content, author: member.user, member, guildId: guild.id, guild, channelId: args.channelId, channel: guild.channels.cache.get(args.channelId), attachments: new Map(), stickers: new Map(), reply: async () => {} });
+      }
+      const job = bot.store.jobs.find(j => j.kind === 'speech' && !before.has(j.id));
+      if (!job) throw Error('Discord event did not enqueue speech'); return job;
+    }, { content, channelId, nickname, username, event });
+    await waitForJob(page, job.id); return synthesisTexts.at(-1);
+  };
+  assert.equal(await emitAttribution('チェックなし'), 'チェックなし');
+  assert.equal(await emitAttribution('VC内の本文', { channelId: '73333' }), 'ブイシー内の本文、ねこの発言');
+  assert.equal(await emitAttribution('共通の本文', { channelId: '75555' }), '共通の本文、ねこの発言');
+  await suffixControl('72222').check();
+  await page.waitForFunction(async () => !(await window.nyan.invoke('state')).value.config.speech.speakerSuffixDisabledChannelIds.includes('72222'));
+  await emitAttribution('教育(neko=ねこさん)');
+  assert.equal(await emitAttribution('教育後'), '教育後、ねこさんの発言');
+  const events = {};
+  for (const event of ['join', 'move', 'leave']) events[event] = await emitAttribution('', { event });
+  assert.deepEqual(events, { join: 'ねこさんが作業部屋に参加しました', move: 'ねこさんが作業部屋から別室へ移動しました', leave: 'ねこさんが作業部屋から退出しました' });
+  await emitAttribution('無音(neko)');
+  assert.equal(await emitAttribution('無音後'), '無音後、の発言');
+  await emitAttribution('忘却(neko)');
+  assert.equal(await emitAttribution('忘却後'), '忘却後、ねこの発言');
+  assert.equal(await emitAttribution('名前なし', { nickname: '', username: 'neko' }), '名前なし、ねこの発言');
+  assert.equal(await emitAttribution('取得不可', { nickname: '', username: '' }), '取得不可、76666の発言');
+  report.speakerAttribution = { passed: true, bracketSuppressionPreservesName: true, channelSwitchSaved: true, channelIsolation: true, nicknamePriority: true, usernameFallback: true, idFallback: true, education: true, mute: true, forget: true, voiceEvents: events, synthesisVerified: true, receiverVerified: false };
+  // A real conversion tag received by the Bot must start the production media
+  // browser/capture path. The PC monitor distinguishes its 660 Hz media from
+  // the synthetic 440 Hz speech, so a registration acknowledgement cannot pass.
+  const conversionConfig = (await call(page, 'state')).config;
+  Object.assign(conversionConfig.media, { output: 'local', duckFadeInMs: 0, duckFadeOutMs: 0 });
+  await call(page, 'config:save', conversionConfig);
+  const emitConversion = (content, id) => application.evaluate(async (_electron, args) => {
+    const bot = globalThis.nyanAttributionBot, guild = globalThis.nyanAttributionGuild;
+    const before = new Set(bot.store.jobs.map(j => j.id));
+    await bot.message({ id: args.id, content: args.content, author: { id: '76666', username: 'user', bot: false }, member: { nickname: 'ねこ', roles: { cache: new Map() } }, guildId: guild.id, guild, channelId: '72222', channel: guild.channels.cache.get('72222'), attachments: new Map(), stickers: new Map(), reply: async () => {} });
+    return bot.store.jobs.filter(j => !before.has(j.id));
+  }, { content, id });
+  const registered = await emitConversion('変換（✅＝http://media-fixture.test/audio）', 'conversion-register');
+  assert.equal(registered.length, 1); assert.equal(registered[0].kind, 'speech'); await waitForJob(page, registered[0].id);
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  await page.locator('[data-view="dictionary"]').click();
+  assert.ok((await page.locator('#conversion-list').textContent()).includes('✅'));
+  await page.locator('#conversion-source').fill('✅'); await page.locator('#conversion-url').fill('http://media-fixture.test/audio?from=conversion');
+  await page.locator('#conversion-form button[type="submit"]').click();
+  await page.waitForFunction(async () => (await window.nyan.invoke('state')).value.config.mediaConversions.some(e => e.source === '✅' && e.url.endsWith('?from=conversion')));
+  await page.reload(); await page.waitForFunction(() => Boolean(window.nyan));
+  const reloadedConversion = (await call(page, 'state')).config.mediaConversions.find(e => e.source === '✅');
+  assert.equal(reloadedConversion.url, 'http://media-fixture.test/audio?from=conversion');
+  const synthesisBeforeConversion = synthesisTexts.length;
+  const beforeConversionJobs = new Set((await call(page, 'state')).jobs.map(j => j.id));
+  await page.waitForFunction(() => Boolean(window.nyanCapture && window.nyanLocalAudio));
+  await application.evaluate(async () => {
+    const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = 'conversion-audio'; probe.capture = true;
+    await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+  });
+  let conversionMetrics;
+  try {
+    const converted = await emitConversion('前の文✅✅後の文', 'conversion-play');
+    assert.equal(converted.length, 1); assert.equal(converted[0].kind, 'media');
+    assert.equal(converted[0].payload.mode, 'direct'); assert.equal(converted[0].payload.guildId, '71111'); assert.equal(converted[0].payload.master, false);
+    assert.equal((await emitConversion('前の文✅✅後の文', 'conversion-play')).length, 0);
+    await waitForJob(page, converted[0].id);
+    conversionMetrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics['conversion-audio']);
+    assert.ok(conversionMetrics?.mediaToneSamples > 4800, 'Converted media did not reach PC output: ' + JSON.stringify(conversionMetrics));
+    // Direct playback skips the body and service announcement. Title calls
+    // remain independent and follow the existing titleCallEnabled setting.
+    const titleSpeech = (await call(page, 'state')).jobs.filter(j => !beforeConversionJobs.has(j.id) && j.kind === 'speech');
+    assert.ok(titleSpeech.every(j => j.payload.titleCall === true && j.payload.system === true), 'Direct conversion must not speak the body or service announcement: ' + JSON.stringify(titleSpeech));
+    assert.equal(synthesisTexts.length - synthesisBeforeConversion, titleSpeech.length);
+  } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
+  const forgotten = await emitConversion('忘却（✅）', 'conversion-forget'); await waitForJob(page, forgotten[0].id);
+  assert.ok(!(await call(page, 'state')).config.mediaConversions.some(e => e.source === '✅'));
+  const ordinary = await emitConversion('忘却後✅', 'conversion-after-forget');
+  assert.equal(ordinary.length, 1); assert.equal(ordinary[0].kind, 'speech'); await waitForJob(page, ordinary[0].id);
+  report.mediaConversions = { passed: true, chatRegistration: true, unicodeEmoji: true, uiSave: true, reload: true, directMode: true, bodyReplaced: true, noAnnouncement: true, titleCallsFollowSettings: true, deduplicated: true, forgotten: true, pcPlayback: true, receiverVerified: false, ...conversionMetrics };
+  // Exercise short-link expansion and official-domain navigation with the old
+  // short-only allowlist, then capture real PC PCM via both playback paths.
+  const soundcloudConfig = (await call(page, 'state')).config;
+  soundcloudConfig.media.allowedHosts = [...soundcloudConfig.media.allowedHosts.filter(h => h !== 'soundcloud.com'), 'on.soundcloud.com'];
+  Object.assign(soundcloudConfig.media, { titleCallEnabled: false, output: 'local' });
+  await application.evaluate(() => { globalThis.nyanSoundCloudFixture = true; });
+  const soundcloudCases = [];
+  try {
+    for (const bandwidthSaving of [false, true]) {
+      soundcloudConfig.media.bandwidthSaving = bandwidthSaving; await call(page, 'config:save', soundcloudConfig);
+      await application.evaluate(async (_electron, label) => {
+        const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = label; probe.capture = true;
+        await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+      }, 'soundcloud-audio-' + (bandwidthSaving ? 'stream' : 'browser'));
+      const spokenBefore = synthesisTexts.length;
+      try {
+        const job = await call(page, 'media:add', { url: 'https://on.soundcloud.com/NyanVerification', mode: bandwidthSaving ? 'direct' : 'full', guildId: '71111' });
+        const playback = await waitForPlayback(page, job);
+        assert.equal(playback.shareExpanded, true, 'A successful extractor must not mask a failed short-link expansion');
+        if (!bandwidthSaving) {
+          const domCount = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w !== globalThis.nyanAudioProbe.ui).webContents.executeJavaScript('document.querySelectorAll("audio,video").length'));
+          assert.equal(domCount, 0, 'The fallback fixture must play without DOM media');
+          await call(page, 'control', 'pause'); await new Promise(resolve => setTimeout(resolve, 650));
+          const paused = (await call(page, 'state')).media.find(m => m.scope === '71111');
+          assert.equal(paused.paused, true);
+          await new Promise(resolve => setTimeout(resolve, 600));
+          assert.ok(Math.abs((await call(page, 'state')).media.find(m => m.scope === '71111').currentTime - paused.currentTime) < 0.05);
+          await call(page, 'control', 'resume');
+        }
+        await waitForJob(page, job.id, 20000);
+        const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
+        assert.ok(metrics?.mediaToneSamples > 4800, 'SoundCloud short link did not produce PC media audio: ' + JSON.stringify(metrics));
+        if (!bandwidthSaving) assert.ok(synthesisTexts.slice(spokenBefore).includes('さうんどくらうどを再生します'));
+        soundcloudCases.push({ bandwidthSaving, mode: job.payload.mode, pcPlayback: true, playback, ...metrics });
+      } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
+    }
+  } finally { await application.evaluate(() => { globalThis.nyanSoundCloudFixture = false; }); }
+  report.soundcloud = { passed: true, shortLinkExpanded: true, shortOnlyAllowlist: true, browserPC: true, audioStreamPC: true, serviceAnnouncement: true, actualServiceAudio: false, receiverVerified: false, cases: soundcloudCases };
+  report.soundcloud.detachedAudio = { detected: true, pauseResume: true, naturalEnd: true };
+  await application.evaluate(() => { globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient; });
+  await call(page, 'config:save', attributionBase);
+  const bufferingConfig = structuredClone(attributionBase);
+  Object.assign(bufferingConfig.media, { output: 'local', bandwidthSaving: true, titleCallEnabled: false });
+  bufferingConfig.desktop.networkProfile = 'poor'; await call(page, 'config:save', bufferingConfig);
+  const bufferingCases = [];
+  for (const variant of ['baseline', 'fixed']) {
+    const label = 'network-audio-' + variant;
+    await application.evaluate(async (_electron, label) => {
+      const probe = globalThis.nyanAudioProbe; probe.target = probe.ui; probe.active = label; probe.capture = true;
+      await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+    }, label);
+    try {
+      const job = await call(page, 'media:add', { url: 'http://media-fixture.test/network-buffer-' + variant, mode: 'direct', guildId: '72222' });
+      const playback = await waitForPlayback(page, job);
+      const trace = [];
+      const final = await waitForJob(page, job.id, 65000, state => {
+        const m = state.media.find(m => m.scope === '72222');
+        if (m && (trace.at(-1)?.time !== m.currentTime || trace.at(-1)?.ready !== m.ready)) trace.push({ at: Date.now(), time: m.currentTime, ready: m.ready, decodedAheadSeconds: m.bufferedSeconds, sourceLeadSeconds: m.sourceLeadSeconds, buffering: m.buffering });
+      });
+      const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks[globalThis.nyanAudioProbe.active] || [])]));
+      const continuity = pcmContinuity(pcm), saved = final.jobs.find(j => j.id === job.id);
+      bufferingCases.push({ variant, ...continuity, trace, bufferedSeconds: playback.bufferedSeconds, prefetchedSeconds: playback.prefetchedSeconds, startDelayMs: Date.parse(saved.mediaStartedAt) - Date.parse(saved.mediaPreparingAt), mode: job.payload.mode, status: saved.status });
+    } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
+  }
+  const [unbuffered, buffered] = bufferingCases;
+  assert.ok(unbuffered.longestInternalSilenceMs >= 400 && unbuffered.gapsOver100ms >= 2, 'The original streaming policy did not reproduce repeated audible gaps: ' + JSON.stringify(bufferingCases));
+  assert.ok(buffered.audibleFrames > 700 && buffered.longestInternalSilenceMs <= 100 && buffered.gapsOver100ms === 0, 'Buffered PC media still dropped audio: ' + JSON.stringify(bufferingCases));
+  assert.ok(buffered.prefetchedSeconds >= 6.9);
+  report.mediaBuffering = { passed: true, pcPlayback: true, sourceOutagesMs: networkSource.interruptions.map(([from, to]) => to - from), startupSeconds: 4, decoderReserveSeconds: 3, readAheadSeconds: 9, actualServiceAudio: false, receiverVerified: false, cases: bufferingCases };
+  await call(page, 'config:save', attributionBase);
+  // Real Chromium tab capture, PC gain and two independent production mixers.
+  // Only Discord transport is substituted; this does not measure a receiver.
+  const restoreScopeConfig = (await call(page, 'state')).config;
+  const scopeConfig = structuredClone(restoreScopeConfig);
+  scopeConfig.bot.bindings = [{ guildId:'11111',textChannelIds:['22222'],voiceChannelId:'44444' },{ guildId:'33333',textChannelIds:['55555'],voiceChannelId:'66666' }];
+  Object.assign(scopeConfig.media,{output:'both',volume:0.5,ducking:0.35,titleCallEnabled:false,duckFadeInMs:1200,duckFadeOutMs:0});
+  scopeConfig.media.equalizer.enabled=false;scopeConfig.media.compressor.enabled=false;scopeConfig.speech.output='both';Object.assign(scopeConfig.hourly,{output:'both',servers:[],fadeMs:100});
+  await call(page,'config:save',scopeConfig);await call(page,'voice:join','11111');await call(page,'voice:join','33333');
+  const scopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video',mode:'direct',guildId:'11111'});
+  const scopeB=await call(page,'media:add',{url:'http://media-fixture.test/scope-audio',mode:'direct',guildId:'33333'});
+  await page.waitForFunction(async ids=>{const s=(await window.nyan.invoke('state')).value;return ids.every(id=>s.jobs.find(j=>j.id===id)?.mediaStartedAt);},[scopeA.id,scopeB.id]);
+  const scopeStats=()=>application.evaluate(()=>Object.fromEntries(['11111','33333'].map(id=>{const e=globalThis.nyanScopeVoice.connections.get(id);return[id,{...e.stats,duck:e.mixer.duckGain.to,speaking:e.mixer.speech.length,mediaVolume:e.mixer.mediaVolume,overlay:e.mixer.mediaGain.to}];})));
+  let beforeScope;const scopeReadyUntil=Date.now()+6000;do{beforeScope=await scopeStats();if(['11111','33333'].every(id=>beforeScope[id].peaks.some(p=>p>500)))break;await page.waitForTimeout(80);}while(Date.now()<scopeReadyUntil);
+  assert.ok(beforeScope['11111'].peaks.some(p=>p>500)&&beforeScope['33333'].peaks.some(p=>p>500),'Both guilds must receive independent media PCM: '+JSON.stringify(beforeScope));
+  const scopedSpeech=await call(page,'speech:test',{text:'別サーバー読み上げ',guildId:'33333'});
+  await page.waitForFunction(async ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.175)<0.01);},[scopeA.id,scopeB.id]);
+  await page.waitForTimeout(150);const duringScope=await scopeStats();
+  assert.equal(duringScope['11111'].duck,1);assert.equal(duringScope['11111'].speaking,0);assert.equal(duringScope['33333'].duck,0.35);assert.ok(duringScope['33333'].speaking>0);
+  assert.ok(duringScope['11111'].rawPeaks.slice(-5).every(p=>p>2000),'PC attenuation leaked into raw Discord PCM');
+  assert.ok(duringScope['11111'].peaks.slice(-5).every(p=>p>1000),'Other-guild speech attenuated Discord media');
+  const pcDuring=await page.evaluate(()=>window.nyanLocalAudio.snapshot().captureVolumes);
+  await waitForJob(page,scopedSpeech.id);
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>volumes.find(c=>c.id===id)?.ramp?.curve==='accelerate');},[scopeA.id,scopeB.id]);
+  const recoverySamples=[];
+  for(let i=0;i<3;i++){
+    await page.waitForTimeout(200);
+    const samples=await page.evaluate(ids=>window.nyanLocalAudio.snapshot().captureVolumes.filter(c=>ids.includes(c.id)),[scopeA.id,scopeB.id]);
+    for(const sample of samples){
+      const {from,to,startAt,duration,curve}=sample.ramp,progress=(sample.time-startAt)/duration;
+      assert.equal(curve,'accelerate');assert.equal(duration,1.2);
+      if(progress>0.1&&progress<0.85){const expected=from+(to-from)*progress**2;assert.ok(Math.abs(sample.gain-expected)<0.025,'PC gain does not follow the accelerating envelope: '+JSON.stringify(sample));assert.ok(sample.gain<from+(to-from)*progress-0.025);recoverySamples.push({...sample,progress,expected});}
+    }
+  }
+  assert.ok([scopeA.id,scopeB.id].every(id=>recoverySamples.filter(s=>s.id===id).length>=2),'PC recovery must have multiple measured points for both guilds');
+  const discordRecovery=await application.evaluate(()=>{const m=globalThis.nyanScopeVoice.connections.get('33333').mixer;return{curve:m.duckGain.curve,duration:m.duckGain.duration};});
+  assert.equal(discordRecovery.curve,'accelerate');assert.equal(discordRecovery.duration,1200);
+  report.duckRecovery={passed:true,curve:'quadratic',power:2,pcSamples:recoverySamples,discord:discordRecovery,receiverVerified:false};
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.5)<0.01);},[scopeA.id,scopeB.id]);
+  const beforeReplacement=await scopeStats();
+  const nextScopeA=await call(page,'media:add',{url:'http://media-fixture.test/scope-video-new',mode:'direct',guildId:'11111'});
+  await page.waitForFunction(async ids=>{const s=(await window.nyan.invoke('state')).value;return s.jobs.find(j=>j.id===ids[0])?.status==='cancelled'&&s.jobs.find(j=>j.id===ids[1])?.mediaStartedAt&&s.jobs.find(j=>j.id===ids[2])?.status==='running';},[scopeA.id,nextScopeA.id,scopeB.id]);
+  const afterReplacement=await scopeStats();assert.equal(afterReplacement['33333'].clears,beforeReplacement['33333'].clears);assert.ok(afterReplacement['33333'].frames>beforeReplacement['33333'].frames);
+  const playerVolumes=await application.evaluate(async({BrowserWindow})=>Promise.all(BrowserWindow.getAllWindows().filter(w=>w!==globalThis.nyanAudioProbe.ui).map(w=>w.webContents.executeJavaScript('document.querySelector("video,audio")?.volume'))));
+  assert.ok(playerVolumes.length>=2&&playerVolumes.every(v=>v===1),'Capture source must remain independent of PC gain');
+  report.guildIsolation={receiverVerified:false,scope:'production-capture-and-mixers',simultaneousGuildMedia:true,discordDuckingIsolated:true,pcDuckingGlobal:true,rawCaptureUnaffected:true,sameGuildReplacementIsolated:true,sourceVolumes:playerVolumes,during: duringScope,pcGains:pcDuring.filter(c=>[scopeA.id,scopeB.id].includes(c.id)).map(c=>c.gain)};
+  const scopeHourly=call(page,'hourly:test',{});scopeHourly.catch(()=>{});
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.075)<0.01);},[nextScopeA.id,scopeB.id]);
+  await page.waitForTimeout(200);const hourlyScopeStats=await scopeStats();
+  assert.ok(Object.values(hourlyScopeStats).every(s=>s.overlay===0.15&&s.duck===1),'Hourly global attenuation must be applied once to every guild');
+  await scopeHourly;
+  await page.waitForFunction(ids=>{const volumes=window.nyanLocalAudio.snapshot().captureVolumes;return ids.every(id=>Math.abs((volumes.find(c=>c.id===id)?.gain??-1)-0.5)<0.01);},[nextScopeA.id,scopeB.id]);
+  report.guildIsolation.hourlyDuckingGlobal=true;report.guildIsolation.hourlyNoDoubleDucking=true;
+  for(const id of [nextScopeA.id,scopeB.id])await call(page,'job:action',{id,action:'cancel'});
+  await page.waitForFunction(()=>window.nyanLocalAudio.snapshot().captureVolumes.length===0);
+  await call(page,'voice:leave','11111');await call(page,'voice:leave','33333');await call(page,'config:save',restoreScopeConfig);
   // Native notification retrieval is verified separately on a real Windows AVD.
   // Here inject that wire format through the actual notification reader, queue, VOICEVOX and PC output.
   await call(page, 'android:start');
@@ -377,6 +806,9 @@ try {
   const monitorConfig = (await call(page, 'state')).config;
   monitorConfig.bot.bindings.push({ guildId: '99998', voiceChannelId: '33333', textChannelIds: [] });
   monitorConfig.desktop.voiceMonitorGuildId = '99998'; monitorConfig.desktop.voiceMonitorVolume = 0.65;
+  // Earlier settings tests intentionally save a balanced/custom bitrate through
+  // the UI. Explicitly select the poor-network profile for this jitter budget.
+  monitorConfig.desktop.networkProfile = 'poor'; monitorConfig.desktop.audioBitrateKbps = 48;
   const availableSpeakers = await page.evaluate(async () => (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default').map(d => ({ deviceId: d.deviceId, label: d.label })));
   monitorConfig.desktop.outputDevice = availableSpeakers[0]?.deviceId || '';
   await call(page, 'config:save', monitorConfig); await call(page, 'voice:join', '99998');
@@ -388,15 +820,37 @@ try {
   if (availableSpeakers.length) await page.waitForFunction(id => window.nyanLocalAudio.snapshot().monitorSink === id, availableSpeakers[0].deviceId);
   report.speakerSelection = { availableDevices: availableSpeakers.length, actualSinkVerified: Boolean(availableSpeakers.length) };
   const monitorEncoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO); monitorEncoder.encoderCTL(4006, 0); monitorEncoder.encoderCTL(4002, 48000);
-  const monitorPcm = wav.subarray(44), monitorPackets = [];
-  try { for (let i = 0; i < 100; i++) { const offset = i * 3840 % (Math.floor(monitorPcm.length / 3840) * 3840); monitorPackets.push([...monitorEncoder.encode(monitorPcm.subarray(offset, offset + 3840), 960)]); } } finally { monitorEncoder.delete(); }
+  const monitorPcm = Buffer.alloc(3840), monitorPackets = [];
+  for (let i = 0; i < 960; i++) { const sample = Math.round(8000 * Math.sin(i * 2 * Math.PI * 1000 / 48000)); monitorPcm.writeInt16LE(sample, i * 4); monitorPcm.writeInt16LE(sample, i * 4 + 2); }
+  try { for (let i = 0; i < 600; i++) monitorPackets.push([...monitorEncoder.encode(monitorPcm, 960)]); } finally { monitorEncoder.delete(); }
   const voiceResult = await application.evaluate(async (_electron, packets) => {
-    const fixture = globalThis.nyanMonitorFixture;
-    for (const packet of packets) { fixture.streams.get('44444').write(Buffer.from(packet)); await new Promise(resolve => setTimeout(resolve, 20)); }
-    await new Promise(resolve => setTimeout(resolve, 650));
-    return { selfExcluded: !fixture.streams.has('99999'), receivedUsers: fixture.streams.size, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'] };
+    const fixture = globalThis.nyanMonitorFixture, began = performance.now(); let previous = 0, maximumLateMs = 0;
+    for (let i = 0; i < packets.length; i++) {
+      let due = i * 20 + (i % 100 >= 20 && i % 100 < 28 ? 180 : 0);
+      if (due % 2000 >= 900 && due % 2000 < 1060) due += 1060 - due % 2000;
+      due = Math.max(previous, due); previous = due;
+      const delay = due - (performance.now() - began); if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      maximumLateMs = Math.max(maximumLateMs, performance.now() - began - due);
+      fixture.streams.get('44444').write(Buffer.from(packets[i]));
+    }
+    const receivedUsers = fixture.streams.size; fixture.monitor.remove('44444');
+    await new Promise(resolve => setTimeout(resolve, 850));
+    const chunks = globalThis.nyanAudioProbe.chunks['voice-monitor'] || [];
+    return { inputClock: { maximumLateMs, packets: packets.length }, selfExcluded: !fixture.streams.has('99999'), receivedUsers, metrics: globalThis.nyanAudioProbe.metrics['voice-monitor'], pcm: Buffer.concat(chunks).toString('base64') };
   }, monitorPackets);
+  const monitorBytes = Buffer.from(voiceResult.pcm, 'base64'), monitorContinuity = pcmContinuity(monitorBytes); delete voiceResult.pcm;
+  writeFileSync(join(reports, 'vc-monitor.wav'), pcmWav(monitorBytes));
+  const playout = await page.evaluate(() => window.nyanLocalAudio.snapshot().monitorStats);
+  report.voiceMonitor = { ...voiceResult, continuity: { ...monitorContinuity, playout }, passed: false };
   assert.equal(voiceResult.selfExcluded, true); assert.ok(voiceResult.metrics.nonSilentSamples > 1000);
+  assert.ok(monitorContinuity.audibleFrames >= 540, JSON.stringify(monitorContinuity));
+  assert.equal(monitorContinuity.gapsOver100ms, 0, JSON.stringify(monitorContinuity));
+  assert.equal(playout.underruns, 0); assert.equal(playout.discardedSamples, 0);
+  const { baselinePcm, fixedPcm, ...continuityModel } = verifyVoiceMonitorContinuity();
+  voiceResult.continuity = { ...monitorContinuity, durationMs: 12000, packetJitterMs: 180, ipcBatchingMs: 160, actualDiscordReceiver: false, playout };
+  voiceResult.continuityModel = continuityModel;
+  // Keep a separate real subscriber alive for the existing 32-decoder lifecycle check.
+  await application.evaluate((_electron, packet) => { const f = globalThis.nyanMonitorFixture; f.speaking.emit('start', '44444'); f.streams.get('44444').write(Buffer.from(packet)); }, monitorPackets[0]);
   const longOpusPacket = Buffer.concat([Buffer.from([(monitorPackets[0][0] & 252) | 3, 6]), ...Array(6).fill(Buffer.from(monitorPackets[0]).subarray(1))]);
   report.network.electronLifecycle = await application.evaluate((_electron, bytes) => {
     const fixture = globalThis.nyanMonitorFixture; let recycled = 0;
@@ -404,7 +858,7 @@ try {
       for (let id = 0; id < 31; id++) {
         const key = String(55000 + id); fixture.speaking.emit('start', key); fixture.streams.get(key).write(Buffer.from(bytes)); fixture.streams.get(key).write(Buffer.from(bytes));
       }
-      if (!fixture.monitor.frame().some(byte => byte)) throw new Error('Concurrent Opus PCM is silent');
+      if (fixture.monitor.users.size !== 32) throw new Error('Concurrent Opus decoding failed');
       for (let id = 0; id < 31; id++) {
         const key = String(55000 + id), retired = fixture.streams.get(key); fixture.monitor.users.get(key).ended = true;
         fixture.speaking.emit('start', key); retired.emit('error', new Error('retired subscription'));
@@ -438,27 +892,57 @@ try {
   report.localFallback = { speech: true, media: true, hourly: true, botInVC: false, passed: true };
   report.passed = true;
   report.liveMedia = [];
+  // Fixture handlers proxy unmatched requests and can conceal the original
+  // redirect response/cookie session. Real sites must use production networking.
+  if (JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]').length) await application.evaluate(({ session }) => {
+    const protocol = session.fromPartition('persist:nyan-playback').protocol;
+    protocol.unhandle('https'); protocol.unhandle('http');
+  });
   // Public sites can require login, consent or block hosted CI. Record failures explicitly.
   const verifiedServices = new Set();
-  for (const url of JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]')) {
+  const liveUrls = JSON.parse(process.env.NYAN_LIVE_MEDIA_URLS || '[]');
+  const liveConfig = (await call(page, 'state')).config;
+  const liveCases = liveUrls.map(url => ({ url, browserOnly: false }));
+  if (process.env.NYAN_VERIFY_SOUNDCLOUD_BROWSER && liveUrls.some(url => liveService(url) === 'soundcloud')) liveCases.push({ url: liveUrls.find(url => liveService(url) === 'soundcloud'), browserOnly: true });
+  for (const { url, browserOnly } of liveCases) {
     const service = liveService(url);
-    if (process.env.NYAN_REQUIRE_LIVE_SERVICES && verifiedServices.has(service)) continue;
-    const outcome = { url, service, verifiedAudio: false };
+    if (process.env.NYAN_REQUIRE_LIVE_SERVICES && verifiedServices.has(service) && !browserOnly) continue;
+    const outcome = { url, service, browserOnly, verifiedAudio: false };
     let job;
     try {
-      job = await call(page, 'media:add', { url, mode: 'direct' });
-      await application.evaluate(async ({ BrowserWindow }, label) => {
-        const probe = globalThis.nyanAudioProbe; probe.active = label;
-        const until = Date.now() + 180000;
-        while (Date.now() < until) {
-          const target = BrowserWindow.getAllWindows().find(w => w !== probe.ui && !w.isDestroyed());
-          if (target) { probe.target = target; probe.capture = true; await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return; }
-          await new Promise(resolve => setTimeout(resolve, 50));
+      liveConfig.media.bandwidthSaving = !browserOnly; await call(page, 'config:save', liveConfig);
+      job = await call(page, 'media:add', { url, mode: browserOnly ? 'full' : 'direct' });
+      const openingUntil = Date.now() + 180000; let captured = false;
+      while (!captured && Date.now() < openingUntil) {
+        const opening = await call(page, 'state'), current = opening.jobs.find(j => j.id === job.id);
+        if (current && !['waiting', 'running'].includes(current.status)) {
+          outcome.startup = { status: current.status, error: current.error };
+          throw new Error(current.error || 'Playback ended before its window opened: ' + current.status);
         }
+        captured = await application.evaluate(async (_electron, { id, label }) => {
+          const probe = globalThis.nyanAudioProbe, target = globalThis.nyanProbeBrowsers.get(id)?.window;
+          if (!target || target.isDestroyed()) return false;
+          probe.active = label; probe.target = target; probe.capture = true;
+          await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true); return true;
+        }, { id: job.id, label: 'live-' + job.id });
+        if (!captured) await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!captured) {
+        const waiting = await call(page, 'state');
+        outcome.startup = { job: waiting.jobs.find(j => j.id === job.id), paused: waiting.paused, activeSpeech: waiting.jobs.filter(j => j.kind === 'speech' && ['waiting', 'running'].includes(j.status)), logs: waiting.logs.slice(-8) };
         throw new Error('Playback window did not open');
-      }, url);
+      }
       const began = Date.now(), until = began + 55000; let adSamples = 0;
       while (Date.now() < until) {
+        // A truncated audio stream can continue in a fresh browser window.
+        // Follow that job's window rather than recording the retired source.
+        await application.evaluate(async (_electron, id) => {
+          const probe = globalThis.nyanAudioProbe, target = globalThis.nyanProbeBrowsers.get(id)?.window;
+          if (!target || target.isDestroyed() || target === probe.target) return;
+          await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:stop',id:'audio-probe'})`, true);
+          probe.target = target; probe.capture = true;
+          await probe.ui.webContents.executeJavaScript(`window.nyanCapture({type:'capture:start',id:'audio-probe'})`, true);
+        }, job.id);
         const metrics = await application.evaluate(() => globalThis.nyanAudioProbe.metrics[globalThis.nyanAudioProbe.active]);
         const adPlaying = await application.evaluate(async () => {
           const target = globalThis.nyanAudioProbe.target; if (target.isDestroyed()) return false;
@@ -468,8 +952,14 @@ try {
         const state = await call(page, 'state'); const current = state.jobs.find(j => j.id === job.id);
         if (current.status === 'failed') throw new Error(current.error);
         const playback = state.media.find(m => m.scope === mediaScope(job.payload));
-        if (playback?.loginRequired && playback.ready === 0 && Date.now() - began > 5000) throw new Error(playback.blockedReason || 'Site requires login before playback');
-        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) { Object.assign(outcome, metrics, { verifiedAudio: true }); break; }
+        if (playback?.loginRequired && !(playback.ready > 0) && Date.now() - began > 5000) {
+          outcome.loginRequired = true; outcome.playback = state.media;
+          throw new Error(playback.blockedReason || 'Site requires login before playback');
+        }
+        if (!adPlaying && playback?.startedAt && playback.ready >= 2 && playback.currentTime > 2 && metrics?.nonSilentSamples - adSamples > 4800) {
+          if (new URL(url).hostname === 'on.soundcloud.com') assert.equal(playback.shareExpanded, true, 'Short-link expansion failed before audible playback');
+          Object.assign(outcome, metrics, { verifiedAudio: true }); break;
+        }
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       outcome.playback = (await call(page, 'state')).media;
@@ -505,5 +995,9 @@ try {
 } catch (error) { report.passed = false; report.error = error.stack; process.exitCode = 1; }
 finally {
   writeFileSync(join(reports, 'audio-report.json'), JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));
-  monitor?.kill(); await application?.close(); engine.close(); rmSync(directory, { recursive: true, force: true });
+  monitor?.kill();
+  if (application) await application.evaluate(() => {
+    if (globalThis.nyanAttributionBot && Object.hasOwn(globalThis, 'nyanAttributionOriginalClient')) globalThis.nyanAttributionBot.client = globalThis.nyanAttributionOriginalClient;
+  }).catch(() => {});
+  await application?.close(); engine.close(); rmSync(directory, { recursive: true, force: true });
 }

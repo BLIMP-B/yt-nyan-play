@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 import { AUDIO_NETWORK_PROFILES } from './audio-network.mjs';
 import { DEFAULT_EQUALIZER, DEFAULT_COMPRESSOR, EQ_PRESETS, COMPRESSOR_PRESETS, effectPreset } from './media-effects-settings.mjs';
 import { SENTENCE_PRESETS } from './hourly-sentence.mjs';
-import { unifyReadings } from './shared-readings.mjs';
+import { unifyReadings, readingSource, readingKey } from './shared-readings.mjs';
 
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
@@ -21,7 +21,7 @@ export const DEFAULT_CONFIG = {
     enabled: true, provider: 'voicevox', engineUrl: 'http://127.0.0.1:50021',
     engineExecutable: '', styleId: 3, speed: 1, pitch: 0, intonation: 1,
     volume: 0.8, output: 'discord', outputDevice: '', maxChars: 500,
-    readNames: true, readUrls: false, readEmoji: true, readStickers: true, readAttachments: true,
+    readNames: true, speakerSuffixDisabledChannelIds: [], readUrls: false, readEmoji: true, readStickers: true, readAttachments: true,
     readSpoilers: false, spoilerText: 'ネタバレ', readCode: false,
     messageTemplate: '$nickname$、$text$', joinTemplate: '$nickname$が$channel$に参加しました',
     leaveTemplate: '$nickname$が$channel$から退出しました',
@@ -32,14 +32,14 @@ export const DEFAULT_CONFIG = {
     bouyomiPreprocess: false, bouyomiTagMode: 'original', bouyomiVoiceMap: [], chatEducationEnabled: true,
   },
   media: {
-    enabled: true, volume: 0.7, ducking: 0.35, duckFadeInMs: 3000, duckFadeOutMs: 3000, bandwidthSaving: true, showWindow: true,
+    enabled: true, volume: 0.7, ducking: 0.35, titleCallEnabled: true, titleCallDucking: 0.8, titleCallSpeedRatio: 0.85, duckFadeInMs: 3000, duckFadeOutMs: 3000, bandwidthSaving: true, showWindow: true,
     output: 'discord', maxMinutes: 120,
     equalizer: DEFAULT_EQUALIZER, compressor: DEFAULT_COMPRESSOR,
     allowedHosts: ['youtube.com', 'youtu.be', 'nicovideo.jp', 'niconico.com', 'nico.ms', 'x.com',
       'twitter.com', 'instagram.com', 'tiktok.com', 'facebook.com', 'fb.watch',
-      'threads.net', 'threads.com', 'bsky.app', 'cdn.discordapp.com', 'media.discordapp.net'],
+      'threads.net', 'threads.com', 'bsky.app', 'soundcloud.com', 'cdn.discordapp.com', 'media.discordapp.net'],
   },
-  dictionary: [], education: [],
+  dictionary: [], education: [], mediaConversions: [],
 };
 
 function mergeKnown(base, patch) {
@@ -65,6 +65,7 @@ export function normalizeConfig(patch, readingBaseline) {
   const c = mergeKnown(DEFAULT_CONFIG, patch);
   if (readingBaseline) {
     if (!Object.hasOwn(patch || {}, 'education')) c.education = structuredClone(readingBaseline.education);
+    if (!Object.hasOwn(patch || {}, 'mediaConversions')) c.mediaConversions = structuredClone(readingBaseline.mediaConversions || []);
     if (!Object.hasOwn(patch?.speech || {}, 'emojiReadings')) c.speech.emojiReadings = structuredClone(readingBaseline.speech.emojiReadings);
   }
   if (!Object.hasOwn(patch?.desktop || {}, 'outputDevice')) c.desktop.outputDevice = patch?.speech?.outputDevice || '';
@@ -122,6 +123,8 @@ export function normalizeConfig(patch, readingBaseline) {
   number(c.speech.bouyomiVoice, 0, 32767, '棒読みちゃんの声', true); number(c.speech.bouyomiTone, -1, 200, '棒読みちゃんの音程', true);
   if (!['tcp', 'http'].includes(c.speech.bouyomiCommunication)) fail('棒読みちゃん通信方式');
   number(c.media.volume, 0, 1, '動画音量'); number(c.media.ducking, 0, 1, '読み上げ中の動画音量');
+  number(c.media.titleCallDucking, 0, 1, 'タイトルコール中の動画音量の割合');
+  number(c.media.titleCallSpeedRatio, 0.5, 1.5, 'タイトルコールの読み上げ速度の倍率');
   for (const key of ['duckFadeInMs', 'duckFadeOutMs']) number(c.media[key], 0, 30000, '読み上げ中の動画フェード時間', true);
   number(c.media.maxMinutes, 1, 1440, '再生上限', true);
   const eq = c.media.equalizer, comp = c.media.compressor;
@@ -136,6 +139,15 @@ export function normalizeConfig(patch, readingBaseline) {
   if (!/^\S{1,20}$/.test(c.bot.prefix)) fail('コマンド接頭辞');
   for (const key of ['allowedWebhookIds', 'controlUserIds']) strings(c.bot[key], key, true);
   for (const key of ['ignoredUserIds', 'allowedUserIds', 'ignoredRoleIds']) strings(c.speech[key], key, true);
+  // Preserve an existing choice to omit names while moving attribution to the end.
+  if (!Object.hasOwn(patch?.speech || {}, 'speakerSuffixDisabledChannelIds') && patch?.speech?.readNames === false) {
+    c.speech.speakerSuffixDisabledChannelIds = [...new Set([
+      ...c.bot.bindings.flatMap(b => [...(b.textChannelIds || []), b.voiceChannelId]),
+      c.bot.masterTextChannelId,
+    ].filter(Boolean))];
+  }
+  strings(c.speech.speakerSuffixDisabledChannelIds, '発言者名を付けないチャンネルID', true);
+  c.speech.speakerSuffixDisabledChannelIds = [...new Set(c.speech.speakerSuffixDisabledChannelIds)];
   strings(c.speech.blockedWords, 'NGワード'); strings(c.media.allowedHosts, '許可ホスト');
   for (const host of c.media.allowedHosts) if (!/^[a-z0-9.-]+$/i.test(host) || host.includes('..') || host.startsWith('.')) fail('許可ホスト');
   const engine = new URL(c.speech.engineUrl);
@@ -154,6 +166,13 @@ export function normalizeConfig(patch, readingBaseline) {
   if (!Array.isArray(c.speech.forwarding) || c.speech.forwarding.length > 100) fail('読み上げ転送');
   c.speech.forwarding = c.speech.forwarding.map(f => { if (!/^\d{5,22}$/.test(f.fromGuildId) || !/^\d{5,22}$/.test(f.toGuildId) || f.fromGuildId === f.toGuildId || !['one-way', 'two-way', 'none'].includes(f.mode)) fail('読み上げ転送先・方向'); return { fromGuildId: f.fromGuildId, toGuildId: f.toGuildId, mode: f.mode }; });
   if (!Array.isArray(c.dictionary) || c.dictionary.length > 10000) fail('辞書');
+  if (!Array.isArray(c.mediaConversions) || c.mediaConversions.length > 10000) fail('メディア変換');
+  c.mediaConversions = [...new Map(c.mediaConversions.map(e => {
+    if (!e || typeof e.source !== 'string' || typeof e.url !== 'string' || e.url.length > 2000 || /[\t\r\n]/u.test(e.source + e.url)) fail('メディア変換の文字列・URL');
+    const source = readingSource(e.source);
+    if (![...source].length || [...source].length > 30) fail('変換する文字列は1～30文字');
+    return [readingKey(source), { source, url: validateMediaUrl(e.url.trim(), c.media.allowedHosts) }];
+  })).values()];
   if (!Array.isArray(c.education) || c.education.length > 10000) fail('教育辞書');
   c.education = c.education.map(e => {
     if (!e || typeof e.source !== 'string' || !e.source.trim() || e.source.length > 2000 || typeof e.reading !== 'string' || e.reading.length > 500 || /[\t\r\n]/u.test(e.source + e.reading)) fail('教育辞書の単語・読み方');

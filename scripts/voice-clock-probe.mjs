@@ -38,9 +38,9 @@ export async function verifyVoiceClock() {
     await entry.ready; await wait(300);
     const speaking = entry.mixer.addSpeech(tone(180), 1); await wait(200); await query('reset');
     await load(2400); const speech = summary((await query('report')).samples); await speaking;
-    entry.mixer.mediaVolume = 1; entry.mixer.ducking = 1; entry.mixer.addMedia(tone(12));
-    const began = performance.now(); let produced = 12;
-    const feed = setInterval(() => { const target = 12 + Math.floor((performance.now() - began) / 20), frames = target - produced; if (frames > 0) { entry.mixer.addMedia(tone(frames, produced)); produced = target; } }, 20);
+    entry.mixer.mediaVolume = 1; entry.mixer.ducking = 1; entry.mixer.addMedia(tone(32));
+    const began = performance.now(); let produced = 32;
+    const feed = setInterval(() => { const target = 32 + Math.floor((performance.now() - began) / 20), frames = target - produced; if (frames > 0) { entry.mixer.addMedia(tone(frames, produced)); produced = target; } }, 20);
     let media;
     try { await wait(300); await query('reset'); await load(2400); media = summary((await query('report')).samples); }
     finally { clearInterval(feed); entry.mixer.clearMedia(); }

@@ -69,7 +69,7 @@ test('unrelated stale UI saves preserve chat updates received after the UI snaps
 
 test('real Discord message handling updates a settings-created slot and forgetting removes both', async t => {
   const { store, service } = setup(t);
-  store.updateConfig({ ...store.config, bot: { ...store.config.bot, bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } });
+  store.updateConfig({ ...store.config, speech: { ...store.config.speech, speakerSuffixDisabledChannelIds: ['22222'] }, bot: { ...store.config.bot, bindings: [{ guildId: '11111', textChannelIds: ['22222'], voiceChannelId: '33333' }] } });
   const output = [], bot = new DiscordBot(store, { education: command => service.apply(command), speech: p => output.push(p) }); bot.client = { user: { id: '99999' } }; let id = 0;
   const message = content => ({ id: String(++id), content, author: { id: '44444', username: 'fixture' }, guildId: '11111', channelId: '22222', attachments: new Map(), stickers: new Map(), reply: async () => {} });
   await service.set('erai', '設定'); await bot.message(message('教育（erai＝チャット）')); await bot.message(message(emoji));
@@ -78,17 +78,20 @@ test('real Discord message handling updates a settings-created slot and forgetti
 });
 
 function nativeFixture() {
-  const values = new Map(), calls = [];
-  return { values, calls,
+  const values = new Map(), calls = [], failReadings = new Set();
+  const learn = async (type, args, restoring = false) => {
+    const index = args.indexOf('='), source = type === 'Study' ? args.slice(0, index) : args, reading = type === 'Study' ? args.slice(index + 1) : '';
+    calls.push([type, args]);
+    if (!restoring && type !== 'Forget' && ([...source].length > 30 || [...reading].length > 30)) throw new Error('native limit');
+    if (failReadings.has(reading)) throw new Error('native write failed');
+    if (type === 'Forget') { if (!values.delete(readingKey(source))) throw new Error('native missing'); }
+    else values.set(readingKey(source), reading);
+    return { text: '保存しました', source, reading, forgot: type === 'Forget' };
+  };
+  return { values, calls, failReadings,
     lookup: async source => values.has(readingKey(source)) ? { registered: true, source, reading: values.get(readingKey(source)) } : { registered: false, source },
-    learn: async (type, args) => {
-      const index = args.indexOf('='), source = type === 'Study' ? args.slice(0, index) : args, reading = type === 'Study' ? args.slice(index + 1) : '';
-      calls.push([type, args]);
-      if (reading.length > 15) throw new Error('native limit');
-      if (type === 'Forget') { if (!values.delete(readingKey(source))) throw new Error('native missing'); }
-      else values.set(readingKey(source), reading);
-      return { text: '保存しました', source, reading, forgot: type === 'Forget' };
-    },
+    learn: (type, args) => learn(type, args),
+    restore: (type, args) => learn(type, args, true),
   };
 }
 
@@ -117,7 +120,8 @@ test('settings update and forgetting can find imported native education without 
 test('failed native writes leave both projections intact and the next operation still works', async t => {
   const { store } = setup(t), native = nativeFixture(), service = new ChatEducation(store, () => native);
   await service.apply(parseEducationCommand('教育(erai=前の読み)')); await service.set('erai', '設定');
-  await assert.rejects(service.set('erai', '長い'.repeat(20)), /native limit/);
+  native.failReadings.add('保存エラー');
+  await assert.rejects(service.set('erai', '保存エラー'), /native write failed/);
   assert.equal(spoken(store), '設定'); assert.equal(native.values.get('ERAI'), '設定');
   await service.apply(parseEducationCommand('無音(erai)')); assert.equal(spoken(store), ''); assert.equal(native.values.get('ERAI'), '');
 });
@@ -125,7 +129,26 @@ test('failed native writes leave both projections intact and the next operation 
 test('batch config failure rolls back completed native updates as well as the app config', async t => {
   const { store } = setup(t), native = nativeFixture(), service = new ChatEducation(store, () => native);
   await service.apply(parseEducationCommand('教育(erai=最初)')); await service.apply(parseEducationCommand('教育(neko=ねこ)'));
-  const draft = store.exportConfig(); draft.education[0].reading = '変更'; draft.education[1].reading = '長い'.repeat(20);
-  await assert.rejects(service.saveConfig(draft, c => store.updateConfig(c)), /native limit/);
+  const draft = store.exportConfig(); draft.education[0].reading = '変更'; draft.education[1].reading = '保存エラー'; native.failReadings.add('保存エラー');
+  await assert.rejects(service.saveConfig(draft, c => store.updateConfig(c)), /native write failed/);
   assert.equal(native.values.get('ERAI'), '最初'); assert.equal(store.config.education[0].reading, '最初');
+});
+test('native education, tags and settings accept one emoji and 30 characters but reject longer changes before writing', async t => {
+  const { store } = setup(t), native = nativeFixture(), service = new ChatEducation(store, () => native);
+  await service.apply(parseEducationCommand('教育(✅=ちぇっく)')); assert.equal(native.values.get('✅'), 'ちぇっく');
+  const reading = 'よ'.repeat(30);
+  await service.applyTag('Study', `✅=${reading}`, new AbortController().signal, native);
+  assert.equal(native.values.get('✅'), reading);
+  await service.set('✅', '🐈'.repeat(30)); assert.equal(native.values.get('✅'), '🐈'.repeat(30));
+  const count = native.calls.length;
+  await assert.rejects(service.set('✅', 'よ'.repeat(31)), /30文字/); assert.equal(native.calls.length, count);
+});
+test('a failed batch restores an imported native reading longer than the new registration limit', async t => {
+  const { store } = setup(t), native = nativeFixture(), service = new ChatEducation(store, () => native);
+  const original = '旧'.repeat(40); native.values.set('ERAI', original);
+  store.updateConfig({ ...store.config, education: [{ source: 'erai', reading: original, native: true }] });
+  const draft = store.exportConfig(); draft.education[0].reading = '新';
+  draft.education.push({ source: 'neko', reading: '保存エラー' }); native.failReadings.add('保存エラー');
+  await assert.rejects(service.saveConfig(draft, c => store.updateConfig(c)), /native write failed/);
+  assert.equal(native.values.get('ERAI'), original); assert.equal(store.config.education[0].reading, original);
 });
