@@ -158,7 +158,7 @@ async function encodedAudio(pcm) {
     return { packets, peak, nonSilentSamples };
   } finally { player.stop(true); mixer.destroy(); decoder.delete(); }
 }
-const liveService = url => /(^|\.)(youtube\.com|youtu\.be)$/.test(new URL(url).hostname) ? 'youtube' : /(^|\.)nicovideo\.jp$/.test(new URL(url).hostname) ? 'niconico' : new URL(url).hostname;
+const liveService = url => /(^|\.)(youtube\.com|youtu\.be)$/.test(new URL(url).hostname) ? 'youtube' : /(^|\.)nicovideo\.jp$/.test(new URL(url).hostname) ? 'niconico' : /(^|\.)soundcloud\.com$/.test(new URL(url).hostname) ? 'soundcloud' : new URL(url).hostname;
 try {
   const env = { ...process.env, NYAN_DATA_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
   application = await _electron.launch({ executablePath: require('electron'), args: [directory, ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu'] : [])], env, timeout: 20000 });
