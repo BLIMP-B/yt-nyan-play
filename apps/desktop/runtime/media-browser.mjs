@@ -32,7 +32,7 @@ export class MediaBrowser {
     if (!browserOnly && c.media.bandwidthSaving && this.resolver) {
       selected = await this.resolver.resolve(url, signal);
       if (selected) this.bridge.metadata?.(job, { title: selected.title, body: selected.description, author: selected.author });
-      if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45, buffer.burstSeconds); }
+      if (selected) try { stream = await openAudioStream(selected, payload.startSeconds || 0, mode, signal, limitSeconds ?? 45, buffer.burstSeconds, buffer.startupSeconds); }
       catch (error) { signal.throwIfAborted(); this.log('warn', '音声配信を開始できないためブラウザの最低画質設定へ切り替えます'); }
     }
     if (signal.aborted) { stream?.close(); signal.throwIfAborted(); }
@@ -43,7 +43,7 @@ export class MediaBrowser {
     catch (error) { stream?.close(); throw error; }
     window.webContents.setAudioMuted(true);
     this.window = window; let captureStarted = false, continuation;
-    const buffering = () => ({ bufferSeconds: buffer.startupSeconds, expectedSeconds: stream?.expectedSeconds ?? null, streamFinished: stream?.finished === true, bestEffortBuffer: !stream });
+    const buffering = () => ({ bufferSeconds: stream ? 0 : buffer.startupSeconds });
     this.playOptions = { startSeconds: stream ? 0 : payload.startSeconds || 0, mode, previewSeconds: limitSeconds ?? 45, volume: 1, paused: this.paused, volumeRampMs: 0, bandwidthSaving: c.media.bandwidthSaving && !stream, seek: !stream, ...buffering() };
     guardMediaWindow(window, originalUrl, this.getConfig, child => this.accounts?.track(child), !payload.background && this.accounts ? () => this.accounts.open('youtube') : undefined);
     const abort = () => { if (!window.isDestroyed()) window.destroy(); };
@@ -66,7 +66,7 @@ export class MediaBrowser {
         captureStarted = true; await this.bridge.startCapture(job.id, payload.guildId, signal);
       }
       window.webContents.setAudioMuted(false);
-      const startedAt = Date.now(); let seen = false, playbackStartedAt = null, reportedBlock = '', qualityReported = false, reportedBufferUnderruns = 0;
+      const startedAt = Date.now(); let seen = false, playbackStartedAt = null, reportedBlock = '', qualityReported = false, waitingSince = 0;
       while (!signal.aborted && !window.isDestroyed()) {
         const captureError = this.bridge.captureError?.(job.id);
         if (captureError) throw new Error(`メディア音声の転送に失敗しました: ${captureError}`);
@@ -76,11 +76,17 @@ export class MediaBrowser {
         if (!state.found) for (const frame of window.webContents.mainFrame.framesInSubtree.slice(1)) {
           try { const next = await frame.executeJavaScript(mediaScript(options), true); if (next.found) { state = next; break; } } catch {}
         }
+        if (stream) {
+          stream.setPosition(state.currentTime || 0);
+          const depleted = seen && !this.paused && !state.ended && state.ready < 3 && stream.sourceSeconds - (state.currentTime || 0) < .25;
+          if (!depleted) waitingSince = 0;
+          else if (!waitingSince) waitingSince = Date.now();
+          else if (Date.now() - waitingSince >= 500 && stream.refill()) this.log('warn', `${mediaServiceName(url)}: 音声の先読みが不足したため再び蓄えています`);
+        }
         if (state.found && !state.advertisement && state.ready >= 2 && !state.paused && !seen) { seen = true; playbackStartedAt = Date.now(); this.bridge.played?.(job); }
-        if (state.bufferUnderruns > reportedBufferUnderruns) { reportedBufferUnderruns = state.bufferUnderruns; this.log('warn', `${mediaServiceName(url)}: 音声の先読みが不足しました（再バッファ${reportedBufferUnderruns}回）`); }
         if (seen && !qualityReported && c.media.bandwidthSaving && !stream) { qualityReported = true; this.log(state.lowestQuality ? 'info' : 'warn', state.lowestQuality ? 'ブラウザの最低画質を指定しました' : 'このページは画質制御APIを公開していません。再生画面の画質設定をご確認ください'); }
         const title = payload.title && payload.title !== new URL(url).hostname ? payload.title : state.pageTitle || payload.title;
-        this.status = { ...state, title, service: mediaServiceName(url), mode, limitSeconds, shareExpanded: url !== originalUrl, startedAt: playbackStartedAt, paused: this.paused, delivery: stream ? selected.audioOnly ? 'audio-only' : 'lowest-video' : 'browser' }; this.bridge.changed();
+        this.status = { ...state, title, service: mediaServiceName(url), mode, limitSeconds, shareExpanded: url !== originalUrl, prefetchedSeconds: stream?.prefetchedSeconds || 0, sourceLeadSeconds: stream ? Math.max(0, stream.sourceSeconds - (state.currentTime || 0)) : null, buffering: stream?.buffering || state.buffering, startedAt: playbackStartedAt, paused: this.paused, delivery: stream ? selected.audioOnly ? 'audio-only' : 'lowest-video' : 'browser' }; this.bridge.changed();
         if (state.blockedReason && state.blockedReason !== reportedBlock) {
           const youtube = /(^|\.)youtube\.com$|^youtu\.be$/.test(new URL(url).hostname);
           reportedBlock = state.blockedReason; this.log('warn', `${mediaServiceName(url)}の再生条件: ${state.blockedReason}${state.loginRequired ? youtube ? '。「再生アカウント」で通常ブラウザのログインを引き継いでから再実行してください' : '。再生画面からログインしてください（Chromeとは別のCookie領域です）' : ''}`);

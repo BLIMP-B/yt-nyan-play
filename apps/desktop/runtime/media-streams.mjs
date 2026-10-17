@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import ffmpeg from 'ffmpeg-static';
 import { MEDIA_EXTRACTOR, streamingService, selectStream } from '../core/media-streams.mjs';
 import { mediaPolicy } from '../core/media-policy.mjs';
+import { OggPrefetch } from './ogg-prefetch.mjs';
 
 export class MediaStreamResolver {
   constructor(directory, log, fetcher, cookies, { budgetMs = 20000, installBudgetMs = 120000 } = {}) {
@@ -86,25 +87,30 @@ export class MediaStreamResolver {
 }
 
 // Source objects come only from selectStream; nothing here is exposed to a web page or IPC.
-export async function openAudioStream(source, startSeconds, mode, signal, previewSeconds = 45, burstSeconds = 6) {
+export async function openAudioStream(source, startSeconds, mode, signal, previewSeconds = 45, maxAheadSeconds = 6, startupSeconds = 0) {
   const policy = mediaPolicy({ mode, previewSeconds });
-  signal.throwIfAborted(); const token = randomBytes(24).toString('hex'); let child, server, response;
+  signal.throwIfAborted(); const token = randomBytes(24).toString('hex'); let child, server, response, buffered;
   const remaining = Number.isFinite(source.duration) && source.duration > 0 ? Math.max(0, source.duration - startSeconds) : null;
   let closed = false, finish;
   const stream = { error: null, finished: false, outputSeconds: 0, expectedSeconds: remaining == null ? null : policy.limitSeconds == null ? remaining : Math.min(remaining, policy.limitSeconds),
     completion: new Promise(resolve => { finish = resolve; }),
-    close: () => { closed = true; signal.removeEventListener('abort', abort); child?.kill(); response?.destroy(); server?.close(); } };
+    get prefetchedSeconds() { return buffered?.prefetchedSeconds || 0; }, get sourceSeconds() { return buffered?.seconds || 0; }, get buffering() { return buffered?.holding === true; },
+    setPosition: seconds => buffered?.setPosition(seconds), refill: () => !stream.finished && buffered?.refill(),
+    close: () => { closed = true; signal.removeEventListener('abort', abort); child?.stdout.unpipe(buffered); buffered?.destroy(); child?.kill(); response?.destroy(); server?.close(); } };
   const abort = () => stream.close(); signal.addEventListener('abort', abort, { once: true });
   try {
     server = createServer((request, reply) => {
       if (request.method !== 'GET' || request.url !== '/' + token || request.headers.host !== `127.0.0.1:${server.address().port}` || response) { reply.writeHead(404).end(); return; }
-      response = reply; reply.writeHead(200, { 'Content-Type': 'audio/ogg', 'Cache-Control': 'no-store', 'Accept-Ranges': 'none' }); child.stdout.pipe(reply);
+      response = reply; reply.writeHead(200, { 'Content-Type': 'audio/ogg', 'Cache-Control': 'no-store', 'Accept-Ranges': 'none' }); buffered.pipe(reply);
       reply.on('close', () => { if (!reply.writableFinished) child?.kill(); });
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); }); server.unref(); signal.throwIfAborted();
     const headers = Object.entries(source.headers || {}).map(([k,v]) => `${k}: ${v}\r\n`).join('');
-    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:2', '-readrate', '1', '-readrate_initial_burst', String(Math.max(0, Math.min(10, burstSeconds))), ...(source.url.startsWith('https:') ? ['-protocol_whitelist', 'http,https,tcp,tls,crypto', '-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '408,429,500,502,503,504', '-reconnect_delay_max', '5'] : []), ...(startSeconds ? ['-ss', String(startSeconds)] : []), ...(headers ? ['-headers', headers] : []), '-i', source.url, ...(policy.limitSeconds != null ? ['-t', String(policy.limitSeconds)] : []), '-vn', '-sn', '-dn', '-c:a', 'libopus', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-f', 'ogg', '-page_duration', '20000', '-flush_packets', '1', 'pipe:1'];
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:2', ...(!startupSeconds ? ['-readrate', '1'] : []), ...(source.url.startsWith('https:') ? ['-protocol_whitelist', 'http,https,tcp,tls,crypto', '-reconnect', '1', '-reconnect_on_network_error', '1', '-reconnect_on_http_error', '408,429,500,502,503,504', '-reconnect_delay_max', '5'] : []), ...(startSeconds ? ['-ss', String(startSeconds)] : []), ...(headers ? ['-headers', headers] : []), '-i', source.url, ...(policy.limitSeconds != null ? ['-t', String(policy.limitSeconds)] : []), '-vn', '-sn', '-dn', '-c:a', 'libopus', '-b:a', '96k', '-ar', '48000', '-ac', '2', '-f', 'ogg', '-page_duration', '20000', '-flush_packets', '1', 'pipe:1'];
     child = spawn(ffmpeg.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1'), args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    buffered = new OggPrefetch({ startupSeconds, maxAheadSeconds: startupSeconds ? maxAheadSeconds : 0 });
+    buffered.on('error', () => { if (!closed && !signal.aborted) stream.error = '音声ストリームの先読み処理が停止しました'; });
+    child.stdout.pipe(buffered);
     let tail = '';
     child.stderr.on('data', bytes => {
       // Retain only numeric progress, never CDN URLs, request headers or cookies.
@@ -120,10 +126,11 @@ export async function openAudioStream(source, startSeconds, mode, signal, previe
       finish();
     });
     await new Promise((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => finish(new Error('音声ストリームの開始がタイムアウトしました')), 20000);
-      const ready = () => { if (child.stdout.readableLength > 0) finish(); else child.stdout.once('readable', ready); }; const stopped = code => finish(new Error(`音声ストリームを開始できません（${code}）`)); const cancel = () => finish(signal.reason);
-      const finish = error => { clearTimeout(timer); child.stdout.removeListener('readable', ready); child.removeListener('close', stopped); child.removeListener('error', finish); signal.removeEventListener('abort', cancel); error ? reject(error) : resolve(); };
-      child.stdout.once('readable', ready); child.once('close', stopped); child.once('error', finish); signal.addEventListener('abort', cancel, { once: true });
+      const stopped = code => finish(new Error(`音声ストリームを開始できません（${code}）`)), cancel = () => finish(signal.reason);
+      const finish = error => { if (settled) return; settled = true; clearTimeout(timer); child.removeListener('close', stopped); child.removeListener('error', finish); signal.removeEventListener('abort', cancel); error ? reject(error) : resolve(); };
+      buffered.ready.then(() => finish(), finish); child.once('close', stopped); child.once('error', finish); signal.addEventListener('abort', cancel, { once: true });
       if (signal.aborted) cancel();
     });
     stream.url = `http://127.0.0.1:${server.address().port}/${token}`; return stream;

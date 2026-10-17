@@ -325,9 +325,11 @@ jobs:
               for (const key of ['passed', 'pcPlayback']) assert.equal(buffering[key], true);
               assert.equal(buffering.receiverVerified, false);
               assert.equal(buffering.startupSeconds, 4); assert.equal(buffering.readAheadSeconds, 6);
+              assert.deepEqual(buffering.sourceOutagesMs, [700, 1400, 2100]);
               assert.ok(buffering.cases.find(c => c.variant === 'baseline').longestInternalSilenceMs >= 400);
               const fixed = buffering.cases.find(c => c.variant === 'fixed');
               assert.ok(fixed.audibleFrames > 700 && fixed.longestInternalSilenceMs <= 100 && fixed.gapsOver100ms === 0);
+              assert.ok(fixed.prefetchedSeconds >= 3.9);
               const impairment = JSON.parse(readFileSync('verification/impairment/impairment-report.json'));
               assert.equal(impairment.passed, true); assert.equal(impairment.platform, 'win32');
               assert.equal(impairment.discordReceiverVerified, false);

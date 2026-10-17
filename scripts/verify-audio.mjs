@@ -620,14 +620,14 @@ try {
       const final = await waitForJob(page, job.id, 65000);
       const pcm = Buffer.from(await application.evaluate(() => [...Buffer.concat(globalThis.nyanAudioProbe.chunks[globalThis.nyanAudioProbe.active] || [])]));
       const continuity = pcmContinuity(pcm), saved = final.jobs.find(j => j.id === job.id);
-      bufferingCases.push({ variant, ...continuity, bufferedSeconds: playback.bufferedSeconds, startDelayMs: Date.parse(saved.mediaStartedAt) - Date.parse(saved.mediaPreparingAt), mode: job.payload.mode, status: saved.status });
+      bufferingCases.push({ variant, ...continuity, bufferedSeconds: playback.bufferedSeconds, prefetchedSeconds: playback.prefetchedSeconds, startDelayMs: Date.parse(saved.mediaStartedAt) - Date.parse(saved.mediaPreparingAt), mode: job.payload.mode, status: saved.status });
     } finally { await page.evaluate(() => window.nyanCapture({ type: 'capture:stop', id: 'audio-probe' })); }
   }
   const [unbuffered, buffered] = bufferingCases;
   assert.ok(unbuffered.longestInternalSilenceMs >= 400 && unbuffered.gapsOver100ms >= 2, 'The original streaming policy did not reproduce repeated audible gaps: ' + JSON.stringify(bufferingCases));
   assert.ok(buffered.audibleFrames > 700 && buffered.longestInternalSilenceMs <= 100 && buffered.gapsOver100ms === 0, 'Buffered PC media still dropped audio: ' + JSON.stringify(bufferingCases));
-  assert.ok(buffered.bufferedSeconds >= 3.9);
-  report.mediaBuffering = { passed: true, pcPlayback: true, sourceOutagesMs: [2500, 2500, 2500], startupSeconds: 4, readAheadSeconds: 6, actualServiceAudio: false, receiverVerified: false, cases: bufferingCases };
+  assert.ok(buffered.prefetchedSeconds >= 3.9);
+  report.mediaBuffering = { passed: true, pcPlayback: true, sourceOutagesMs: networkSource.interruptions.map(([from, to]) => to - from), startupSeconds: 4, readAheadSeconds: 6, actualServiceAudio: false, receiverVerified: false, cases: bufferingCases };
   await call(page, 'config:save', attributionBase);
   // Real Chromium tab capture, PC gain and two independent production mixers.
   // Only Discord transport is substituted; this does not measure a receiver.
